@@ -1,5 +1,4 @@
-CXL_venv/
 __pycache__/
 *.pyc
+CXL_venv/
 gem5-py310/
-CXL_venv/ pycache/ *.pyc gem5-py310/
