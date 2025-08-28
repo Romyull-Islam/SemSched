@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 GiB = 1024 ** 3
-IO_CHUNK_BYTES = 256 * 1024  # 256 KiB
+IO_CHUNK_BYTES = 256 * 1024  # 256 KiB for easier calculations.
 
 @dataclass(frozen=True)
 class Tier:
