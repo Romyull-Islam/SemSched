@@ -1,4 +1,10 @@
+# Python
 __pycache__/
 *.pyc
+
+# Virtual envs
 CXL_venv/
 gem5-py310/
+.venv/
+venv/
+
