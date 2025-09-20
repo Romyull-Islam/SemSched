@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trend Analysis: Total Time vs. Quantization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        .trend-btn {
+            background-color: white;
+            color: #1F2937; /* text-gray-800 */
+            border-color: #D1D5DB; /* border-gray-300 */
+        }
+        .trend-btn.active {
+            background-color: #1D4ED8; /* bg-blue-700 */
+            color: white;
+            border-color: #1D4ED8;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl bg-white p-6 rounded-xl shadow-lg">
+        <h2 class="text-xl font-bold text-center">Trend: Total Time vs. Quantization</h2>
+        <p class="text-center text-sm text-gray-500 mb-4">Select an architecture to see its trend across different RAM sizes.</p>
+        
+        <div id="trend-buttons" class="flex flex-wrap justify-center gap-2 mb-4">
+            <button class="trend-btn text-sm font-semibold py-2 px-4 rounded-full border-2 active" data-label="Baseline (Host Swap)">Baseline</button>
+            <button class="trend-btn text-sm font-semibold py-2 px-4 rounded-full border-2" data-label="CXL Sequential">CXL Sequential</button>
+            <button class="trend-btn text-sm font-semibold py-2 px-4 rounded-full border-2" data-label="CXL Adaptive Prefetch">CXL Adaptive</button>
+            <button class="trend-btn text-sm font-semibold py-2 px-4 rounded-full border-2" data-label="CXL Parallel I/O Prefetch">CXL Parallel I/O</button>
+        </div>
+        
+        <div class="relative h-[32rem]">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </div>
+
+<script>
+    // --- Data from all three simulation tables ---
+    const data = {
+        '4GB': { labels: ['FP32 (27.0 GiB)', 'FP16 (13.5 GiB)', 'INT8 (6.7 GiB)', 'INT4 (3.4 GiB)'], datasets: [ { label: 'Baseline (Host Swap)', throughput: [0.012, 0.028, 0.094, 2.455], totalTime: [1390.9, 577.3, 172.2, 7.3] }, { label: 'CXL Sequential', throughput: [0.212, 0.619, 2.434, 2.455], totalTime: [81.6, 28.9, 8.1, 7.3] }, { label: 'CXL Adaptive Prefetch', throughput: [0.372, 0.657, 2.434, 2.455], totalTime: [49.0, 27.4, 8.1, 7.3] }, { label: 'CXL Parallel I/O Prefetch', throughput: [0.675, 1.714, 2.434, 2.455], totalTime: [29.7, 12.3, 8.1, 7.3] }, ] },
+        '8GB': { labels: ['FP32 (27.0 GiB)', 'FP16 (13.5 GiB)', 'INT8 (6.7 GiB)', 'INT4 (3.4 GiB)'], datasets: [ { label: 'Baseline (Host Swap)', throughput: [0.014, 0.047, 2.434, 2.455], totalTime: [1154.3, 340.8, 8.1, 7.3] }, { label: 'CXL Sequential', throughput: [0.254, 1.186, 2.434, 2.455], totalTime: [69.1, 16.5, 8.1, 7.3] }, { label: 'CXL Adaptive Prefetch', throughput: [0.433, 1.232, 2.434, 2.455], totalTime: [43.0, 16.0, 8.1, 7.3] }, { label: 'CXL Parallel I/O Prefetch', throughput: [0.785, 2.087, 2.434, 2.455], totalTime: [26.4, 10.7, 8.1, 7.3] }, ] },
+        '16GB': { labels: ['FP32 (27.0 GiB)', 'FP16 (13.5 GiB)', 'INT8 (6.7 GiB)', 'INT4 (3.4 GiB)'], datasets: [ { label: 'Baseline (Host Swap)', throughput: [0.023, 2.393, 2.434, 2.455], totalTime: [681.0, 9.7, 8.1, 7.3] }, { label: 'CXL Sequential', throughput: [0.419, 2.393, 2.434, 2.455], totalTime: [44.1, 9.7, 8.1, 7.3] }, { label: 'CXL Adaptive Prefetch', throughput: [0.644, 2.393, 2.434, 2.455], totalTime: [30.9, 9.7, 8.1, 7.3] }, { label: 'CXL Parallel I/O Prefetch', throughput: [0.988, 2.393, 2.434, 2.455], totalTime: [22.2, 9.7, 8.1, 7.3] }, ] },
+    };
+    const ramColors = { '4GB': 'rgba(59, 130, 246, 0.8)', '8GB': 'rgba(16, 185, 129, 0.8)', '16GB': 'rgba(139, 92, 246, 0.8)'};
+
+    let trendChart = null; // Use a single variable for this chart instance
+
+    function createTrendLineChart(architectureLabel) {
+        const ctx = document.getElementById('trendChart').getContext('2d');
+        const labels = data['4GB'].labels; // FP32, FP16, etc.
+        const ramConfigs = ['4GB', '8GB', '16GB'];
+
+        const datasets = ramConfigs.map(ram => {
+            const archData = data[ram].datasets.find(d => d.label === architectureLabel);
+            return {
+                label: `${ram} Host DRAM`,
+                data: archData.totalTime,
+                borderColor: ramColors[ram],
+                backgroundColor: ramColors[ram],
+                fill: false,
+                tension: 0.1,
+                borderWidth: 3,
+                pointRadius: 5,
+                pointHoverRadius: 7
+            };
+        });
+
+        if (trendChart) trendChart.destroy();
+        
+        trendChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        type: 'logarithmic',
+                        title: { display: true, text: 'Total Time (s) - Lower is Better', font: { size: 14 } }
+                    },
+                    x: {
+                        title: { display: true, text: 'Quantization Level (Model Size)', font: { size: 14 } }
+                    }
+                },
+                plugins: {
+                    title: { display: true, text: `Performance Trend for: ${architectureLabel}`, font: { size: 18, weight: 'bold' }, padding: { top: 10, bottom: 20 } },
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const trendButtons = document.querySelectorAll('.trend-btn');
+        
+        // Initial render for the trend chart
+        createTrendLineChart('Baseline (Host Swap)');
+
+        // Event listener for trend chart buttons
+        trendButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                trendButtons.forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+                const architectureLabel = button.getAttribute('data-label');
+                createTrendLineChart(architectureLabel);
+            });
+        });
+    });
+</script>
+
+</body>
+</html>
