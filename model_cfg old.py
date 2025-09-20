@@ -1,7 +1,8 @@
+# model_cfg.py
 from dataclasses import dataclass
 
 # ---- QUANT PRESET (change this one line to switch all sims) ----
-QUANT = "int4"  # options: "fp32", "fp16", "int8", "int4"
+QUANT = "fp32"  # options: "fp32", "fp16", "int8", "int4"
 # ----------------------------------------------------------------
 
 # --- NEW: Scaling factor to create a more realistic, compute-bound scenario ---
@@ -14,12 +15,11 @@ BYTES_PER_PARAM = {
     "fp32": 4.0,
     "fp16": 2.0,
     "int8": 1.0,
-    "int4": 0.5,  # packed
+    "int4": 0.5,   # packed
 }[QUANT]
 
-# Original 7B model configuration (for reference)
 @dataclass(frozen=True)
-class Llama7BCfg:
+class LlamaLikeCfg:
     num_blocks: int = 32
     vocab_size: int = 32000
     emb_dim: int = 4096
@@ -27,25 +27,14 @@ class Llama7BCfg:
     q_heads: int = 32
     kv_heads: int = 8
 
-# --- NEW: 13B model configuration, based on Llama 2 13B ---
-@dataclass(frozen=True)
-class Llama13BCfg:
-    num_blocks: int = 40
-    vocab_size: int = 32000
-    emb_dim: int = 5120
-    mlp_hidden: int = 13824
-    q_heads: int = 40
-    kv_heads: int = 40 # Llama 2 13B uses Multi-Head Attention, not Grouped-Query
-
-# --- UPDATED: The build_layers function now defaults to the 13B config ---
-def build_layers(cfg = Llama13BCfg()):
+def build_layers(cfg = LlamaLikeCfg()):
     """Return ordered list of layer dicts with param counts/bytes and a simple FLOP proxy."""
     d = cfg.emb_dim
     head_dim = d // cfg.q_heads
     kv_total = cfg.kv_heads * head_dim
 
-    attn_params = (d * d) + (d * head_dim * cfg.q_heads) + (d * kv_total) + (d * d) # Q, K, V, O projections
-    mlp_params  = (d * cfg.mlp_hidden) + (cfg.mlp_hidden * d) + (d * cfg.mlp_hidden) # Gate, Up, Down projections
+    attn_params = (2 * d * d) + (2 * d * kv_total)
+    mlp_params  = (2 * d * cfg.mlp_hidden) + (cfg.mlp_hidden * d)
     block_params = attn_params + mlp_params
 
     embed_params = cfg.vocab_size * d
@@ -57,10 +46,10 @@ def build_layers(cfg = Llama13BCfg()):
                    "params":embed_params, "bytes":int(embed_params * BYTES_PER_PARAM), "flops":0})
     for i in range(cfg.num_blocks):
         p = block_params
-        # Apply the scaling factor to decoder flops
+        # --- MODIFIED: Apply the scaling factor to decoder flops ---
         scaled_flops = int(2 * p * FLOP_PROXY_SCALE)
         layers.append({"name":f"decoder_{i}","kind":"DecoderBlock",
-                           "params":p, "bytes":int(p * BYTES_PER_PARAM), "flops":scaled_flops})
+                       "params":p, "bytes":int(p * BYTES_PER_PARAM), "flops":scaled_flops})
     layers.append({"name":"final_norm","kind":"RMSNorm",
                    "params":finalnorm_params, "bytes":int(finalnorm_params * BYTES_PER_PARAM), "flops":0})
     layers.append({"name":"lm_head","kind":"LMHead",

@@ -1,13 +1,27 @@
-# simulator_cxl_pipeline_parallel_update.py
+# filename: simulation_cxl_intra_layer_pipeline.py
 # ------------------------------------------------------------
-# Two-stage pipeline across tokens with device-managed CXL-DRAM cache.
-# - CXL Device DRAM is a *single* pool acting as a transparent cache for NAND
-#   and also the transient buffer for tile double-buffering (NO separate caches).
-# - LRU + write-back semantics (writes are irrelevant for read-only weights).
-# - Optional host "hints" can PIN earliest Stage-2 layers in the device cache.
-# - Stage split respects graph order: Stage-1 = longest prefix in Host DRAM.
-# - Stage-2 is simulated across TOKENS; cache persists across tokens.
-#   Token 1 is cold; later tokens benefit from DRAM hits if not evicted.
+# SIMULATOR: Two-Stage Pipeline with Intra-Layer Tiling (Double-Buffering)
+#
+# DESCRIPTION:
+# This simulation models a two-stage pipeline for LLM inference, specifically
+# designed to mitigate CXL NAND latency through advanced I/O hiding techniques.
+#
+# STAGE 1 (HOST):
+# - Executes all model layers that fit entirely within the fast Host DRAM.
+# - The number of cores for this stage is determined by the adaptive planner.
+#
+# STAGE 2 (CXL DEVICE):
+# - Executes all remaining layers that are stored on the CXL device.
+# - For layers already in the CXL DRAM cache, it performs a fast memory read.
+# - For layers on CXL NAND, it uses INTRA-LAYER TILING (Double-Buffering):
+#   - A large layer is broken into smaller tiles (e.g., 4 MiB).
+#   - While the CPU computes on the current tile, the system fetches the *next*
+#     tile from NAND in parallel, effectively hiding most of the I/O latency.
+#
+# ADAPTIVE CORE SPLITTING:
+# - Before execution, an "Adaptive Planner" estimates the workload of both stages
+#   and splits the total CPU cores between them to achieve the most balanced
+#   pipeline and maximize throughput.
 # ------------------------------------------------------------
 import math
 import pandas as pd
@@ -33,8 +47,7 @@ PL_CXL_DEVICE_NAND  = "CXL Device NAND"
 # ---------------------------
 # Tunables
 # ---------------------------
-TILES_ENABLE     = True
-TILE_BYTES_REQ   = 4 * 1024 * 1024
+TILE_BYTES_REQ = 4 * 1024 * 1024  # 4 MiB tile size for double-buffering
 DEVICE_DRAM_HINT_PIN_FIRST_K = 4
 DEVICE_DRAM_PIN_STRICT       = True
 
@@ -98,7 +111,8 @@ class DeviceDRAMPool:
             if sum(self.lru[d] for d in to_delete) >= need_extra: break
         for lid in to_delete: self.used_cache -= self.lru.pop(lid)
     def add_cache_bytes(self, layer_id, add_b):
-        if add_b < 0: return
+        if add_b <= 0: return
+        add_b = int(add_b)
         needed = max(0, (self.used_cache + add_b) - self.cap)
         if needed > 0: self._evict_until(needed)
         if (self.used_cache + add_b) > self.cap: return
@@ -127,54 +141,99 @@ def get_stage2_details(cores, run_tokens):
     if DEVICE_DRAM_HINT_PIN_FIRST_K > 0:
         to_pin = [k for k in s2_idx if placement[k] == PL_CXL_DEVICE_NAND][:DEVICE_DRAM_HINT_PIN_FIRST_K]
         for k in to_pin: dev_pool.pin_layer(k, layers[k]["bytes"])
-    
+
     per_token_s2, rows_token1 = [], []
     acct = {"bytes_devdram_hits": 0, "bytes_nand": 0, "bytes_hostdram_in_s2": 0}
-    
+
     for t in range(run_tokens):
-        F, C, O, row_builder = [], [], [], []
+        token_time = 0.0
+        row_builder = []
         for k in s2_idx:
             L, sz, fl, plc = layers[k], layers[k]["bytes"], layers[k]["flops"], placement[k]
-            f_i, c_i, overhead_i = 0.0, 0.0, 0.0
+            layer_time = 0.0
+            served_from = ""
+
             if plc == PL_HOST_DRAM:
-                c_i = max(compute_time_s(fl, cores), dram_time_s(sz))
+                layer_time = max(compute_time_s(fl, cores), dram_time_s(sz))
                 acct["bytes_hostdram_in_s2"] += sz if t==0 else 0
                 served_from = "Host DRAM"
-            else:
-                M = sz - dev_pool.cached_bytes(k)
-                if M <= 0:
-                    c_i = max(compute_time_s(fl, cores), cxl_time_s(sz))
+            else: # Layer is on CXL Device (NAND or cached in DRAM)
+                # Check if the entire layer is already cached
+                if dev_pool.cached_bytes(k) >= sz:
+                    layer_time = max(compute_time_s(fl, cores), cxl_time_s(sz))
                     acct["bytes_devdram_hits"] += sz
-                    dev_pool.add_cache_bytes(k, 0)
+                    dev_pool.add_cache_bytes(k, 0) # Update LRU
                     served_from = "CXL DRAM (cache hit)"
                 else:
-                    f_i = cxlssd_time_s(M)
-                    c_i = max(compute_time_s(fl, cores), cxl_time_s(sz))
-                    acct["bytes_nand"] += M
-                    dev_pool.add_cache_bytes(k, M)
-                    served_from = "CXL NAND"
-            F.append(f_i); C.append(c_i); O.append(overhead_i)
-            if t == 0: row_builder.append({"Layer": k+1, "Name": L["name"], "Placement": plc, "Stage": 2, "Bytes": sz, "Served_From": served_from, "C_i (compute)_s": c_i})
-        token_time = (F[0] + sum(max(F[i], C[i-1]) for i in range(1, len(F))) + C[-1] if F else 0) + sum(O)
+                    # Implement tile-based double buffering for layers fetched from NAND
+                    served_from = "CXL NAND (Tiled)"
+                    num_tiles = math.ceil(sz / TILE_BYTES_REQ)
+                    flops_per_tile = fl / num_tiles if num_tiles > 0 else 0
+                    bytes_per_tile = TILE_BYTES_REQ
+
+                    # Time to fetch and compute the first tile (pipeline fill)
+                    t_fetch_1 = cxlssd_time_s(bytes_per_tile)
+                    t_compute_1 = compute_time_s(flops_per_tile, cores)
+                    layer_time += t_fetch_1 + t_compute_1
+                    acct["bytes_nand"] += bytes_per_tile
+                    dev_pool.add_cache_bytes(k, bytes_per_tile)
+
+                    # For remaining tiles, overlap fetch and compute
+                    for i in range(1, num_tiles):
+                        t_fetch_i = cxlssd_time_s(bytes_per_tile)
+                        t_compute_i_minus_1 = compute_time_s(flops_per_tile, cores)
+                        layer_time += max(t_fetch_i, t_compute_i_minus_1)
+                        acct["bytes_nand"] += bytes_per_tile
+                        dev_pool.add_cache_bytes(k, bytes_per_tile)
+
+                    # Add compute time for the very last tile
+                    layer_time += compute_time_s(flops_per_tile, cores)
+
+            token_time += layer_time
+            if t == 0: row_builder.append({"Layer": k+1, "Name": L["name"], "Placement": plc, "Stage": 2, "Bytes": sz, "Served_From": served_from, "Layer_Time_s": layer_time})
+
         per_token_s2.append(token_time)
         if t == 0: rows_token1 = row_builder
-    acct["devdram_cache_used_GB"] = sum(dev_pool.lru.values()) / (1024**3)
+
+    acct["devdram_cache_used_GB"] = sum(dev_pool.lru.values()) / GiB
     return per_token_s2, rows_token1, acct
 
-# --- ADAPTIVE PIPELINE PLANNER ---
 def find_optimal_pipeline_config(P):
     print("\nFinding optimal pipeline configuration...")
     best_config = None; min_bottleneck = float('inf')
-    def estimate_s1(cores): return sum(max(compute_time_s(L["flops"], cores), dram_time_s(L["bytes"])) for L in [layers[i] for i in s1_idx])
-    def estimate_s2(cores): return sum(max(compute_time_s(L["flops"], cores), cxlssd_time_s(L["bytes"]) if placement[i] == PL_CXL_DEVICE_NAND else dram_time_s(L["bytes"])) for i, L in enumerate(layers) if i in s2_idx)
+
+    def estimate_s1(cores):
+        return sum(max(compute_time_s(L["flops"], cores), dram_time_s(L["bytes"])) for i, L in enumerate(layers) if i in s1_idx)
+
+    def estimate_s2_tiled(cores):
+        total_s2_time = 0
+        for i, L in enumerate(layers):
+            if i not in s2_idx: continue
+
+            if placement[i] == PL_HOST_DRAM:
+                total_s2_time += max(compute_time_s(L["flops"], cores), dram_time_s(L["bytes"]))
+            else: # CXL NAND Layer - estimate tiled execution
+                num_tiles = math.ceil(L["bytes"] / TILE_BYTES_REQ)
+                if num_tiles == 0: continue
+
+                flops_per_tile = L["flops"] / num_tiles
+                t_fetch = cxlssd_time_s(TILE_BYTES_REQ)
+                t_compute = compute_time_s(flops_per_tile, cores)
+
+                # Simplified estimation: 1 full fetch + N compute + (N-1) overlaps
+                layer_time = t_fetch + (num_tiles * t_compute) + (num_tiles - 1) * max(0, t_fetch - t_compute)
+                total_s2_time += layer_time
+        return total_s2_time
+
     for p1 in range(1, P):
         p2 = P - p1
-        s1_lat, s2_lat = estimate_s1(p1), estimate_s2(p2)
+        s1_lat, s2_lat = estimate_s1(p1), estimate_s2_tiled(p2)
         bottleneck = max(s1_lat, s2_lat)
         print(f"  Testing split p1={p1}, p2={p2} -> S1_est={s1_lat:.4f}s, S2_est={s2_lat:.4f}s -> Bottleneck={bottleneck:.4f}s")
         if bottleneck < min_bottleneck:
             min_bottleneck = bottleneck
             best_config = {'p1': p1, 'p2': p2}
+
     print(f"==> Optimal split found: p1={best_config['p1']}, p2={best_config['p2']}")
     return best_config
 
@@ -191,13 +250,26 @@ per_token_s2, s2_rows, acct = get_stage2_details(p2, TOKENS)
 S2_first = per_token_s2[0]
 S2_steady = (sorted(per_token_s2[1:])[len(per_token_s2[1:])//2] if TOKENS > 1 else S2_first)
 bottleneck = max(S1_time, S2_steady)
-pipeline_total_time = S1_time + S2_first + sum(max(S1_time, s2_t) for s2_t in per_token_s2[1:])
+pipeline_total_time = S1_time + S2_first + (TOKENS - 1) * bottleneck if TOKENS > 1 else S1_time + S2_first
 throughput_steady = 1.0 / bottleneck if bottleneck > 0 else 0.0
 
-# --- Output ---
-df = pd.DataFrame(s1_rows + s2_rows)
+# ---------------------------
+# Output
+# ---------------------------
+s2_df = pd.DataFrame(s2_rows)
+s1_df = pd.DataFrame(s1_rows)
+if not s1_df.empty and not s2_df.empty:
+    df = pd.concat([s1_df, s2_df], ignore_index=True).sort_values(by="Layer")
+elif not s1_df.empty:
+    df = s1_df
+else:
+    df = s2_df
+
+# Reorder columns for clarity
+df = df.reindex(columns=['Layer', 'Name', 'Placement', 'Stage', 'Bytes', 'Stage1_Layer_Time_s', 'Layer_Time_s', 'Served_From'])
+
 print(df.to_string())
-print("\nSummary (Pipeline with Adaptive Balancing):")
+print(f"\nSummary (Pipeline with Tiling/Double-Buffering):")
 print(f"Core split over P={P}: p1={p1} (Stage-1), p2={p2} (Stage-2)")
 print(f"Stage-1 per token S1={S1_time:.6f} s")
 print(f"Stage-2 per token S2 (token1 cold)={S2_first:.6f} s, S2 (steady median)={S2_steady:.6f} s")
@@ -207,8 +279,6 @@ print(f"Total time for T={TOKENS}: {pipeline_total_time:.6f} s")
 # Model and placement info
 total_model_bytes = sum(L["bytes"] for L in layers)
 model_dtype_bits = int(BYTES_PER_PARAM * 8)
-host_bytes = sum(layers[i]["bytes"] for i in range(len(layers)) if placement[i] == PL_HOST_DRAM)
-nand_bytes = total_model_bytes - host_bytes
 print("\nModel Size & Placement:")
 print(f"  Dtype: FP{model_dtype_bits}, Cores: {P}, Host DRAM: {host_dram_capacity_bytes/GiB:.1f} GiB")
 print(f"  Host DRAM layers: {len(s1_idx)}, CXL/NAND layers: {len(s2_idx)}")
@@ -216,4 +286,3 @@ print("\nStage-2 memory service accounting (across all tokens):")
 print(f"  From CXL DRAM (hits): {acct['bytes_devdram_hits']:,} bytes")
 print(f"  From CXL NAND (misses): {acct['bytes_nand']:,} bytes")
 print(f"  Peak devDRAM cache used: {acct['devdram_cache_used_GB']:.3f} GB")
-

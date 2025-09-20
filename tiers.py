@@ -36,12 +36,14 @@ CXL_SSD_NAND = CXL_DEVICE_NAND
 
 # Host NVMe SSD (no-CXL sim)
 
-# Keep these as-is unless we have host SSD microbenchmarks.
-NVME_STREAM_BW      = 7.6e9
-NVME_STREAM_LAT_S   = 20e-6
-NVME_THRASH_BW      = 300e6
-NVME_THRASH_LAT_S   = 80e-6
-NVME_FAULT_OVERHEAD = 8e-6
+# Gen4 x4 NVMe (recommended)
+NVME_STREAM_BW      = 7.6e9     # ~7.6 GB/s sequential throughput (bytes/s)
+NVME_STREAM_LAT_S   = 20e-6     # ~20 µs average latency for large sequential I/O
+NVME_THRASH_BW      = 300e6     # ~300 MB/s random/thrash throughput (bytes/s)
+NVME_THRASH_LAT_S   = 80e-6     # ~80 µs average latency for small random I/O
+NVME_FAULT_OVERHEAD = 8e-6      # interrupt/context-switch / fault overhead (8 µs)
+
+
 
 def transfer_time_s(bytes_amt: int, tier: Tier, chunk_bytes: int = IO_CHUNK_BYTES) -> float:
     if bytes_amt <= 0: return 0.0
