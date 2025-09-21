@@ -1,3 +1,6 @@
+# filename: simulator_normal_update.py
+# Simulation of transformer inference with tiered memory (Host DRAM + CXL Device DRAM + CXL Device NAND)
+# Sequential access pattern with CXL device DRAM caching
 import math
 import pandas as pd
 from collections import OrderedDict
@@ -44,8 +47,21 @@ class DeviceDramPool:
         self.entries.move_to_end(idx, last=True); self.used += add_b
         return add_b
 
-layers = build_layers()
+layers = build_layers(sequence_length=512)  # Must match sequence_length
 name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
+
+# --- NEW: Calculate incremental KV cache size per token ---
+sequence_length = 512
+kv_cache_increment = {}  # Per-layer incremental KV cache size
+total_kv_cache_increment = 0
+for L in layers:
+    if L["kind"] == "DecoderBlock":
+        head_dim = L.get("head_dim", 128)
+        kv_heads = L.get("kv_heads", 40 if len(layers) > 35 else 8)
+        kv_cache_increment[L["name"]] = 2 * kv_heads * head_dim * 1 * BYTES_PER_PARAM
+        total_kv_cache_increment += kv_cache_increment[L["name"]]
+    else:
+        kv_cache_increment[L["name"]] = 0
 
 # --- PLACEMENT LOGIC ---
 placement = [None] * len(layers)
@@ -53,26 +69,36 @@ host_free = host_dram_capacity_bytes
 cxl_free  = cxl_dev_dram_capacity_bytes
 hot_indices = [name_to_idx.get("final_norm"), name_to_idx.get("lm_head")]
 for idx in hot_indices:
-    if idx is not None and layers[idx]["bytes"] <= host_free:
-        placement[idx] = PL_HOST_DRAM; host_free -= layers[idx]["bytes"]
+    if idx is not None:
+        # Include KV cache for placement
+        sz = layers[idx]["bytes"] + (kv_cache_increment[layers[idx]["name"]] * sequence_length)
+        if sz <= host_free:
+            placement[idx] = PL_HOST_DRAM; host_free -= sz
 for idx, L in enumerate(layers):
-    if placement[idx] is None and L["bytes"] <= host_free:
-        placement[idx] = PL_HOST_DRAM; host_free -= L["bytes"]
+    if placement[idx] is None:
+        sz = L["bytes"] + (kv_cache_increment[L["name"]] * sequence_length)
+        if sz <= host_free:
+            placement[idx] = PL_HOST_DRAM; host_free -= sz
 for idx, L in enumerate(layers):
-    if placement[idx] is None and L["bytes"] <= cxl_free:
-        placement[idx] = PL_CXL_DEV_DRAM; cxl_free -= L["bytes"]
+    if placement[idx] is None:
+        sz = L["bytes"] + (kv_cache_increment[L["name"]] * sequence_length)
+        if sz <= cxl_free:
+            placement[idx] = PL_CXL_DEV_DRAM; cxl_free -= sz
 for idx in range(len(layers)):
     if placement[idx] is None: placement[idx] = PL_CXL_DEV_NAND
 
 pinned_cxl = {i for i,p in enumerate(placement) if p==PL_CXL_DEV_DRAM}
-pinned_cxl_bytes = sum(layers[i]["bytes"] for i in pinned_cxl)
+pinned_cxl_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i in pinned_cxl)
 pool_capacity = max(0, cxl_dev_dram_capacity_bytes - pinned_cxl_bytes)
 devpool = DeviceDramPool(pool_capacity)
 
 rows = []
 per_token_latency, cxl_hit_served_B, nand_served_B = 0.0, 0, 0
 for exec_idx, L in enumerate(layers):
-    place, sz, flops = placement[exec_idx], L["bytes"], L["flops"]
+    place = placement[exec_idx]
+    # Include KV cache increment for per-token transfer
+    sz = L["bytes"] + kv_cache_increment[L["name"]]
+    flops = L["flops"]
     comp_s = compute_time_s(flops)
     mem_s_dram = mem_s_cxl = mem_s_nand = 0.0; served_from = ""
 
@@ -96,9 +122,9 @@ df = pd.DataFrame(rows)
 df.to_csv("sim_normal_corrected.csv", index=False)
 print(df.to_string())
 
-
 # --- Summary ---
 total_model_bytes = sum(L["bytes"] for L in layers)
+total_kv_cache_bytes = sum(L.get("kv_cache_bytes", 0) for L in layers)
 cold_load_s = ssd_cold_time_s(total_model_bytes)
 
 throughput = 1.0 / per_token_latency if per_token_latency > 0 else 0
@@ -106,9 +132,9 @@ total_time_for_all_tokens = cold_load_s + (TOKENS * per_token_latency)
 total_params = sum(L["params"] for L in layers)
 model_dtype_bits = int(BYTES_PER_PARAM * 8)
 
-host_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_HOST_DRAM)
-cxl_dram_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
-cxl_nand_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_CXL_DEV_NAND)
+host_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_HOST_DRAM)
+cxl_dram_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
+cxl_nand_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_CXL_DEV_NAND)
 
 host_traffic = sum(df[df.Placement==PL_HOST_DRAM]['Bytes'])
 cxl_dram_traffic = cxl_hit_served_B
@@ -133,7 +159,9 @@ print(f"Total time for T={TOKENS}: {total_time_for_all_tokens:.6f} s")
 print("\nModel Size:")
 print(f"  Total parameters: {total_params:,} ({fmt_params(total_params)})")
 print(f"  Dtype: FP{model_dtype_bits} ({BYTES_PER_PARAM} bytes/param)")
-print(f"  Total model size: {total_model_bytes:,} bytes ({fmt_bytes(total_model_bytes)})")
+print(f"  Total parameter size: {total_model_bytes:,} bytes ({fmt_bytes(total_model_bytes)})")
+print(f"  Total KV cache size: {total_kv_cache_bytes:,} bytes ({fmt_bytes(total_kv_cache_bytes)})")
+print(f"  Per-token KV cache update: {total_kv_cache_increment:,} bytes ({fmt_bytes(total_kv_cache_increment)})")
 
 print("\nPlacement Breakdown:")
 print(f"  Host DRAM ({fmt_bytes(host_bytes)}): Layers {host_layers}")
@@ -148,4 +176,3 @@ print(f"  From CXL Device NAND (Misses): {cxl_nand_traffic:,} bytes")
 print("\nCapacities:")
 print(f"  Host DRAM cap: {host_dram_capacity_bytes/GiB:.3f} GB")
 print(f"  CXL Device DRAM cap: {cxl_dev_dram_capacity_bytes/GiB:.3f} GB")
-

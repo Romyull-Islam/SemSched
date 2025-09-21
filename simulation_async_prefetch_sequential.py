@@ -73,8 +73,22 @@ def ssd_cold_time_s(n):
 # ---------------------------
 # Build model & Placement
 # ---------------------------
-layers = build_layers()
+layers = build_layers(sequence_length=512)  # Must match sequence_length
 name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
+
+# --- NEW: Calculate incremental KV cache size per token ---
+sequence_length = 512
+kv_cache_increment = {}  # Per-layer incremental KV cache size
+total_kv_cache_increment = 0
+for L in layers:
+    if L["kind"] == "DecoderBlock":
+        head_dim = L.get("head_dim", 128)
+        kv_heads = L.get("kv_heads", 40 if len(layers) > 35 else 8)
+        kv_cache_increment[L["name"]] = 2 * kv_heads * head_dim * 1 * BYTES_PER_PARAM
+        total_kv_cache_increment += kv_cache_increment[L["name"]]
+    else:
+        kv_cache_increment[L["name"]] = 0
+
 placement = [None] * len(layers)
 host_free = host_dram_capacity_bytes
 cxl_dram_free = cxl_dev_dram_capacity_bytes
@@ -82,18 +96,24 @@ cxl_dram_free = cxl_dev_dram_capacity_bytes
 # 1. Prioritize "hot" layers in Host DRAM
 hot_indices = [name_to_idx.get("final_norm"), name_to_idx.get("lm_head")]
 for idx in hot_indices:
-    if idx is not None and layers[idx]["bytes"] <= host_free:
-        placement[idx] = PL_HOST_DRAM; host_free -= layers[idx]["bytes"]
+    if idx is not None:
+        sz = layers[idx]["bytes"] + (kv_cache_increment[layers[idx]["name"]] * sequence_length)
+        if sz <= host_free:
+            placement[idx] = PL_HOST_DRAM; host_free -= sz
 
 # 2. Fill remaining Host DRAM greedily with earliest layers
 for idx, L in enumerate(layers):
-    if placement[idx] is None and L["bytes"] <= host_free:
-        placement[idx] = PL_HOST_DRAM; host_free -= L["bytes"]
+    if placement[idx] is None:
+        sz = L["bytes"] + (kv_cache_increment[L["name"]] * sequence_length)
+        if sz <= host_free:
+            placement[idx] = PL_HOST_DRAM; host_free -= sz
 
 # 3. Fill CXL DRAM with the next earliest available layers
 for idx, L in enumerate(layers):
-    if placement[idx] is None and L["bytes"] <= cxl_dram_free:
-        placement[idx] = PL_CXL_DEV_DRAM; cxl_dram_free -= L["bytes"]
+    if placement[idx] is None:
+        sz = L["bytes"] + (kv_cache_increment[L["name"]] * sequence_length)
+        if sz <= cxl_dram_free:
+            placement[idx] = PL_CXL_DEV_DRAM; cxl_dram_free -= sz
 
 # 4. Spill everything else to NAND
 for idx in range(len(layers)):
@@ -148,6 +168,8 @@ fetched_or_queued = set()
 # Main loop over layers
 for exec_idx in range(len(layers)):
     L = layers[exec_idx]
+    # Include KV cache increment for per-token transfer
+    sz = L["bytes"] + kv_cache_increment[L["name"]]
     
     for i in range(1, PREFETCH_QUEUE_DEPTH + 1):
         future_idx = exec_idx + i
@@ -159,23 +181,24 @@ for exec_idx in range(len(layers)):
         if thread.busy_until <= per_token_latency and fetch_queue:
             layer_to_fetch_idx = fetch_queue.popleft()
             layer_to_fetch = layers[layer_to_fetch_idx]
+            fetch_size = layer_to_fetch["bytes"] + kv_cache_increment[layer_to_fetch["name"]]
             
-            fetch_time = cxlssd_time_s(layer_to_fetch["bytes"])
+            fetch_time = cxlssd_time_s(fetch_size)
             thread.busy_until = per_token_latency + fetch_time
-            thread.current_task = (layer_to_fetch_idx, layer_to_fetch["bytes"])
+            thread.current_task = (layer_to_fetch_idx, fetch_size)
 
     layer_time = 0.0
     served_from = ""
     
     if placement[exec_idx] == PL_HOST_DRAM:
-        layer_time = max(compute_time_s(L["flops"], cpu_cores), dram_time_s(L["bytes"]))
+        layer_time = max(compute_time_s(L["flops"], cpu_cores), dram_time_s(sz))
         served_from = "Host DRAM"
     elif placement[exec_idx] == PL_CXL_DEV_DRAM:
-        layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(L["bytes"]))
+        layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(sz))
         served_from = "CXL DRAM (resident)"
     else: # Layer is on CXL NAND
-        if dev_pool.cached_bytes(exec_idx) >= L["bytes"]:
-            layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(L["bytes"]))
+        if dev_pool.cached_bytes(exec_idx) >= sz:
+            layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(sz))
             served_from = "CXL DRAM (prefetched hit)"
         else:
             served_from = "CXL NAND (stall)"
@@ -187,15 +210,15 @@ for exec_idx in range(len(layers)):
             
             if stall_until == float('inf'):
                 idle_thread = min(io_threads, key=lambda th: th.busy_until)
-                fetch_time = cxlssd_time_s(L["bytes"])
+                fetch_time = cxlssd_time_s(sz)
                 stall_until = idle_thread.busy_until + fetch_time
-                acct["bytes_from_nand_miss"] += L["bytes"]
+                acct["bytes_from_nand_miss"] += sz
             
             stall_time = max(0, stall_until - per_token_latency)
             acct["compute_stall_s"] += stall_time
             per_token_latency += stall_time
             
-            layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(L["bytes"]))
+            layer_time = max(compute_time_s(L["flops"], cpu_cores), cxl_time_s(sz))
 
     per_token_latency += layer_time
 
@@ -217,15 +240,16 @@ df = df.reindex(columns=['Layer', 'Name', 'Placement', 'Served_From', 'Layer_Tim
 print(df.to_string())
 
 total_model_bytes = sum(L["bytes"] for L in layers)
+total_kv_cache_bytes = sum(L.get("kv_cache_bytes", 0) for L in layers)
 cold_load_s = ssd_cold_time_s(total_model_bytes)
 
 throughput = 1.0 / per_token_latency if per_token_latency > 0 else 0.0
 total_time_for_all_tokens = cold_load_s + (TOKENS * per_token_latency)
 
 model_dtype_bits = int(BYTES_PER_PARAM * 8)
-host_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_HOST_DRAM)
-cxl_dram_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
-cxl_nand_bytes = sum(layers[i]["bytes"] for i, p in enumerate(placement) if p == PL_CXL_DEV_NAND)
+host_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_HOST_DRAM)
+cxl_dram_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
+cxl_nand_bytes = sum(layers[i]["bytes"] + (kv_cache_increment[layers[i]["name"]] * sequence_length) for i, p in enumerate(placement) if p == PL_CXL_DEV_NAND)
 
 print(f"\nSummary (Sequential Execution with Asynchronous I/O Pool):")
 print(f"One-time cold SSD load: {cold_load_s:.6f} s")
@@ -235,12 +259,17 @@ print(f"Total time for T={TOKENS}: {total_time_for_all_tokens:.6f} s")
 
 print("\nModel Size & Placement:")
 print(f"  Dtype: FP{model_dtype_bits}, Cores: {cpu_cores}, Host DRAM: {host_dram_capacity_bytes/GiB:.1f} GiB")
+print(f"  Total model size: {total_model_bytes:,} bytes ({fmt_bytes(total_model_bytes)})")
+print(f"  Total KV cache size: {total_kv_cache_bytes:,} bytes ({fmt_bytes(total_kv_cache_bytes)})")
+print(f"  Per-token KV cache update: {total_kv_cache_increment:,} bytes ({fmt_bytes(total_kv_cache_increment)})")
 print(f"  Host DRAM layers: {len([p for p in placement if p == PL_HOST_DRAM])}")
 print(f"  CXL DRAM layers: {len([p for p in placement if p == PL_CXL_DEV_DRAM])}")
 print(f"  CXL NAND layers: {len([p for p in placement if p == PL_CXL_DEV_NAND])}")
+print(f"  Host DRAM: {host_bytes:,} bytes ({fmt_bytes(host_bytes)})")
+print(f"  CXL Device DRAM: {cxl_dram_bytes:,} bytes ({fmt_bytes(cxl_dram_bytes)})")
+print(f"  CXL Device NAND: {cxl_nand_bytes:,} bytes ({fmt_bytes(cxl_nand_bytes)})")
 
 print("\nPerformance Breakdown:")
 print(f"  Total compute stall time (waiting for I/O): {acct['compute_stall_s']:.6f} s")
 print(f"  Total bytes successfully prefetched: {acct['bytes_prefetched']:,} bytes")
 print(f"  Total bytes read from NAND on a miss (stall): {acct['bytes_from_nand_miss']:,} bytes")
-
