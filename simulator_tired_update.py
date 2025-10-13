@@ -1,7 +1,14 @@
 # filename: simulator_tired_update.py
 # Simulation of transformer inference with tiered memory (Host DRAM + CXL Device DRAM + CXL Device NAND)
 # Sequential access pattern with CXL device DRAM caching and adaptive prefetching from NAND to DRAM
-
+# ------------------------------------------------------------
+# DESCRIPTION:
+# This simulation models a scenario where a model exceeds Host DRAM, using CXL Device DRAM and NAND.
+# Layers are placed in tiers based on a simple heuristic, and a dynamic LRU cache is used for CXL Device DRAM.
+# An adaptive prefetching strategy is employed to prefetch layers from NAND to Device DRAM during layer execution.
+# The prefetching is constrained by the time budget of the current layer's execution time.
+# All system parameters (DRAM size, CPU cores) are read from sim_cfg.py.
+# ------------------------------------------------------------
 import math
 import pandas as pd
 from collections import OrderedDict
@@ -43,12 +50,40 @@ def ssd_cold_time_s(n):
     return transfer_time_s(n, Tier("Host SSD (stream)", NVME_STREAM_BW, NVME_STREAM_LAT_S))
 
 # ==============================
+# Device DRAM Pool Class
+# ==============================
+class DeviceDramPool:
+    def __init__(self, cap_bytes):
+        self.cap = max(0, int(cap_bytes))
+        self.used = 0
+        self.lru = OrderedDict()
+    
+    def bytes_cached(self, layer_id):
+        return self.lru.get(layer_id, 0)
+    
+    def add_bytes(self, layer_id, add_b):
+        if add_b <= 0:
+            return 0
+        add_b = int(add_b)
+        needed = max(0, (self.used + add_b) - self.cap)
+        while needed > 0 and self.lru:
+            lid, sz = self.lru.popitem(last=False)
+            self.used -= sz
+            needed -= sz
+        if (self.used + add_b) > self.cap:
+            return 0
+        self.used += add_b
+        self.lru[layer_id] = self.lru.get(layer_id, 0) + add_b
+        self.lru.move_to_end(layer_id)
+        return add_b
+
+# ==============================
 # Build layers & Placement
 # ==============================
 layers = build_layers(sequence_length=512)  # Must match sequence_length
 name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
 
-# --- NEW: Calculate incremental KV cache size per token ---
+# --- Calculate incremental KV cache size per token ---
 sequence_length = 512
 kv_cache_increment = {}  # Per-layer incremental KV cache size
 total_kv_cache_increment = 0
@@ -179,7 +214,7 @@ df.to_csv("sim_adaptive_prefetch.csv", index=False)
 print(df.to_string())
 
 total_model_bytes = sum(L["bytes"] for L in layers)
-total_kv_cache_bytes = sum(L.get("kv_cache_bytes", 0) for L in layers)
+total_kv_cache_bytes = sum(kv_cache_increment[L["name"]] * sequence_length for L in layers)
 cold_load_s = ssd_cold_time_s(total_model_bytes)
 
 throughput_tokens_per_sec = 1.0 / per_token_latency if per_token_latency > 0 else 0.0

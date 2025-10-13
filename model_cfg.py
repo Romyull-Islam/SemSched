@@ -1,12 +1,16 @@
+# model_cfg.py
 from dataclasses import dataclass
 
+
 # ---- QUANT PRESET (change this one line to switch quantization for all sims) ----
-QUANT = "int8"  # options: "fp32", "fp16", "int8", "int4"
+QUANT = "fp32"  # options: "fp32", "fp16", "int8", "int4"
 # ----------------------------------------------------------------
+
 
 # --- NEW: Scaling factor to create a more realistic, compute-bound scenario ---
 FLOP_PROXY_SCALE = 1.0
 # ----------------------------------------------------------------
+
 
 BYTES_PER_PARAM = {
     "fp32": 4.0,
@@ -15,17 +19,19 @@ BYTES_PER_PARAM = {
     "int4": 0.5,  # packed
 }[QUANT]
 
-# Original 7B model configuration
+
+# Mistral 7B configuration (replaces original Llama7B)
 @dataclass(frozen=True)
-class Llama7BCfg:
+class Mistral7BCfg:
     num_blocks: int = 32
     vocab_size: int = 32000
     emb_dim: int = 4096
     mlp_hidden: int = 14336
     q_heads: int = 32
-    kv_heads: int = 8
+    kv_heads: int = 8  # Mistral uses grouped-query attention (GQA)
 
-# 13B model configuration, based on Llama 2 13B
+
+# 13B model configuration, based on Llama 2 13B (UNCHANGED)
 @dataclass(frozen=True)
 class Llama13BCfg:
     num_blocks: int = 40
@@ -35,9 +41,33 @@ class Llama13BCfg:
     q_heads: int = 40
     kv_heads: int = 40  # Multi-Head Attention
 
+
+# NEW: Qwen3 20B configuration (April 2024, ~20B params, different series from Phi-3.5/Mistral/Llama)
+@dataclass(frozen=True)
+class Qwen3_20BCfg:
+    num_blocks: int = 40
+    vocab_size: int = 151936  # Qwen3 uses larger vocab
+    emb_dim: int = 6144
+    mlp_hidden: int = 22016
+    q_heads: int = 40
+    kv_heads: int = 8  # GQA
+
+
+# NEW: Phi-3.5 3.8B configuration (May 2024, ~3.8B params, different series from Qwen3/Mistral/Llama)
+@dataclass(frozen=True)
+class Phi3_5_3_8BCfg:
+    num_blocks: int = 32
+    vocab_size: int = 128256  # Phi-3.5 uses 128K vocab
+    emb_dim: int = 3072
+    mlp_hidden: int = 8192
+    q_heads: int = 32
+    kv_heads: int = 8  # GQA (grouped-query attention)
+
+
 # Default model configuration (change to switch models for all sims)
-DEFAULT_MODEL_CFG = Llama13BCfg  # Set to Llama7BCfg for 7B model
+DEFAULT_MODEL_CFG = Mistral7BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
 # ----------------------------------------------------------------
+
 
 def build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
     """Return ordered list of layer dicts with param counts/bytes, FLOPs, and KV cache bytes."""
@@ -63,13 +93,14 @@ def build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
         p = block_params
         scaled_flops = int(2 * p * FLOP_PROXY_SCALE)
         layers.append({"name": f"decoder_{i}", "kind": "DecoderBlock",
-                      "params": p, "bytes": int(p * BYTES_PER_PARAM), "flops": scaled_flops,
-                      "kv_cache_bytes": int(kv_cache_bytes), "head_dim": head_dim, "kv_heads": cfg.kv_heads})
+                       "params": p, "bytes": int(p * BYTES_PER_PARAM), "flops": scaled_flops,
+                       "kv_cache_bytes": int(kv_cache_bytes), "head_dim": head_dim, "kv_heads": cfg.kv_heads})
     layers.append({"name": "final_norm", "kind": "RMSNorm",
-                  "params": finalnorm_params, "bytes": int(finalnorm_params * BYTES_PER_PARAM), "flops": 0, "kv_cache_bytes": 0})
+                   "params": finalnorm_params, "bytes": int(finalnorm_params * BYTES_PER_PARAM), "flops": 0, "kv_cache_bytes": 0})
     layers.append({"name": "lm_head", "kind": "LMHead",
                    "params": lmhead_params, "bytes": int(lmhead_params * BYTES_PER_PARAM), "flops": 0, "kv_cache_bytes": 0})
     return layers
+
 
 # Hot layers to pin in Host DRAM first (modify for placement experiments)
 HOT_LAYERS_BY_NAME = ("lm_head", "final_norm")

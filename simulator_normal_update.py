@@ -1,6 +1,7 @@
 # filename: simulator_normal_update.py
 # Simulation of transformer inference with tiered memory (Host DRAM + CXL Device DRAM + CXL Device NAND)
 # Sequential access pattern with CXL device DRAM caching
+# Updated June 2024 to fix placement and caching logic
 import math
 import pandas as pd
 from collections import OrderedDict
