@@ -52,8 +52,8 @@ PL_CXL_DEV_NAND     = "CXL Device NAND"
 # ---------------------------
 # Tunables
 # ---------------------------
-IO_THREAD_POOL_SIZE = 4      # Number of parallel I/O threads fetching from NAND
-PREFETCH_QUEUE_DEPTH = 8     # How many layers ahead the compute engine looks
+IO_THREAD_POOL_SIZE = 12      # Number of parallel I/O threads fetching from NAND
+PREFETCH_QUEUE_DEPTH = 24     # How many layers ahead the compute engine looks
 DEVICE_DRAM_HINT_PIN_FIRST_K = 4
 DEVICE_DRAM_PIN_STRICT       = True
 

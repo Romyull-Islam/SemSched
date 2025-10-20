@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 
 # ---- QUANT PRESET (change this one line to switch quantization for all sims) ----
-QUANT = "fp32"  # options: "fp32", "fp16", "int8", "int4"
+QUANT = "int4"  # options: "fp32", "fp16", "int8", "int4"
 # ----------------------------------------------------------------
 
 
@@ -65,7 +65,7 @@ class Phi3_5_3_8BCfg:
 
 
 # Default model configuration (change to switch models for all sims)
-DEFAULT_MODEL_CFG = Mistral7BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
+DEFAULT_MODEL_CFG = Llama13BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
 # ----------------------------------------------------------------
 
 
@@ -100,6 +100,50 @@ def build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
     layers.append({"name": "lm_head", "kind": "LMHead",
                    "params": lmhead_params, "bytes": int(lmhead_params * BYTES_PER_PARAM), "flops": 0, "kv_cache_bytes": 0})
     return layers
+
+
+def decomposed_build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
+    base_layers = build_layers(cfg, sequence_length)
+    decomposed = []
+    d = cfg.emb_dim
+    head_dim = d // cfg.q_heads
+    kv_total = cfg.kv_heads * head_dim
+
+    # Calculate attention and MLP parameters separately
+    attn_params = (d * d) + (d * head_dim * cfg.q_heads) + (d * kv_total) + (d * d)  # Q, K, V, O
+    mlp_params = (d * cfg.mlp_hidden) + (cfg.mlp_hidden * d) + (d * cfg.mlp_hidden)  # Gate, Up, Down
+
+    # KV cache bytes pertain only to attention layer
+    kv_cache_bytes = 2 * cfg.kv_heads * head_dim * sequence_length * BYTES_PER_PARAM
+
+    for L in base_layers:
+        if L["kind"] == "DecoderBlock":
+            # Attention sublayer
+            attn_layer = dict(L)
+            attn_layer["name"] = L["name"] + "_attn"
+            attn_layer["kind"] = "Attention"
+            attn_layer["params"] = attn_params
+            attn_layer["bytes"] = int(attn_params * BYTES_PER_PARAM)
+            attn_layer["flops"] = int(2 * attn_params * FLOP_PROXY_SCALE)
+            attn_layer["kv_cache_bytes"] = int(kv_cache_bytes)
+            attn_layer["head_dim"] = head_dim
+            attn_layer["kv_heads"] = cfg.kv_heads
+
+            # MLP sublayer
+            mlp_layer = dict(L)
+            mlp_layer["name"] = L["name"] + "_mlp"
+            mlp_layer["kind"] = "MLP"
+            mlp_layer["params"] = mlp_params
+            mlp_layer["bytes"] = int(mlp_params * BYTES_PER_PARAM)
+            mlp_layer["flops"] = int(2 * mlp_params * FLOP_PROXY_SCALE)
+            mlp_layer["kv_cache_bytes"] = 0  # No KV cache for MLP
+
+            decomposed.extend([attn_layer, mlp_layer])
+        else:
+            decomposed.append(L)
+
+    return decomposed
+
 
 
 # Hot layers to pin in Host DRAM first (modify for placement experiments)
