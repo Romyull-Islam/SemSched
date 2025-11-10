@@ -32,7 +32,7 @@ PL_CXL_DEV_NAND  = "CXL Device NAND"
 # ==============================
 # Prefetch knobs
 # ==============================
-prefetch_lookahead = 5
+prefetch_lookahead = 8
 prefetch_gran_bytes = 4 * 1024 * 1024
 
 # ==============================

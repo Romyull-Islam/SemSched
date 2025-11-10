@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 
 # ---- QUANT PRESET (change this one line to switch quantization for all sims) ----
-QUANT = "int4"  # options: "fp32", "fp16", "int8", "int4"
+QUANT = "fp32"  # options: "fp32", "fp16", "int8", "int4"
 # ----------------------------------------------------------------
 
 
@@ -64,8 +64,23 @@ class Phi3_5_3_8BCfg:
     kv_heads: int = 8  # GQA (grouped-query attention)
 
 
+
+# NEW: Qwen2.5 72B configuration (decoder-only, dense)
+# Public materials indicate an ~72B model with 80 layers, 8192 embedding dim,
+# 64 attention heads with GQA (8 KV heads), ~28,672 MLP hidden, and ~152K vocab.
+# This matches common open 70B-class shapes while keeping Qwen’s large vocab. [web:451][web:440]
+@dataclass(frozen=True)
+class Qwen2_5_72BCfg:
+    num_blocks: int = 80
+    vocab_size: int = 152064        # ~152K vocab typical in Qwen2.5 releases
+    emb_dim: int = 8192
+    mlp_hidden: int = 28672         # SwiGLU-style intermediate dim (effective)
+    q_heads: int = 64
+    kv_heads: int = 8               # GQA (KV heads)
+
+
 # Default model configuration (change to switch models for all sims)
-DEFAULT_MODEL_CFG = Llama13BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
+DEFAULT_MODEL_CFG = Qwen2_5_72BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
 # ----------------------------------------------------------------
 
 
@@ -148,3 +163,5 @@ def decomposed_build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
 
 # Hot layers to pin in Host DRAM first (modify for placement experiments)
 HOT_LAYERS_BY_NAME = ("lm_head", "final_norm")
+
+
