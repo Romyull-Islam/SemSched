@@ -1,11 +1,18 @@
-# filename: simulator_tired_ADAPTIVE_v2.py
+# filename: simulator_tired_ADAPTIVE_v9.py
 # Simulation with TRUE ADAPTIVE PREFETCHING
 # ================================================================
-# This version includes an intelligent placement strategy that:
-# 1. Prioritizes pinning compute-heavy decoder layers to Host DRAM.
-# 2. Dedicates 100% of CXL Device DRAM to the dynamic cache pool.
-# This avoids cache starvation and allows the adaptive prefetcher
-# to work effectively, regardless of memory sizes.
+# This version includes the "Knapsack" placement strategy (v9):
+# 1. This logic tests the user's hypothesis to maximize utilization
+#    and performance by prioritizing embed_tokens.
+# 2. Priority Order:
+#    P1: final_norm (tiny)
+#    P2: embed_tokens (critical start-of-loop)
+#    P3: decoder_0, decoder_1, ... (compute-heavy layers)
+#    P4: lm_head (critical end-of-loop, but lowest priority)
+# 3. Packs Host DRAM greedily based on this priority.
+# 4. Dedicates 100% of CXL Device DRAM to the dynamic cache pool.
+# 5. NEW: Post-greedy swap — if (last pinned decoder size + remaining host_free) >= lm_head,
+#    then evict the last pinned decoder and pin lm_head.
 # ================================================================
 
 import math
@@ -25,50 +32,45 @@ from sim_cfg import (
 
 # Labels
 PL_HOST_DRAM    = "Host DRAM"
-PL_CXL_DEV_DRAM = "CXL Device DRAM"  # This label will no longer be used for placement
+PL_CXL_DEV_DRAM = "CXL Device DRAM"  # Defined for logging, but NOT used for placement
 PL_CXL_DEV_NAND = "CXL Device NAND"
 
 # ==============================
 # ADAPTIVE PREFETCHER CLASS
+# (Unchanged)
 # ==============================
 class AdaptivePrefetcher:
     """Dynamically adapts prefetch strategy based on runtime metrics"""
-    
     def __init__(self, initial_lookahead=8, initial_chunk_mb=4):
         self.prefetch_lookahead = initial_lookahead
         self.prefetch_gran_bytes = initial_chunk_mb * 1024 * 1024
-        
         # Runtime tracking
         self.prefetch_successes = 0
         self.prefetch_failures = 0
         self.cache_hits = 0
         self.cache_misses = 0
         self.adapt_history = []
-    
+
     def get_prefetch_efficiency(self):
         """Calculate prefetch hit rate (0.0 to 1.0)"""
         total = self.prefetch_successes + self.prefetch_failures
         if total == 0:
             return 0.5
         return self.prefetch_successes / total
-    
+
     def get_cache_hit_rate(self):
         """Calculate overall cache hit rate"""
         total = self.cache_hits + self.cache_misses
         if total == 0:
             return 0.5
         return self.cache_hits / total
-    
+
     def adapt_lookahead_depth(self, layer_idx):
         """
         ADAPTATION 1: Dynamically adjust lookahead based on effectiveness
-        
-        High efficiency (>60%): Increase lookahead (prefetch further)
-        Low efficiency (<30%): Decrease lookahead (save resources)
         """
         efficiency = self.get_prefetch_efficiency()
         old_lookahead = self.prefetch_lookahead
-        
         if efficiency > 0.60:
             self.prefetch_lookahead = min(32, self.prefetch_lookahead + 1)
             if self.prefetch_lookahead != old_lookahead:
@@ -79,44 +81,32 @@ class AdaptivePrefetcher:
             if self.prefetch_lookahead != old_lookahead:
                 msg = f"L{layer_idx}: Prefetch eff {efficiency:.1%} → lookahead ↓ to {self.prefetch_lookahead}"
                 self.adapt_history.append(msg)
-    
+
     def adapt_chunk_size(self, layer_idx):
         """
         ADAPTATION 2: Adjust chunk granularity based on cache effectiveness
-        
-        High hit rate (>65%): Larger chunks (aggressive prefetch)
-        Low hit rate (<35%): Smaller chunks (conservative prefetch)
         """
         hit_rate = self.get_cache_hit_rate()
         old_chunk = self.prefetch_gran_bytes
-        
         if hit_rate > 0.65:
             self.prefetch_gran_bytes = min(16 * 1024 * 1024, self.prefetch_gran_bytes * 2)
         elif hit_rate < 0.35:
             self.prefetch_gran_bytes = max(1 * 1024 * 1024, self.prefetch_gran_bytes // 2)
-        
         if self.prefetch_gran_bytes != old_chunk:
             msg = f"L{layer_idx}: Cache hit {hit_rate:.1%} → chunk {old_chunk/1e6:.0f}MB → {self.prefetch_gran_bytes/1e6:.0f}MB"
             self.adapt_history.append(msg)
-    
+
     def get_adaptive_prefetch_budget(self, base_budget, layer_idx, total_layers, nand_remaining):
         """
         ADAPTATION 3: Scale prefetch budget based on urgency
-        
-        More NAND layers remaining → higher budget
-        Few NAND layers left → lower budget
         """
         urgency = nand_remaining / max(1, total_layers)
         adaptive_budget = base_budget * (0.5 + 0.5 * urgency)
         return adaptive_budget
-    
+
     def get_aggressiveness(self, layer_idx, total_layers):
         """
         ADAPTATION 4: Layer-position-aware aggressiveness
-        
-        Early (0-15%): 0.5 (normal)
-        Middle (15-75%): 0.8 (aggressive)
-        Late (75-100%): 1.0 (maximum)
         """
         pos = layer_idx / max(1, total_layers)
         if pos < 0.15:
@@ -125,26 +115,22 @@ class AdaptivePrefetcher:
             return 0.8
         else:
             return 1.0
-    
-    def record_prefetch_success(self, bytes_prefetched):
-        """Record successful prefetch"""
-        self.prefetch_successes += bytes_prefetched
-    
-    def record_prefetch_failure(self, bytes_attempted):
-        """Record failed/partial prefetch"""
-        self.prefetch_failures += bytes_attempted
-    
-    def record_cache_hit(self, bytes_hit):
-        """Record cache hit"""
-        self.cache_hits += bytes_hit
-    
-    def record_cache_miss(self, bytes_miss):
-        """Record cache miss"""
-        self.cache_misses += bytes_miss
 
+    def record_prefetch_success(self, bytes_prefetched):
+        self.prefetch_successes += bytes_prefetched
+
+    def record_prefetch_failure(self, bytes_attempted):
+        self.prefetch_failures += bytes_attempted
+
+    def record_cache_hit(self, bytes_hit):
+        self.cache_hits += bytes_hit
+
+    def record_cache_miss(self, bytes_miss):
+        self.cache_misses += bytes_miss
 
 # ==============================
 # Helpers
+# (Unchanged)
 # ==============================
 def compute_time_s(flops: float) -> float:
     if flops <= 0: return 0.0
@@ -159,27 +145,27 @@ def ssd_cold_time_s(n):
 
 # ==============================
 # Device DRAM Pool Class
+# (Unchanged)
 # ==============================
 class DeviceDramPool:
     def __init__(self, cap_bytes):
         self.cap = max(0, int(cap_bytes))
         self.used = 0
         self.lru = OrderedDict()
-    
     def bytes_cached(self, layer_id):
         return self.lru.get(layer_id, 0)
-    
     def add_bytes(self, layer_id, add_b):
         if add_b <= 0:
+            if layer_id in self.lru:
+                self.lru.move_to_end(layer_id)
             return 0
         add_b = int(add_b)
         needed = max(0, (self.used + add_b) - self.cap)
         while needed > 0 and self.lru:
-            lid, sz = self.lru.popitem(last=False)
+            lid, sz = self.lru.popitem(last=False) # Evict oldest
             self.used -= sz
             needed -= sz
         if (self.used + add_b) > self.cap:
-            # Not enough space even after eviction, cannot add
             return 0
         self.used += add_b
         self.lru[layer_id] = self.lru.get(layer_id, 0) + add_b
@@ -187,7 +173,8 @@ class DeviceDramPool:
         return add_b
 
 # ==============================
-# Build layers & Placement
+# Build layers & Sizing
+# (Unchanged)
 # ==============================
 layers = build_layers(sequence_length=512)
 name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
@@ -195,99 +182,133 @@ name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
 sequence_length = 512
 kv_cache_increment = {}
 total_kv_cache_increment = 0
-layer_full_kv_size = {} # <-- NEW: Store full KV cache size per layer
+layer_full_kv_size = {} # Store full KV cache size per layer
+layer_total_size = {}   # Store params + full KV cache
 
-for L in layers:
+for i, L in enumerate(layers):
+    layer_name = L["name"]
     if L["kind"] == "DecoderBlock":
         head_dim = L.get("head_dim", 128)
         kv_heads = L.get("kv_heads", 40 if len(layers) > 35 else 8)
-        # Per-token increment
         kv_inc = 2 * kv_heads * head_dim * 1 * BYTES_PER_PARAM
-        kv_cache_increment[L["name"]] = kv_inc
+        kv_cache_increment[layer_name] = kv_inc
         total_kv_cache_increment += kv_inc
-        # Full size for placement
-        layer_full_kv_size[L["name"]] = kv_inc * sequence_length
+        full_kv = kv_inc * sequence_length
+        layer_full_kv_size[layer_name] = full_kv
+        layer_total_size[layer_name] = L["bytes"] + full_kv
     else:
-        kv_cache_increment[L["name"]] = 0
-        layer_full_kv_size[L["name"]] = 0
-
+        kv_cache_increment[layer_name] = 0
+        layer_full_kv_size[layer_name] = 0
+        layer_total_size[layer_name] = L["bytes"]
 
 # ========================================================
-# NEW EFFICIENT PLACEMENT LOGIC
+# NEW EFFICIENT PLACEMENT LOGIC (v9 - Knapsack, User Priority)
+# with post-greedy lm_head swap
 # ========================================================
 placement = [None] * len(layers)
 host_free = host_dram_capacity_bytes
+unpinned_layers = [] # Keep track of layers not yet pinned
 
-# --- 1. Pin critical "hot" layers (lm_head, final_norm) to Host DRAM ---
-# These are compute-critical and must be fast.
-hot_names = ["final_norm", "lm_head"] 
-for name in hot_names:
-    idx = name_to_idx.get(name)
-    if idx is not None:
-        L = layers[idx]
-        # Size = params + full KV cache (which is 0 for these layers)
-        sz = L["bytes"] + layer_full_kv_size[L["name"]]
-        if sz <= host_free:
-            placement[idx] = PL_HOST_DRAM
-            host_free -= sz
+print("--- Starting Efficient Placement (v9 - Knapsack, User Priority) ---")
+print(f"Host DRAM Capacity: {host_free / GiB:.2f} GiB")
 
-# --- 2. Pin as many DECODER layers as possible to Host DRAM ---
-# This is the most efficient use of fast Host DRAM: pin compute-heavy layers.
-decoder_indices = [i for i, L in enumerate(layers) if L["kind"] == "DecoderBlock"]
-
-for idx in decoder_indices:
-    if placement[idx] is not None: continue # Should be none, but good check.
-    
-    L = layers[idx]
-    # Placement size must include parameters AND the full KV cache
-    sz = L["bytes"] + layer_full_kv_size[L["name"]]
-    
-    if sz <= host_free:
-        placement[idx] = PL_HOST_DRAM
-        host_free -= sz
+# --- 1. Define Priority Lists ---
+# Create (priority, size, index, name) tuples
+# Lower priority number = HIGHER priority
+layers_to_place = []
+for i, L in enumerate(layers):
+    size = layer_total_size[L["name"]]
+    # Priority mapping
+    if L["name"] == "final_norm":
+        priority = 0 # Tiny, always pin
+    elif L["name"] == "embed_tokens":
+        priority = 10 # Prio 10
+    elif L["kind"] == "DecoderBlock":
+        priority = 20 + i # Prio 20, 21, 22...
+    elif L["name"] == "lm_head":
+        priority = 100 # Lowest priority in greedy
     else:
-        # Stop as soon as one doesn't fit
-        break 
+        priority = 1000 # Should not happen
+    layers_to_place.append((priority, size, i, L["name"]))
 
-# --- 3. Place 'embed_tokens' (lowest priority) in Host DRAM if it fits ---
-# This layer has no FLOPs, so it's the lowest priority for pinning.
-idx = name_to_idx.get("embed_tokens")
-if idx is not None and placement[idx] is None:
-    L = layers[idx]
-    sz = L["bytes"] + layer_full_kv_size[L["name"]] # KV size is 0
-    if sz <= host_free:
+# Sort by priority (lowest number first)
+layers_to_place.sort()
+
+# --- 2. Pin Priority Layers to Host DRAM (Greedy Knapsack) ---
+print(f"Packing Host DRAM...")
+last_pinned_decoder = None  # (idx, size) of most recently pinned DecoderBlock
+lm_head_idx = name_to_idx.get("lm_head", None)
+lm_head_size = layer_total_size.get("lm_head", float("inf"))
+
+for priority, size, idx, name in layers_to_place:
+    if size <= host_free:
         placement[idx] = PL_HOST_DRAM
-        host_free -= sz
+        host_free -= size
+        print(f"  Pinned {name} (Prio {priority}, {size / GiB:.2f} GiB). Host free: {host_free / GiB:.2f} GiB")
+        if layers[idx]["kind"] == "DecoderBlock":
+            last_pinned_decoder = (idx, size)
+    else:
+        # Layer is too big for remaining space
+        unpinned_layers.append((size, idx, name))
 
-# --- 4. CXL DRAM is NOW 100% DYNAMIC CACHE ---
-# This is the most critical change. We DO NOT pin to CXL DRAM.
-# The entire CXL DRAM capacity is given to the prefetcher's cache pool.
+# --- 2b. Post-greedy swap to include lm_head if near-miss ---
+# Condition: lm_head not pinned, doesn't currently fit, but would fit if last pinned decoder is evicted.
+if lm_head_idx is not None and placement[lm_head_idx] is None and last_pinned_decoder is not None:
+    dec_idx, dec_size = last_pinned_decoder
+    # Use a tiny epsilon to avoid unit rounding issues
+    epsilon = int(0.01 * GiB)  # 10 MiB slack
+    if host_free < lm_head_size and (host_free + dec_size + epsilon) >= lm_head_size:
+        # Swap: evict last decoder, pin lm_head
+        placement[dec_idx] = None
+        host_free += dec_size
+        placement[lm_head_idx] = PL_HOST_DRAM
+        host_free -= lm_head_size
+        # Make the evicted decoder available for backfill
+        unpinned_layers.append((dec_size, dec_idx, layers[dec_idx]["name"]))
+        print(f"  Swapped out {layers[dec_idx]['name']} to pin lm_head ({lm_head_size / GiB:.2f} GiB). Host free: {host_free / GiB:.2f} GiB")
+
+# --- 3. "Backfill" Wasted Space ---
+# Try to fill the remaining space with any layers that fit,
+# sorting by smallest size first to maximize utilization.
+unpinned_layers.sort() # Sort by size (smallest first)
+if host_free > 0 and unpinned_layers:
+    print(f"Backfilling {host_free / GiB:.2f} GiB of remaining Host DRAM...")
+    for size, idx, name in unpinned_layers:
+        if placement[idx] is None and size <= host_free: # Check if not already placed
+            placement[idx] = PL_HOST_DRAM
+            host_free -= size
+            print(f"  Backfilled {name} ({size / GiB:.2f} GiB). Host free: {host_free / GiB:.2f} GiB")
+
+print(f"Host DRAM placement complete. Wasted space: {host_free / GiB:.2f} GiB")
+
+# --- 4. CXL DRAM is 100% DYNAMIC CACHE ---
 dyn_cxl_capacity = cxl_dev_dram_capacity_bytes  # Use ALL CXL DRAM as cache
 pool = DeviceDramPool(dyn_cxl_capacity)
+print(f"CXL DRAM Pool (Dynamic Cache) size: {dyn_cxl_capacity / GiB:.2f} GiB")
 
 # --- 5. All remaining layers go to NAND ---
-# Any layer that wasn't pinned to Host DRAM is put on slow storage.
 for idx in range(len(layers)):
     if placement[idx] is None:
         placement[idx] = PL_CXL_DEV_NAND
-
-# ========================================================
-# END NEW PLACEMENT LOGIC
-# ========================================================
+print("--- Placement Complete ---")
 
 # --- Calculate pinned CXL bytes (should be 0 now, for logging) ---
-pinned_cxl = {i for i,p in enumerate(placement) if p == PL_CXL_DEV_DRAM}
-pinned_cxl_bytes = sum(layers[i]["bytes"] + layer_full_kv_size[layers[i]["name"]] for i in pinned_cxl)
-
+pinned_cxl_bytes = 0.0
+for i, p in enumerate(placement):
+    if p == PL_CXL_DEV_DRAM: # This should not happen
+        L = layers[i]
+        pinned_cxl_bytes += L["bytes"] + layer_full_kv_size[L["name"]]
 
 # ==============================
 # Initialize Adaptive Prefetcher
+# (Unchanged)
 # ==============================
 prefetcher = AdaptivePrefetcher(initial_lookahead=8, initial_chunk_mb=4)
 nand_layer_indices = [i for i in range(len(layers)) if placement[i] == PL_CXL_DEV_NAND]
 
 # ==============================
 # Execute with Adaptive Prefetch
+# (Unchanged)
 # ==============================
 rows = []
 per_token_latency = 0.0
@@ -295,76 +316,63 @@ cxl_hit_bytes_cum, cxl_miss_bytes_cum = 0, 0
 
 for exec_idx in range(len(layers)):
     L = layers[exec_idx]
+    layer_name = L["name"]
     # Runtime access size = params + ONE token's worth of KV cache
-    sz = L["bytes"] + kv_cache_increment[L["name"]]
+    sz = L["bytes"] + kv_cache_increment[layer_name]
     comp_time = compute_time_s(L["flops"])
     mem_time, served_from_parts = 0.0, []
 
     if placement[exec_idx] == PL_HOST_DRAM:
         mem_time = dram_time_s(sz)
         served_from_parts.append(PL_HOST_DRAM)
-        
-    # NOTE: No layer is ever placed in PL_CXL_DEV_DRAM anymore.
-    # The logic is simplified to just PL_HOST_DRAM or PL_CXL_DEV_NAND.
-        
     else:  # PL_CXL_DEV_NAND
-        
-        # Check cache: Do we have the full layer?
-        # We now check against the *full runtime size*
+        # Full size of layer (params + full KV) is needed for caching
+        full_layer_size = layer_total_size[layer_name]
         staged_b = pool.bytes_cached(exec_idx)
-        
-        # We need the *full* per-token runtime bytes `sz`
-        # Check if the cache has the *full* runtime bytes
-        if staged_b >= sz:
-            # CACHE HIT
+
+        # Check if the entire layer is cached
+        if staged_b >= full_layer_size:
+            # CACHE HIT (Full Layer)
             mem_time += cxl_time_s(sz)
             cxl_hit_bytes_cum += sz
             served_from_parts.append(f"CXL DRAM (cache {staged_b/1e6:.1f}MB)")
             prefetcher.record_cache_hit(sz)
-            # We must call add_bytes to move it to the end of the LRU
-            pool.add_bytes(exec_idx, 0) 
-        
+            pool.add_bytes(exec_idx, 0) # Move to end of LRU
         else:
-            # CACHE MISS
-            # We hit for the bytes that *were* in the cache
+            # CACHE MISS (or partial hit)
+            # 1. Read from cache (if any)
             if staged_b > 0:
-                mem_time += cxl_time_s(staged_b)
-                cxl_hit_bytes_cum += staged_b
-                served_from_parts.append(f"CXL DRAM (cache {staged_b/1e6:.1f}MB)")
-                prefetcher.record_cache_hit(staged_b)
-
-            # We miss for the remaining bytes
-            rem_b = sz - staged_b
+                read_from_cache = min(staged_b, sz)
+                mem_time += cxl_time_s(read_from_cache)
+                cxl_hit_bytes_cum += read_from_cache
+                served_from_parts.append(f"CXL DRAM (cache {read_from_cache/1e6:.1f}MB)")
+                prefetcher.record_cache_hit(read_from_cache)
+            else:
+                read_from_cache = 0
+            # 2. Stall to read remaining bytes from NAND
+            rem_b = sz - read_from_cache
             if rem_b > 0:
-                mem_time += nand_time_s(rem_b) # Stall!
+                mem_time += nand_time_s(rem_b) # Stall
                 cxl_miss_bytes_cum += rem_b
                 served_from_parts.append(f"CXL NAND ({rem_b/1e6:.1f}MB)")
                 prefetcher.record_cache_miss(rem_b)
-                
-                # Add the *full layer* to the cache, not just the remainder
-                # We fetch the *full* layer params + full KV cache on a miss
-                # This simulates the layer being loaded for execution
-                full_layer_size = L["bytes"] + layer_full_kv_size[L["name"]]
-                pool.add_bytes(exec_idx, full_layer_size)
-
+            # 3. Load the entire layer into cache on miss
+            pool.add_bytes(exec_idx, full_layer_size)
 
     layer_time = max(comp_time, mem_time)
     per_token_latency += layer_time
 
     # Count remaining NAND layers
     nand_remaining = sum(1 for i in range(exec_idx + 1, len(layers)) if placement[i] == PL_CXL_DEV_NAND)
-    
+
     # ADAPTIVE PREFETCH with dynamic parameters
     pf_bytes, pf_time, pf_targets = 0, 0.0, []
-    
-    # Get adaptive budget based on urgency
+
     adaptive_budget = prefetcher.get_adaptive_prefetch_budget(
         layer_time, exec_idx, len(layers), nand_remaining
     )
-    
-    # Get layer-specific aggressiveness
     aggressiveness = prefetcher.get_aggressiveness(exec_idx, len(layers))
-    
+
     budget_s = adaptive_budget
     if budget_s > 0:
         for k in range(1, prefetcher.prefetch_lookahead + 1):
@@ -372,44 +380,37 @@ for exec_idx in range(len(layers)):
             next_idx = exec_idx + k
             if next_idx >= len(layers) or placement[next_idx] != PL_CXL_DEV_NAND:
                 continue
-            
-            # Prefetch logic: we prefetch the *entire layer* (params + full KV)
             L_next = layers[next_idx]
-            full_layer_size_next = L_next["bytes"] + layer_full_kv_size[L_next["name"]]
-            
+            full_layer_size_next = layer_total_size[L_next["name"]]
             need_b = full_layer_size_next - pool.bytes_cached(next_idx)
-
-            if need_b <= 0: # Already fully cached
+            if need_b <= 0:
                 continue
-            
             pf_targets.append(next_idx + 1)
-            
-            # Apply aggressiveness to chunk size
             effective_chunk = int(prefetcher.prefetch_gran_bytes * aggressiveness)
-            
+
             while need_b > 0 and budget_s > 0:
                 chunk = min(effective_chunk, need_b)
                 t_chunk = nand_time_s(chunk)
-                
-                if t_chunk <= budget_s:
+                if t_chunk <= budget_s and t_chunk > 0:
                     bytes_added = pool.add_bytes(next_idx, chunk)
                     if bytes_added == 0:
-                        # Cache is full and couldn't evict enough space
                         prefetcher.record_prefetch_failure(chunk)
-                        break
+                        break # Cache is full
                     prefetcher.record_prefetch_success(bytes_added)
                     need_b -= bytes_added
                     pf_bytes += bytes_added
                     pf_time += t_chunk
                     budget_s -= t_chunk
                 else:
-                    # Not enough budget for a full chunk, try partial
+                    if t_chunk == 0:
+                        budget_s = 0
+                        break
                     partial_bytes = max(0, int(chunk * (budget_s / t_chunk)))
                     if partial_bytes > 0:
                         bytes_added = pool.add_bytes(next_idx, partial_bytes)
                         if bytes_added == 0:
-                           prefetcher.record_prefetch_failure(partial_bytes)
-                           break
+                            prefetcher.record_prefetch_failure(partial_bytes)
+                            break
                         prefetcher.record_prefetch_success(bytes_added)
                         pf_bytes += bytes_added
                         pf_time += budget_s
@@ -434,6 +435,7 @@ for exec_idx in range(len(layers)):
 
 # ==============================
 # Final Summary
+# (Unchanged)
 # ==============================
 df = pd.DataFrame(rows)
 df.to_csv("sim_adaptive_prefetch.csv", index=False)
@@ -456,9 +458,9 @@ throughput_tokens_per_sec = 1.0 / per_token_latency if per_token_latency > 0 els
 total_time_s_all_tokens = cold_load_s + (TOKENS * per_token_latency)
 
 model_dtype_bits = int(BYTES_PER_PARAM * 8)
-host_bytes = sum(layers[i]["bytes"] + layer_full_kv_size[layers[i]["name"]] for i,p in enumerate(placement) if p == PL_HOST_DRAM)
-cxl_bytes  = sum(layers[i]["bytes"] + layer_full_kv_size[layers[i]["name"]] for i,p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
-ssd_bytes  = sum(layers[i]["bytes"] + layer_full_kv_size[layers[i]["name"]] for i,p in enumerate(placement) if p == PL_CXL_DEV_NAND)
+host_bytes = sum(layer_total_size[layers[i]["name"]] for i,p in enumerate(placement) if p == PL_HOST_DRAM)
+cxl_bytes  = pinned_cxl_bytes # Should be 0
+ssd_bytes  = sum(layer_total_size[layers[i]["name"]] for i,p in enumerate(placement) if p == PL_CXL_DEV_NAND)
 def fmt_bytes(n): return f"{n / GiB:.3f} GiB"
 
 print(f"\nSummary (Sequential Execution with ADAPTIVE Prefetching):")

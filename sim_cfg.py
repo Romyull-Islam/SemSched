@@ -13,5 +13,5 @@ parallel_efficiency       = 0.90
 # Machine capacities (shared by all sims)
 host_dram_capacity_bytes    = 16 * GiB
 cxl_dev_dram_capacity_bytes = 32 * GiB
-cxl_ssd_capacity_bytes      = 128 * GiB
+cxl_ssd_capacity_bytes      = 256 * GiB
 ssd_capacity_bytes          = 512 * GiB
