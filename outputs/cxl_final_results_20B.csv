@@ -1,0 +1,17 @@
+Simulation Name,Host Cap (GiB),CXL Pool Cap (GiB),Cold Load Time (s),Single-Token Latency (s),Throughput (tok/s),Total Time for T=16 (s),Cache Hit/Related Metric (%),Other Key Metrics
+Baseline (No CXL),16.0,N/A,19.061,16.098,0.062,276.621,N/A,DRAM layers: 8; SSD layers: 35
+ADAPTIVE Prefetching,16.0,32.0,19.061,10.385,0.096,185.221,44.2%; 100.0% eff.,Lookahead: 16; Chunk: 4MB; Prefetched: 33.33 GB
+Async Prefetch Sequential,16.0,32.0,19.061,3.38,0.296,73.134,N/A,Stalls: 0.000s; Host layers: 7; CXL DRAM layers: 16; NAND layers: 20
+Semantic-Aware Duplex Scheduler,16.0,32.0,19.061,3.367,0.297,72.94,58.39% read ratio,Prefetched: 40.89 GB; Host layers: 36; CXL DRAM: 21; NAND: 26
+Baseline (No CXL) [Repeat],16.0,N/A,19.061,16.098,0.062,276.621,N/A,DRAM layers: 8; SSD layers: 35
+ADAPTIVE Prefetching,16.0,64.0,19.061,10.385,0.096,185.221,44.2%; 100.0% eff.,Lookahead: 16; Chunk: 4MB; Prefetched: 33.33 GB
+Async Prefetch Sequential,16.0,64.0,19.061,3.38,0.296,73.134,N/A,Stalls: 0.000s; Host layers: 7; CXL DRAM layers: 32; NAND layers: 4
+Semantic-Aware Duplex Scheduler,16.0,64.0,19.061,3.367,0.297,72.94,58.39% read ratio,Prefetched: 40.89 GB; Host layers: 36; CXL DRAM: 44; NAND: 3
+Baseline (No CXL),32.0,N/A,19.061,13.047,0.077,227.817,N/A,DRAM layers: 16; SSD layers: 27
+ADAPTIVE Prefetching,32.0,32.0,19.061,8.798,0.114,159.831,42.3%; 100.0% eff.,Lookahead: 15; Chunk: 4MB; Prefetched: 24.76 GB
+Async Prefetch Sequential,32.0,32.0,19.061,3.175,0.315,69.857,N/A,Stalls: 0.000s; Host layers: 15; CXL DRAM layers: 16; NAND layers: 12
+Semantic-Aware Duplex Scheduler,32.0,32.0,19.061,3.168,0.316,69.755,58.39% read ratio,Prefetched: 24.35 GB; Host layers: 47; CXL DRAM: 21; NAND: 15
+Baseline (No CXL),32.0,N/A,19.061,13.047,0.077,227.817,N/A,DRAM layers: 16; SSD layers: 27
+ADAPTIVE Prefetching,32.0,64.0,19.061,8.798,0.114,159.831,42.3%; 100.0% eff.,Lookahead: 15; Chunk: 4MB; Prefetched: 24.76 GB
+Async Prefetch Sequential,32.0,64.0,19.061,3.175,0.315,69.857,N/A,Stalls: 0.000s; Host layers: 15; CXL DRAM layers: 28; NAND layers: 0
+Semantic-Aware Duplex Scheduler,32.0,64.0,19.061,3.168,0.316,69.755,58.39% read ratio,Prefetched: 0 GB; Host layers: 47; CXL DRAM: 36; NAND: 0

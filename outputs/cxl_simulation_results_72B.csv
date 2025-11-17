@@ -1,0 +1,21 @@
+Simulation Name,Host Cap (GiB),CXL Pool Cap (GiB),Cold Load Time (s),Single-Token Latency (s),Throughput (tok/s),Total Time for T=16 (s),Cache Hit/Related Metric (%),Other Key Metrics
+Baseline (No CXL),16.0,N/A,62.894,60.007,0.017,1023.002,N/A,DRAM layers: 5; SSD layers: 77
+ADAPTIVE Prefetching,16.0,32.0,62.894,37.67,0.027,665.61,45.5%; 100.0% eff.,Lookahead: 24; Chunk: 4MB; Prefetched: 130.41 GB
+Async Prefetch Sequential,16.0,32.0,62.894,12.417,0.081,261.563,N/A,Stalls: 0.794s; CXL DRAM layers: 9; NAND layers: 70
+Semantic-Aware Duplex Scheduler,16.0,32.0,62.894,11.585,0.086,248.251,58.74% read ratio,Prefetched: 246.79 GB; Host layers: 21; CXL DRAM: 12
+Baseline (No CXL) [Repeat],16.0,N/A,62.894,60.007,0.017,1023.002,N/A,DRAM layers: 5; SSD layers: 77
+ADAPTIVE Prefetching,16.0,64.0,62.894,37.67,0.027,665.61,45.5%; 100.0% eff.,Lookahead: 24; Chunk: 4MB; Prefetched: 130.41 GB
+Async Prefetch Sequential,16.0,64.0,62.894,11.623,0.086,248.866,N/A,Stalls: 0.000s; CXL DRAM layers: 18; NAND layers: 61
+Semantic-Aware Duplex Scheduler,16.0,64.0,62.894,11.585,0.086,248.251,58.74% read ratio,Prefetched: 217.11 GB; Host layers: 21; CXL DRAM: 25
+Baseline (No CXL),32.0,N/A,62.894,56.695,0.018,970.021,N/A,DRAM layers: 10; SSD layers: 73
+ADAPTIVE Prefetching,32.0,32.0,62.894,35.886,0.028,637.07,45.3%; 100.0% eff.,Lookahead: 24; Chunk: 8MB; Prefetched: 121.48 GB
+Async Prefetch Sequential,32.0,32.0,62.894,11.401,0.088,245.308,N/A,Stalls: 0.000s; Host layers: 9; CXL DRAM layers: 9; NAND: 65
+Semantic-Aware Duplex Scheduler,32.0,32.0,62.894,11.381,0.088,244.987,58.74% read ratio,Prefetched: 235.00 GB; Host layers: 41; CXL DRAM: 12
+Baseline (No CXL) [Repeat],32.0,N/A,62.894,56.695,0.018,970.021,N/A,DRAM layers: 10; SSD layers: 73
+ADAPTIVE Prefetching,32.0,64.0,62.894,35.886,0.028,637.07,45.3%; 100.0% eff.,Lookahead: 24; Chunk: 8MB; Prefetched: 121.48 GB
+Async Prefetch Sequential,32.0,64.0,62.894,11.401,0.088,245.308,N/A,Stalls: 0.000s; CXL DRAM layers: 18; NAND layers: 56
+Semantic-Aware Duplex Scheduler,32.0,64.0,62.894,11.381,0.088,244.987,58.74% read ratio,Prefetched: 200.34 GB; Host layers: 41; CXL DRAM: 25
+Baseline (No CXL),64.0,N/A,62.894,50.735,0.02,874.654,N/A,DRAM layers: 19; SSD layers: 64
+ADAPTIVE Prefetching,64.0,64.0,62.894,32.646,0.031,585.226,44.5%; 100.0% eff.,Lookahead: 23; Chunk: 4MB; Prefetched: 104.15 GB
+Async Prefetch Sequential,64.0,64.0,62.894,10.956,0.091,238.193,N/A,Stalls: 0.000s; Host layers: 19; CXL DRAM layers: 18; NAND: 46
+Semantic-Aware Duplex Scheduler,64.0,64.0,62.894,10.973,0.091,238.459,58.74% read ratio,Prefetched: 168.46 GB; Host layers: 81; CXL DRAM: 23
