@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 
 # ---- QUANT PRESET (change this one line to switch quantization for all sims) ----
-QUANT = "fp32"  # options: "fp32", "fp16", "int8", "int4"
+QUANT = "fp32" # Auto-set
 # ----------------------------------------------------------------
 
 
@@ -80,7 +80,7 @@ class Qwen2_5_72BCfg:
 
 
 # Default model configuration (change to switch models for all sims)
-DEFAULT_MODEL_CFG = Qwen3_20BCfg  # Set to Mistral7BCfg, Qwen3_20BCfg, or Phi3_5_3_8BCfg for other models
+DEFAULT_MODEL_CFG = Qwen2_5_72BCfg # Auto-set
 # ----------------------------------------------------------------
 
 

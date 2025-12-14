@@ -1,4 +1,4 @@
-# filename: simulation_semantic_duplex_corrected.py
+# simulation_semantic_duplex_prefill.py
 # ------------------------------------------------------------
 # SIMULATOR: Semantic-Aware Duplex CXL Scheduler (Research-Validated)
 #
