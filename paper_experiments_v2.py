@@ -162,12 +162,12 @@ def run_experiments():
             except Exception as e:
                 print(f"    {sim_name}: ERROR {e}")
 
-    # 2. Quantization Sweep (70B Only)
-    print("\n[Exp 2] Quantization (70B)")
-    model_70b = "Qwen2_5_72BCfg"
+    # 2. Quantization Sweep (72B Only)
+    print("\n[Exp 2] Quantization (72B)")
+    model_72b = "Qwen2_5_72BCfg"
     for q in ["fp32", "fp16", "int8", "int4"]:
         print(f"  Quantization: {q}...")
-        update_model_config(model_70b, q)
+        update_model_config(model_72b, q)
         for sim in SIMULATORS:
             sim_name = clean_sim_name(sim)
             try:
@@ -183,13 +183,13 @@ def run_experiments():
                 })
             except: pass
 
-    # 3. Memory Sensitivity (70B, FP16 AND FP32)
-    print("\n[Exp 3] Memory Config Sweep (70B)")
+    # 3. Memory Sensitivity (72B, FP16 AND FP32)
+    print("\n[Exp 3] Memory Config Sweep (72B)")
     mem_configs = [(16, 32), (16, 64), (32, 32), (32, 64)]
     # Loop over BOTH fp16 and fp32
     for q_mem in ["fp16", "fp32"]:
         print(f"  --> Testing Quantization: {q_mem}")
-        update_model_config(model_70b, q_mem)
+        update_model_config(model_72b, q_mem)
         
         for h, c in mem_configs:
             cfg_label = f"{h}GB_Host+{c}GB_CXL"

@@ -34,7 +34,7 @@ def plot_all():
         
         ax.set_xscale('log')
         ax.set_xticks([7, 13, 20, 72])
-        ax.set_xticklabels(["7B", "13B", "20B", "70B"])
+        ax.set_xticklabels(["7B", "13B", "20B", "72B"])
         ax.set_xlabel("Model Size (Billions of Parameters)", fontweight='bold')
         ax.set_ylabel("Throughput (Tokens/sec)", fontweight='bold')
         ax.set_title("Fig 1. Inference Scalability (FP32)", fontweight='bold')
@@ -55,7 +55,7 @@ def plot_all():
                     palette=['#95a5a6', '#f1c40f', '#3498db', '#c0392b'],
                     edgecolor="black", ax=ax)
         
-        ax.set_title("Fig 2. Quantization Impact (70B Model)", fontweight='bold')
+        ax.set_title("Fig 2. Quantization Impact (72B Model)", fontweight='bold')
         ax.set_ylabel("Throughput (Tokens/sec)", fontweight='bold')
         ax.set_xlabel("Precision", fontweight='bold')
         ax.grid(axis='y', linestyle='--', alpha=0.5)

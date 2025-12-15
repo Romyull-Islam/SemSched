@@ -445,7 +445,7 @@ print("\n" + "="*100)
 print("ADAPTIVE PREFETCHER TUNING HISTORY")
 print("="*100)
 if prefetcher.adapt_history:
-    for msg in prefetcher.adapt_history:
+    for msg in prefetcher.adapt_history:qa1
         print(f"  {msg}")
 else:
     print("  No adaptations needed (metrics stable)")

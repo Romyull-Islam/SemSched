@@ -59,7 +59,7 @@ def plot_all():
                      markers=True, palette=colors, linewidth=3, markersize=12, ax=ax)
         ax.set_xscale('log')
         ax.set_xticks([7, 13, 20, 72])
-        ax.set_xticklabels(["7B", "13B", "20B", "70B"])
+        ax.set_xticklabels(["7B", "13B", "20B", "72B"])
         ax.set_ylabel("Decode Throughput (Tokens/s)")
         ax.set_title("Scalability across Model Sizes (Decode)")
         ax.grid(True, which="major", ls="--", alpha=0.4)
@@ -76,7 +76,7 @@ def plot_all():
         fig, ax = plt.subplots(figsize=(10, 6))
         sns.barplot(data=sub, x="Quant", y="TPS", hue="Simulator", palette=colors, 
                     ax=ax, edgecolor='black', linewidth=1)
-        ax.set_title("Quantization Impact (70B Model)")
+        ax.set_title("Quantization Impact (72B Model)")
         ax.set_ylabel("Throughput (Tokens/s)")
         ax.set_xlabel("Quantization Level")
         plt.legend(loc='upper left', frameon=True)
@@ -94,7 +94,7 @@ def plot_all():
         fig, ax = plt.subplots(figsize=(12, 6))
         sns.barplot(data=sub, x="MemConfig", y="TPS", hue="Simulator", palette=colors, 
                     ax=ax, edgecolor='black', linewidth=1)
-        ax.set_title("Memory Configuration Sensitivity (70B FP32)")
+        ax.set_title("Memory Configuration Sensitivity (72B FP32)")
         ax.set_ylabel("Throughput (Tokens/s)")
         ax.set_xlabel("Host DRAM + CXL DRAM Configuration")
         plt.legend(loc='upper left', frameon=True)
@@ -147,7 +147,7 @@ def plot_all():
         ax1.set_ylabel("Read Traffic (%)")
         ax1.set_ylim(0, 100)
         ax1.set_xticks(range(len(sub))) 
-        ax1.set_xticklabels(["7B", "13B", "20B", "70B"])
+        ax1.set_xticklabels(["7B", "13B", "20B", "72B"])
         ax1.legend() 
         
         # 5b. Injected Ops
@@ -157,7 +157,7 @@ def plot_all():
         ax2.set_ylabel("Count of Injected Ops")
         ax2.set_yscale('log')
         ax2.set_xticks(range(len(sub)))
-        ax2.set_xticklabels(["7B", "13B", "20B", "70B"])
+        ax2.set_xticklabels(["7B", "13B", "20B", "72B"])
 
         plt.tight_layout()
         plt.savefig("fig5_duplex_stats.pdf", bbox_inches='tight')
@@ -174,7 +174,7 @@ def plot_all():
         sns.barplot(x=["SemDuplex"], y=savings_tflops, color=colors['SemDuplex'], 
                     edgecolor='black', linewidth=1, ax=ax, width=0.4)
         
-        ax.set_title("Compute Skipped via Sparsity (70B)")
+        ax.set_title("Compute Skipped via Sparsity (72B)")
         ax.set_ylabel("Skipped Compute (TFLOPs)")
         
         
@@ -199,7 +199,7 @@ def plot_all():
         ax.set_title("Prefill Throughput Scalability")
         ax.set_ylabel("Prefill Speed (Tokens/s)")
         ax.set_xlabel("Model Size (Parameters)")
-        ax.set_xticklabels(["7B", "13B", "20B", "70B"])
+        ax.set_xticklabels(["7B", "13B", "20B", "72B"])
         ax.set_yscale('log')
         
         
