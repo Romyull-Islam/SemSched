@@ -729,7 +729,7 @@ def run_semantic_duplex_simulation():
     
     print(f"\nKey Insights (NOVEL Hybrid CXL-Specific):")
     print(f"  ✓ Prefill warm-up stages NAND→device DRAM once, amortized across 528 tokens")
-    print(f"  ✓ Chunked prefill (8 chunks) pipelines execution, 3-5× faster than sequential")
+    print(f"  ✓ Chunked prefill (8 chunks) pipelines execution, faster than sequential")
     print(f"  ✓ Synthetic write injection balances duplex channels (~48% writes vs ~0.1% natural)")
     print(f"  ✓ Session-level cache pinning keeps working set resident for all decode tokens")
     print(f"  ✓ Sparsity-aware prefetch prioritizes memory-bound layers for device DRAM")
