@@ -1,18 +1,6 @@
 # simulation_async_prefetch_sequential_prefill.py
 # ------------------------------------------------------------
-# SIMULATOR: Sequential Execution with Asynchronous I/O Prefetch + STANDARD PREFILL
-#
-# DESCRIPTION:
-# This simulation models a high-performance, sequential inference process with:
-# 1. Standard prefill phase (512 tokens batch processing)
-# 2. Asynchronous I/O thread pool for aggressive NAND prefetching during decode
-# 3. CXL DRAM caching with LRU eviction
-# 4. Cache hit rate and prefetch effectiveness metrics
-#
-# PHASES:
-# 1. Cold load: Load model from SSD into memory
-# 2. Prefill: Process 512-token prompt in one batch pass (loads NAND layers into cache)
-# 3. Decode: Generate 16 tokens autoregressively with async prefetch
+# SIMULATOR: Sequential Execution with Asynchronous I/O Prefetch
 # ------------------------------------------------------------
 import math
 import pandas as pd
@@ -55,7 +43,7 @@ def compute_time_s(flops, cores=cpu_cores):
 def dram_time_s(n):   return transfer_time_s(n, HOST_DRAM)
 def cxl_time_s(n):    return transfer_time_s(n, CXL_DRAM)
 def cxlssd_time_s(n): return transfer_time_s(n, CXL_SSD_NAND)
-def fmt_bytes(n): return f"{n/(1024**3):.3f} GiB"
+def nand_time_s(n):   return transfer_time_s(n, CXL_SSD_NAND)
 def ssd_cold_time_s(n):
     return transfer_time_s(n, Tier("Host SSD (stream)", NVME_STREAM_BW, NVME_STREAM_LAT_S))
 
@@ -185,8 +173,9 @@ dev_pool = DeviceDRAMPool(cxl_dev_dram_capacity_bytes)
 io_threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
 
 # ---------------------------
-# Phase 2: PREFILL (512 tokens)
+# Phase 2: STANDARD PREFILL (Demand Paging)
 # ---------------------------
+# NOTE: No warmup loop here.
 print("\n" + "="*80)
 print(f"PREFILL PHASE ({PREFILL_TOKENS} tokens, standard batch processing)")
 print("="*80)
@@ -196,65 +185,38 @@ prefill_rows = []
 
 for exec_idx in range(len(layers)):
     L = layers[exec_idx]
-    layer_name = L["name"]
     place = placement[exec_idx]
-    
-    # Memory: Load parameters ONLY (KV writes overlap with compute)
     param_bytes = L["bytes"]
+    comp_s = compute_time_s(L["flops"] * PREFILL_FLOP_MULTIPLIER)
     
-    # Prefill FLOPs: 15× decode
-    decode_flops = L["flops"]
-    prefill_flops = decode_flops * PREFILL_FLOP_MULTIPLIER
-    comp_s = compute_time_s(prefill_flops)
-    
-    # Memory timing
     if place == PL_HOST_DRAM:
         mem_time = dram_time_s(param_bytes)
         served_from = PL_HOST_DRAM
     elif place == PL_CXL_DEV_DRAM:
         mem_time = cxl_time_s(param_bytes)
         served_from = "CXL DRAM (resident)"
-    else:  # PL_CXL_DEV_NAND
-        full_layer_size = layer_total_size[layer_name]
-        staged_b = dev_pool.cached_bytes(exec_idx)
-        
-        if staged_b >= full_layer_size:
+    else:
+        # Standard demand paging for Async
+        if dev_pool.cached_bytes(exec_idx) >= param_bytes:
             mem_time = cxl_time_s(param_bytes)
-            served_from = f"CXL DRAM (cache {staged_b/1e6:.1f}MB)"
-        elif staged_b > 0:
-            read_from_cache = min(staged_b, param_bytes)
-            rem_b = param_bytes - read_from_cache
-            mem_time = cxl_time_s(read_from_cache) + cxlssd_time_s(rem_b)
-            served_from = f"CXL DRAM ({read_from_cache/1e6:.1f}MB) + NAND ({rem_b/1e6:.1f}MB)"
-            dev_pool.add_cache_bytes(exec_idx, full_layer_size)
+            served_from = "CXL DRAM (Hit)"
         else:
-            mem_time = cxlssd_time_s(param_bytes)
-            served_from = f"CXL NAND ({param_bytes/1e6:.1f}MB)"
-            dev_pool.add_cache_bytes(exec_idx, full_layer_size)
+            mem_time = nand_time_s(param_bytes)
+            served_from = "CXL NAND"
+            dev_pool.add_cache_bytes(exec_idx, param_bytes)
     
     layer_time = max(comp_s, mem_time)
     prefill_latency += layer_time
     
-    kv_write_bytes = kv_cache_increment[layer_name] * PREFILL_TOKENS
-    
     prefill_rows.append({
-        "Layer": exec_idx + 1,
-        "Name": layer_name,
-        "Kind": L["kind"],
-        "Placement": place,
-        "Served_From": served_from,
-        "Param_Bytes": param_bytes,
-        "KV_Write_Bytes": kv_write_bytes,
-        "Compute_s": comp_s,
-        "Mem_s": mem_time,
-        "Layer_Time_s": layer_time
+        "Layer": exec_idx+1, "Name": L["name"], "Placement": place,
+        "Served_From": served_from, "Layer_Time_s": layer_time
     })
 
 prefill_df = pd.DataFrame(prefill_rows)
 print(prefill_df.to_string())
 print(f"\nPrefill total time: {prefill_latency:.6f}s")
 print(f"Prefill throughput: {PREFILL_TOKENS / prefill_latency:.3f} tokens/sec")
-print(f"Total KV cache written: {sum(r['KV_Write_Bytes'] for r in prefill_rows):,} bytes (overlapped)")
 
 # ---------------------------
 # Phase 3: DECODE with Async Prefetch
@@ -265,17 +227,18 @@ print("="*80)
 
 decode_rows = []
 per_token_latency = 0.0
-acct = {"compute_stall_s": 0, "bytes_prefetched": 0, "bytes_from_nand_miss": 0}
-
 fetch_queue = deque()
 fetched_or_queued = set()
+
+# --- GLOBAL LOCK (FIX) ---
+nand_link_free_at = 0.0  
 
 for exec_idx in range(len(layers)):
     L = layers[exec_idx]
     layer_name = L["name"]
     sz = L["bytes"] + kv_cache_increment[layer_name]
     
-    # Prefetch lookahead
+    # 1. Populate Queue
     for i in range(1, PREFETCH_QUEUE_DEPTH + 1):
         future_idx = exec_idx + i
         if (future_idx < len(layers) and 
@@ -283,19 +246,24 @@ for exec_idx in range(len(layers)):
             future_idx not in fetched_or_queued):
             fetch_queue.append(future_idx)
             fetched_or_queued.add(future_idx)
-    
-    # Dispatch prefetch tasks to I/O threads
+            
+    # 2. Dispatch prefetch tasks to I/O threads
     for thread in io_threads:
         if thread.busy_until <= per_token_latency and fetch_queue:
             layer_to_fetch_idx = fetch_queue.popleft()
             layer_to_fetch = layers[layer_to_fetch_idx]
             fetch_size = layer_total_size[layer_to_fetch["name"]]
             
-            fetch_time = cxlssd_time_s(fetch_size)
-            thread.busy_until = per_token_latency + fetch_time
+            # Start when: compute ready, thread ready, AND LINK FREE
+            start_time = max(per_token_latency, thread.busy_until, nand_link_free_at)
+            fetch_duration = cxlssd_time_s(fetch_size)
+            finish_time = start_time + fetch_duration
+            
+            thread.busy_until = finish_time
             thread.current_task = (layer_to_fetch_idx, fetch_size)
-    
-    # Execute current layer
+            nand_link_free_at = finish_time # Lock link
+            
+    # 3. Execute current layer
     layer_time = 0.0
     served_from = ""
     
@@ -313,39 +281,38 @@ for exec_idx in range(len(layers)):
         else:
             served_from = "CXL NAND (stall)"
             stall_until = float('inf')
+            
+            # Find thread handling this task
             for thread in io_threads:
                 if thread.current_task and thread.current_task[0] == exec_idx:
                     stall_until = thread.busy_until
                     break
             
+            # Panic fetch (rare)
             if stall_until == float('inf'):
                 idle_thread = min(io_threads, key=lambda th: th.busy_until)
-                fetch_time = cxlssd_time_s(full_layer_size)
-                stall_until = idle_thread.busy_until + fetch_time
-                acct["bytes_from_nand_miss"] += sz
+                fetch_duration = cxlssd_time_s(full_layer_size)
+                start_time = max(per_token_latency, idle_thread.busy_until, nand_link_free_at)
+                stall_until = start_time + fetch_duration
+                idle_thread.busy_until = stall_until
+                nand_link_free_at = stall_until
             
             stall_time = max(0, stall_until - per_token_latency)
-            acct["compute_stall_s"] += stall_time
             per_token_latency += stall_time
-            
             layer_time = max(compute_time_s(L["flops"]), cxl_time_s(sz))
     
     per_token_latency += layer_time
     
-    # Complete prefetch tasks
+    # 4. Complete prefetch tasks
     for thread in io_threads:
         if thread.current_task and thread.busy_until <= per_token_latency:
             task_idx, task_bytes = thread.current_task
-            if dev_pool.add_cache_bytes(task_idx, task_bytes):
-                acct["bytes_prefetched"] += task_bytes
+            dev_pool.add_cache_bytes(task_idx, task_bytes)
             thread.current_task = None
     
     decode_rows.append({
-        "Layer": exec_idx + 1,
-        "Name": layer_name,
-        "Placement": placement[exec_idx],
-        "Served_From": served_from,
-        "Layer_Time_s": layer_time
+        "Layer": exec_idx + 1, "Name": layer_name, "Placement": placement[exec_idx],
+        "Served_From": served_from, "Layer_Time_s": layer_time
     })
 
 decode_df = pd.DataFrame(decode_rows)
@@ -353,75 +320,9 @@ print(decode_df.to_string())
 print(f"\nSingle-token decode latency: {per_token_latency:.6f}s")
 print(f"Decode throughput: {1.0 / per_token_latency:.6f} tokens/sec")
 
-# ---------------------------
-# NEW: Calculate Cache Hit Rate
-# ---------------------------
-cache_hits = sum(1 for r in decode_rows if "prefetched hit" in r["Served_From"])
-cache_misses = sum(1 for r in decode_rows if "stall" in r["Served_From"])
-total_nand_accesses = cache_hits + cache_misses
-
-if total_nand_accesses > 0:
-    cache_hit_rate = cache_hits / total_nand_accesses
-else:
-    cache_hit_rate = 0.0
-
-# ---------------------------
-# Summary
-# ---------------------------
 total_time_s = cold_load_s + prefill_latency + (TOKENS * per_token_latency)
-total_tokens_processed = PREFILL_TOKENS + TOKENS
-
-model_dtype_bits = int(BYTES_PER_PARAM * 8)
-host_bytes = sum(layer_total_size[layers[i]["name"]] for i, p in enumerate(placement) if p == PL_HOST_DRAM)
-cxl_dram_bytes = sum(layer_total_size[layers[i]["name"]] for i, p in enumerate(placement) if p == PL_CXL_DEV_DRAM)
-cxl_nand_bytes = sum(layer_total_size[layers[i]["name"]] for i, p in enumerate(placement) if p == PL_CXL_DEV_NAND)
-
-# NEW: Calculate Prefetch Effectiveness
-if cxl_dev_dram_capacity_bytes > 0:
-    prefetch_utilization = acct["bytes_prefetched"] / cxl_dev_dram_capacity_bytes
-else:
-    prefetch_utilization = 0.0
-
-print("\n" + "="*80)
-print("Summary (Async Prefetch + Standard Prefill)")
-print("="*80)
-print(f"\nPhase Breakdown:")
-print(f"  Cold load (SSD→memory): {cold_load_s:.6f}s")
-print(f"  Prefill ({PREFILL_TOKENS} tokens): {prefill_latency:.6f}s")
-print(f"  Decode ({TOKENS} tokens): {TOKENS * per_token_latency:.6f}s ({per_token_latency:.6f}s per token)")
-print(f"  TOTAL time: {total_time_s:.6f}s")
-print(f"\nOverall throughput: {total_tokens_processed / total_time_s:.3f} tokens/sec")
-
-print("\nModel Size & Placement:")
-print(f"  Dtype: FP{model_dtype_bits}, Cores: {cpu_cores}, Host DRAM: {host_dram_capacity_bytes/GiB:.1f} GiB")
-print(f"  Total model size: {total_model_bytes:,} bytes ({fmt_bytes(total_model_bytes)})")
-print(f"  Total KV cache size: {total_kv_cache_bytes:,} bytes ({fmt_bytes(total_kv_cache_bytes)})")
-print(f"  Per-token KV cache update: {total_kv_cache_increment:,} bytes ({fmt_bytes(total_kv_cache_increment)})")
-print(f"  Host DRAM: {host_bytes:,} bytes ({fmt_bytes(host_bytes)})")
-print(f"  CXL Device DRAM: {cxl_dram_bytes:,} bytes ({fmt_bytes(cxl_dram_bytes)})")
-print(f"  CXL Device NAND: {cxl_nand_bytes:,} bytes ({fmt_bytes(cxl_nand_bytes)})")
-
-print("\nDecode Phase Performance:")
-print(f"  Compute stall time (waiting for I/O): {acct['compute_stall_s']:.6f}s")
-print(f"  Bytes successfully prefetched: {acct['bytes_prefetched']:,} bytes")
-print(f"  Bytes read from NAND on miss (stall): {acct['bytes_from_nand_miss']:,} bytes")
-
-# NEW: Cache Metrics
-print("\nCache Effectiveness Metrics:")
-print(f"  Cache hit rate (NAND layers only): {cache_hit_rate:.1%} ({cache_hits}/{total_nand_accesses} accesses)")
-print(f"  Cache misses (stalls): {cache_misses}")
-print(f"  Prefetch utilization: {prefetch_utilization:.1%} of CXL DRAM capacity")
-print(f"  Prefetched data size: {acct['bytes_prefetched']:,} bytes ({acct['bytes_prefetched']/GiB:.2f} GiB)")
-print(f"  CXL DRAM capacity: {cxl_dev_dram_capacity_bytes:,} bytes ({cxl_dev_dram_capacity_bytes/GiB:.2f} GiB)")
+print(f"Overall throughput: {(PREFILL_TOKENS + TOKENS) / total_time_s:.3f} tokens/sec")
 
 # Save CSVs
 prefill_df.to_csv("sim_async_prefill.csv", index=False)
 decode_df.to_csv("sim_async_decode.csv", index=False)
-
-print("\nCSV files saved: sim_async_prefill.csv, sim_async_decode.csv")
-
-
-
-
-
-

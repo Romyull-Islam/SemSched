@@ -1,0 +1,65 @@
+Experiment,Model,Simulator,Quant,MemConfig,TPS,Stall_s,Hit_Rate,Prefill_TPS,Duplex_Read_Ratio,Injected_Ops,Prefill_Time_s
+Scalability,7,FlexGen (Baseline),fp32,32H+64C,1.214769,0.0,0.0,180.485,0.0,0,0.0
+Scalability,7,LIA (OS-CXL),fp32,32H+64C,1.220101,0.0,0.0,180.485,0.0,0,0.0
+Scalability,7,flashllm_baseline.py,fp32,32H+64C,1.220121,0.0,0.0,180.485,0.0,0,0.0
+Scalability,7,SemDuplex (Ours),fp32,32H+64C,1.117605,0.0,0.0,522.42,0.0,0,0.0
+Scalability,13,FlexGen (Baseline),fp32,32H+64C,0.203195,0.0,0.0,73.055,0.0,0,0.0
+Scalability,13,LIA (OS-CXL),fp32,32H+64C,0.620527,0.0,0.0,74.958,0.0,0,0.0
+Scalability,13,flashllm_baseline.py,fp32,32H+64C,0.968983,0.0,0.0,105.294,0.0,0,0.0
+Scalability,13,SemDuplex (Ours),fp32,32H+64C,0.620131,0.0,0.0,291.08,0.0,0,0.0
+Scalability,20,FlexGen (Baseline),fp32,32H+64C,0.075962,0.0,0.0,34.455,0.0,0,0.0
+Scalability,20,LIA (OS-CXL),fp32,32H+64C,0.315564,0.0,0.0,34.257,0.0,0,0.0
+Scalability,20,flashllm_baseline.py,fp32,32H+64C,0.808117,0.0,0.0,63.119,0.0,0,0.0
+Scalability,20,SemDuplex (Ours),fp32,32H+64C,0.316948,0.0,0.0,150.68,0.0,0,0.0
+Scalability,72,FlexGen (Baseline),fp32,32H+64C,0.017488,0.0,0.0,8.735,0.0,0,0.0
+Scalability,72,LIA (OS-CXL),fp32,32H+64C,0.029253,0.0,0.0,8.803,0.0,0,0.0
+Scalability,72,flashllm_baseline.py,fp32,32H+64C,0.019676,0.0,0.0,8.83,0.0,0,0.0
+Scalability,72,SemDuplex (Ours),fp32,32H+64C,0.046493,0.0,0.0,41.91,0.0,0,0.0
+Quantization,72,FlexGen (Baseline),fp32,32H+32C,0.017488,0.0,0.0,8.735,0.0,0,0.0
+Quantization,72,LIA (OS-CXL),fp32,32H+32C,0.029253,0.0,0.0,8.803,0.0,0,0.0
+Quantization,72,flashllm_baseline.py,fp32,32H+32C,0.017043,0.0,0.0,8.138,0.0,0,0.0
+Quantization,72,SemDuplex (Ours),fp32,32H+32C,0.041353,0.0,0.0,41.91,0.0,0,0.0
+Quantization,72,FlexGen (Baseline),fp16,32H+32C,0.039562,0.0,0.0,17.05,0.0,0,0.0
+Quantization,72,LIA (OS-CXL),fp16,32H+32C,0.06381,0.0,0.0,16.945,0.0,0,0.0
+Quantization,72,flashllm_baseline.py,fp16,32H+32C,0.045485,0.0,0.0,15.782,0.0,0,0.0
+Quantization,72,SemDuplex (Ours),fp16,32H+32C,0.093965,0.0,0.0,80.96,0.0,0,0.0
+Quantization,72,FlexGen (Baseline),int8,32H+32C,0.039562,0.0,0.0,17.05,0.0,0,0.0
+Quantization,72,LIA (OS-CXL),int8,32H+32C,0.06381,0.0,0.0,16.945,0.0,0,0.0
+Quantization,72,flashllm_baseline.py,int8,32H+32C,0.045485,0.0,0.0,15.782,0.0,0,0.0
+Quantization,72,SemDuplex (Ours),int8,32H+32C,0.093965,0.0,0.0,80.96,0.0,0,0.0
+Quantization,72,FlexGen (Baseline),int4,32H+32C,0.405746,0.0,0.0,18.374,0.0,0,0.0
+Quantization,72,LIA (OS-CXL),int4,32H+32C,0.527315,0.0,0.0,18.301,0.0,0,0.0
+Quantization,72,flashllm_baseline.py,int4,32H+32C,0.534151,0.0,0.0,18.385,0.0,0,0.0
+Quantization,72,SemDuplex (Ours),int4,32H+32C,0.710247,0.0,0.0,244.33,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp16,16GB_Host+32GB_CXL,0.034975,0.0,0.0,16.869,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp16,16GB_Host+32GB_CXL,0.058505,0.0,0.0,16.801,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp16,16GB_Host+32GB_CXL,0.039102,0.0,0.0,15.356,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp16,16GB_Host+32GB_CXL,0.092986,0.0,0.0,78.41,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp16,16GB_Host+64GB_CXL,0.034975,0.0,0.0,16.869,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp16,16GB_Host+64GB_CXL,0.058505,0.0,0.0,16.801,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp16,16GB_Host+64GB_CXL,0.039102,0.0,0.0,15.356,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp16,16GB_Host+64GB_CXL,0.092986,0.0,0.0,78.41,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp16,32GB_Host+32GB_CXL,0.039562,0.0,0.0,17.05,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp16,32GB_Host+32GB_CXL,0.06381,0.0,0.0,16.945,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp16,32GB_Host+32GB_CXL,0.045485,0.0,0.0,15.782,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp16,32GB_Host+32GB_CXL,0.093965,0.0,0.0,80.96,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp16,32GB_Host+64GB_CXL,0.039562,0.0,0.0,17.05,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp16,32GB_Host+64GB_CXL,0.06381,0.0,0.0,16.945,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp16,32GB_Host+64GB_CXL,0.071849,0.0,0.0,16.763,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp16,32GB_Host+64GB_CXL,0.182396,0.0,0.0,80.96,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp32,16GB_Host+32GB_CXL,0.017488,0.0,0.0,8.735,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp32,16GB_Host+32GB_CXL,0.029253,0.0,0.0,8.803,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp32,16GB_Host+32GB_CXL,0.019676,0.0,0.0,8.83,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp32,16GB_Host+32GB_CXL,0.046493,0.0,0.0,41.91,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp32,16GB_Host+64GB_CXL,0.016529,0.0,0.0,8.438,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp32,16GB_Host+64GB_CXL,0.027595,0.0,0.0,8.506,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp32,16GB_Host+64GB_CXL,0.018244,0.0,0.0,8.432,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp32,16GB_Host+64GB_CXL,0.045194,0.0,0.0,41.21,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp32,32GB_Host+32GB_CXL,0.017488,0.0,0.0,8.735,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp32,32GB_Host+32GB_CXL,0.029253,0.0,0.0,8.803,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp32,32GB_Host+32GB_CXL,0.017043,0.0,0.0,8.138,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp32,32GB_Host+32GB_CXL,0.041353,0.0,0.0,41.91,0.0,0,0.0
+Memory,72,FlexGen (Baseline),fp32,32GB_Host+64GB_CXL,0.017488,0.0,0.0,8.735,0.0,0,0.0
+Memory,72,LIA (OS-CXL),fp32,32GB_Host+64GB_CXL,0.029253,0.0,0.0,8.803,0.0,0,0.0
+Memory,72,flashllm_baseline.py,fp32,32GB_Host+64GB_CXL,0.017043,0.0,0.0,8.138,0.0,0,0.0
+Memory,72,SemDuplex (Ours),fp32,32GB_Host+64GB_CXL,0.041353,0.0,0.0,41.91,0.0,0,0.0

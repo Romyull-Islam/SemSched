@@ -53,17 +53,6 @@ class Qwen3_20BCfg:
     kv_heads: int = 8  # GQA
 
 
-# NEW: Phi-3.5 3.8B configuration (May 2024, ~3.8B params, different series from Qwen3/Mistral/Llama)
-@dataclass(frozen=True)
-class Phi3_5_3_8BCfg:
-    num_blocks: int = 32
-    vocab_size: int = 128256  # Phi-3.5 uses 128K vocab
-    emb_dim: int = 3072
-    mlp_hidden: int = 8192
-    q_heads: int = 32
-    kv_heads: int = 8  # GQA (grouped-query attention)
-
-
 
 # NEW: Qwen2.5 72B configuration (decoder-only, dense)
 # Public materials indicate an ~72B model with 80 layers, 8192 embedding dim,

@@ -3,17 +3,16 @@ import subprocess
 import re
 import pandas as pd
 import time
-import sys
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Filenames of the 4 simulators you created
+# Filenames of the 4 NEW simulators
 SIMULATORS = [
-    "simulator_normal_nocxl_prefill.py",            # Baseline
-    "simulator_tired_ADAPTIVE_prefill.py",          # Adaptive
-    "simulation_async_prefetch_sequential_prefill.py", # Async
-    "simulation_semantic_duplex_prefill.py"         # SemDuplex
+    "flexgen_baseline.py",      # No-CXL Baseline
+    "lia_baseline.py",          # OS-CXL SOTA
+    "flashllm_baseline.py",    # Modern CXL SOTA (Replaces FlashNeuron)
+    "semduplex_scheduler.py"    # Ours
 ]
 
 # Models to test in Experiment 1
@@ -24,6 +23,7 @@ MODELS = [
     ("Qwen2_5_72BCfg", 72)
 ]
 
+# Define filenames explicitly (Fixes ImportError)
 CONFIG_FILE = "model_cfg.py"
 SIM_CONFIG_FILE = "sim_cfg.py"
 
@@ -78,10 +78,10 @@ def update_memory_config(host_gb, cxl_gb):
 
 def clean_sim_name(name):
     """Shortens simulator filenames for cleaner CSV output."""
-    if "normal" in name: return "Baseline"
-    if "ADAPTIVE" in name: return "Adaptive"
-    if "async" in name: return "Async"
-    if "semantic" in name: return "SemDuplex"
+    if "flexgen" in name: return "FlexGen (Baseline)"
+    if "lia" in name: return "LIA (OS-CXL)"
+    if "flashneuron" in name: return "FlashNeuron (HW)"
+    if "semduplex" in name: return "SemDuplex (Ours)"
     return name
 
 def parse_metrics(output):
@@ -93,42 +93,18 @@ def parse_metrics(output):
         "Prefill_Time_s": 0.0,  # Prefill Latency
         "Prefill_TPS": 0.0,     # Prefill Throughput
         "Duplex_Read_Ratio": 0.0,
-        "Sparsity_Savings_FLOPs": 0,
-        "Injected_Ops": 0,
-        "NAND_Miss_Bytes": 0
+        "Injected_Ops": 0
     }
     
-    # Regex patterns to match the print outputs of your simulators
-    tps_match = re.search(r"(?:Decode throughput|Decode tokens/sec|Overall throughput): ([\d\.]+)", output)
+    # Regex patterns matching the new files
+    tps_match = re.search(r"(?:Decode throughput|Decode tokens/sec): ([\d\.]+)", output)
     if tps_match: metrics["TPS"] = float(tps_match.group(1))
 
-    stall_match = re.search(r"(?:Compute stall time|Decode compute stalls).*: ([\d\.]+)s", output)
-    if stall_match: metrics["Stall_s"] = float(stall_match.group(1))
-            
-    hit_match = re.search(r"Cache hit rate.*: ([\d\.]+)%", output)
-    if hit_match: metrics["Hit_Rate"] = float(hit_match.group(1))
-    
-    pf_time_match = re.search(r"(?i)prefill.*time.*: ([\d\.]+)s", output)
-    if pf_time_match: metrics["Prefill_Time_s"] = float(pf_time_match.group(1))
+    pf_tps_match = re.search(r"(?:Prefill throughput): ([\d\.]+)", output)
+    if pf_tps_match: metrics["Prefill_TPS"] = float(pf_tps_match.group(1))
 
-    pf_tps_match = re.search(r"(?i)prefill throughput: ([\d\.]+)", output)
-    if pf_tps_match: 
-        metrics["Prefill_TPS"] = float(pf_tps_match.group(1))
-    elif metrics["Prefill_Time_s"] > 0:
-        metrics["Prefill_TPS"] = 512.0 / metrics["Prefill_Time_s"]
-
-    # Duplex specific metrics
-    duplex_match = re.search(r"Final Duplex read ratio: ([\d\.]+)%", output)
+    duplex_match = re.search(r"Read_Ratio.*: ([\d\.]+)%", output)
     if duplex_match: metrics["Duplex_Read_Ratio"] = float(duplex_match.group(1))
-
-    sparsity_match = re.search(r"Sparsity-based FLOP savings: ([\d,]+)", output)
-    if sparsity_match: metrics["Sparsity_Savings_FLOPs"] = int(sparsity_match.group(1).replace(',', ''))
-
-    ops_match = re.search(r"Complementary ops injected: (\d+)", output)
-    if ops_match: metrics["Injected_Ops"] = int(ops_match.group(1))
-
-    miss_match = re.search(r"Bytes from NAND miss.*: ([\d,]+)", output)
-    if miss_match: metrics["NAND_Miss_Bytes"] = int(miss_match.group(1).replace(',', ''))
 
     return metrics
 
@@ -137,7 +113,7 @@ def parse_metrics(output):
 # ==========================================
 def run_experiments():
     results = []
-    print(">>> STARTING COMPREHENSIVE SWEEP (V7 - FINAL) <<<")
+    print(">>> STARTING RIGOROUS SOTA COMPARISON SWEEP <<<")
     
     # Set Default Memory for Scalability (32GB Host / 64GB CXL)
     update_memory_config(32, 64)
@@ -190,7 +166,6 @@ def run_experiments():
             try:
                 ret = subprocess.run(["python", sim], capture_output=True, text=True, timeout=900)
                 mets = parse_metrics(ret.stdout)
-                # --- FIXED: ADDED PRINT STATEMENT ---
                 print(f"    {sim_name}: Decode={mets['TPS']:.4f} t/s | Prefill={mets['Prefill_TPS']:.2f} t/s")
                 
                 results.append({
@@ -223,7 +198,6 @@ def run_experiments():
                 try:
                     ret = subprocess.run(["python", sim], capture_output=True, text=True, timeout=900)
                     mets = parse_metrics(ret.stdout)
-                    # --- FIXED: ADDED PRINT STATEMENT ---
                     print(f"      {sim_name}: Decode={mets['TPS']:.4f} t/s | Prefill={mets['Prefill_TPS']:.2f} t/s")
                     
                     results.append({
@@ -244,8 +218,12 @@ def run_experiments():
     
     cols = ["Experiment", "Model", "Simulator", "Quant", "MemConfig", "TPS", "Stall_s", "Hit_Rate", 
             "Prefill_TPS", "Duplex_Read_Ratio", "Injected_Ops"]
+    # Add any extra columns that might appear
     cols += [c for c in df.columns if c not in cols]
-    df = df[cols]
+    
+    # Reorder if columns exist, otherwise ignore
+    final_cols = [c for c in cols if c in df.columns]
+    df = df[final_cols]
     
     df.to_csv(filename, index=False)
     print(f"\n>>> Data saved to {filename}")
