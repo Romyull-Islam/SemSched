@@ -3,6 +3,9 @@ from tiers import GiB
 
 TOKENS = 16
 
+BATCH_SIZE = 1 # Auto-set
+
+
 # Processor: Intel Xeon 6315P (Raptor Lake, Q1'25)
 # Cores: 4 Performance cores (no Hyper-Threading)
 # Base frequency: 2.8 GHz
