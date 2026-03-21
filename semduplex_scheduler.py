@@ -1,4 +1,4 @@
-# simulation_semantic_duplex_prefill.py
+# semduplex_scheduler.py
 # ------------------------------------------------------------
 # SIMULATOR: Semantic-Aware Duplex CXL Scheduler (Research-Validated)
 # ------------------------------------------------------------
@@ -123,16 +123,45 @@ class DuplexTrafficMonitor:
     def __init__(self, window_size=10):
         self.read_history  = deque(maxlen=window_size)
         self.write_history = deque(maxlen=window_size)
+        self.total_read_bytes  = 0
+        self.total_write_bytes = 0
+        self.total_write_time_s  = 0.0
+        self.total_decode_time_s = 0.0
+        self.write_stall_time_s = 0.0
+        self.write_stall_count  = 0
 
-    def record_read(self, b):  self.read_history.append(b)
-    def record_write(self, b): self.write_history.append(b)
 
+    def record_read(self, b):
+        self.read_history.append(b)
+        self.total_read_bytes += b
+
+    def record_write(self, b):
+        self.write_history.append(b)
+        self.total_write_bytes += b
+        self.total_write_time_s += transfer_time_s(b, CXL_DRAM)
+
+    def record_layer_time(self, t):
+        self.total_decode_time_s += t
+
+    # ── These 3 were accidentally deleted — restore them ──
     def get_read_ratio(self):
-        r, w = sum(self.read_history), sum(self.write_history)
+        r = sum(self.read_history)
+        w = sum(self.write_history)
         return r / (r + w) if (r + w) > 0 else 0.5
 
-    def needs_read_injection(self):  return self.get_read_ratio() < 0.45
-    def needs_write_injection(self): return self.get_read_ratio() > 0.6
+    def needs_read_injection(self):
+        return self.get_read_ratio() < 0.45
+
+    def needs_write_injection(self):
+        return self.get_read_ratio() > 0.6
+
+    # ── New time-based metric ──
+    def get_write_util_pct(self):
+        if self.total_decode_time_s <= 0:
+            return 0.0
+        return (self.total_write_time_s / self.total_decode_time_s) * 100
+
+
 
 
 class AttentionGuidedCache:
@@ -256,7 +285,16 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks):
             place[i] = PL_HOST_DRAM
             h_free -= L["bytes"]
 
-    # 4. Dense MLP → CXL DRAM Cache
+    # =====================================================================
+    # NEW STEP 3.5: FALLBACK
+    # Put remaining Dense MLPs in Host if there is still space available!
+    # =====================================================================
+    for i, L in enumerate(layers):
+        if place[i] is None and ltypes[i] == LayerType.MLP and L["bytes"] <= h_free:
+            place[i] = PL_HOST_DRAM
+            h_free -= L["bytes"]
+
+    # 4. Dense MLP → CXL DRAM Cache (Only what didn't fit in Host)
     for i, L in enumerate(layers):
         if place[i] is None and L["bytes"] <= c_free:
             place[i] = PL_CXL_DEV_DRAM
@@ -267,7 +305,6 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks):
         if place[i] is None: place[i] = PL_CXL_DEV_NAND
 
     return place, ltypes, kv_inc, sparsity
-
 
 def compute_time_s(flops, cores):
     if flops <= 0 or cores <= 0: return 0.0
@@ -319,7 +356,8 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
 
     for i, L in enumerate(layers):
         sz        = L["bytes"]
-        eff_flops = int(L["flops"] * (1.0 - sparsity[i]))
+        #eff_flops = int(L["flops"] * (1.0 - sparsity[i]))
+        eff_flops = L["flops"]
         mem = transfer_time_s(sz, HOST_DRAM if place[i] == PL_HOST_DRAM else CXL_DRAM)
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
@@ -423,98 +461,150 @@ def run_semantic_duplex_simulation():
         cache   = AttentionGuidedCache(cxl_dev_dram_capacity_bytes)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
-        total_spar_flops = 0
 
         pf_time_val, pf_stats = run_prefill_chunked(
             layers, place, ltypes, sparsity, inc,
             cache, tmon, sched, threads, seq_len)
 
-        fetched           = set()
-        lat               = 0.0
-        rows              = []
-        nand_link_free_at = 0.0
+        # ── Multi-token decode loop with per-token write stall tracking ────────
+        total_spar_flops           = 0
+        per_token_write_stall_pcts = []
+        rows                       = []
+        lat                        = 0.0
 
-        for idx, L in enumerate(layers):
-            sz        = L["bytes"]
-            has_kv    = inc[L["name"]] > 0
-            eff_flops = int(L["flops"] * (1.0 - sparsity[idx]))
-            total_spar_flops += int(L["flops"] * sparsity[idx])
-            sched.adjust_thread_allocation(tmon)
+        for token_step in range(TOKENS):
+            lat               = 0.0
+            step_stall_s      = 0.0
+            step_time_s       = 0.0
+            nand_link_free_at = 0.0
+            fetched           = set()
 
-            # Aggressive Semantic Prefetcher
-            pf_cands = []
-            for i in range(1, PREFETCH_QUEUE_DEPTH + 1):
-                fi = idx + i
-                if fi < len(layers) and place[fi] == PL_CXL_DEV_NAND \
-                        and fi not in fetched:
-                    p_score = 2.0 if ltypes[fi] == LayerType.ATTENTION else sparsity[fi]
-                    pf_cands.append((fi, p_score))
-            pf_cands.sort(key=lambda x: x[1], reverse=True)
-
+            # Reset thread state each token — each decode step is independent
             for t in threads:
-                if t.busy_until <= lat and pf_cands:
-                    fi, score = pf_cands.pop(0)
-                    fetched.add(fi)
-                    dur   = transfer_time_s(layers[fi]["bytes"], CXL_SSD_NAND)
-                    start = max(lat, t.busy_until, nand_link_free_at)
-                    t.busy_until      = start + dur
-                    nand_link_free_at = t.busy_until
-                    t.current_task    = (fi, layers[fi]["bytes"])
-                    cache.set_attention_score(fi, score)
+                t.busy_until   = 0.0
+                t.current_task = None
 
-            src       = "Host DRAM" if place[idx] == PL_HOST_DRAM else "CXL DRAM"
-            raw_stall = 0
-            if place[idx] == PL_CXL_DEV_NAND and not cache.contains(idx, sz):
-                src         = "CXL NAND (Stall)"
-                stall_until = 0
-                for th in threads:
-                    if th.current_task and th.current_task[0] == idx:
-                        stall_until = th.busy_until
-                        break
-                if stall_until == 0:
-                    stall_until = lat + transfer_time_s(sz, CXL_SSD_NAND)
-                raw_stall = max(0, stall_until - lat)
-                lat += raw_stall * (1 - SEMANTIC_STREAM_OVERLAP)
+            for idx, L in enumerate(layers):
+                sz        = L["bytes"]
+                has_kv    = inc[L["name"]] > 0
+                eff_flops = int(L["flops"] * (1.0 - sparsity[idx]))
 
-            comp  = compute_time_s(eff_flops, cpu_cores)
-            mem   = transfer_time_s(
-                sz, HOST_DRAM if place[idx] == PL_HOST_DRAM else CXL_DRAM)
-            ltime = max(comp, mem)
+                # Accumulate sparsity savings only on first token
+                if token_step == 0:
+                    total_spar_flops += int(L["flops"] * sparsity[idx])
 
-            tmon.record_read(sz)
-            if has_kv:
-                kv_write_scaled = inc[L["name"]] * BATCH_SIZE
-                tmon.record_write(kv_write_scaled)
-                sched.pending_kv_writebacks += kv_write_scaled
-                if BATCH_SIZE > 1:
-                    extra_kv_t = (BATCH_SIZE - 1) * transfer_time_s(
-                        inc[L["name"]], CXL_DRAM)
-                    _, should_wb_now = sched.schedule_complementary_ops(
-                        ltypes[idx], has_kv, tmon, sparsity[idx])
-                    if not should_wb_now:
-                        ltime += extra_kv_t
+                sched.adjust_thread_allocation(tmon)
 
-            _, should_wb = sched.schedule_complementary_ops(
-                ltypes[idx], has_kv, tmon, sparsity[idx])
-            if should_wb and place[idx] != PL_HOST_DRAM:
-                ltime *= DUPLEX_PENALTY
+                # ── Aggressive Semantic Prefetcher ────────────────────────────
+                pf_cands = []
+                for i in range(1, PREFETCH_QUEUE_DEPTH + 1):
+                    fi = idx + i
+                    if fi < len(layers) and place[fi] == PL_CXL_DEV_NAND \
+                            and fi not in fetched:
+                        p_score = 2.0 if ltypes[fi] == LayerType.ATTENTION else sparsity[fi]
+                        pf_cands.append((fi, p_score))
+                pf_cands.sort(key=lambda x: x[1], reverse=True)
 
-            lat += ltime
-            for t in threads:
-                if t.current_task and t.busy_until <= lat:
-                    cache.add(t.current_task[0], t.current_task[1])
-                    t.current_task = None
+                for t in threads:
+                    if t.busy_until <= lat and pf_cands:
+                        fi, score = pf_cands.pop(0)
+                        fetched.add(fi)
+                        dur   = transfer_time_s(layers[fi]["bytes"], CXL_SSD_NAND)
+                        start = max(lat, t.busy_until, nand_link_free_at)
+                        t.busy_until      = start + dur
+                        nand_link_free_at = t.busy_until
+                        t.current_task    = (fi, layers[fi]["bytes"])
+                        cache.set_attention_score(fi, score)
 
-            rows.append({
-                "Layer":       idx + 1,
-                "Name":        L["name"],
-                "Type":        ltypes[idx].value,
-                "Sparsity":    f"{sparsity[idx]:.1%}",
-                "Placement":   place[idx],
-                "Served_From": src,
-                "Layer_Time_s": ltime + raw_stall,
-                "Read_Ratio":   f"{tmon.get_read_ratio():.2%}"
-            })
+                # ── Serve layer from tier ─────────────────────────────────────
+                src       = "Host DRAM" if place[idx] == PL_HOST_DRAM else "CXL DRAM"
+                raw_stall = 0
+                if place[idx] == PL_CXL_DEV_NAND and not cache.contains(idx, sz):
+                    src         = "CXL NAND (Stall)"
+                    stall_until = 0
+                    for th in threads:
+                        if th.current_task and th.current_task[0] == idx:
+                            stall_until = th.busy_until
+                            break
+                    if stall_until == 0:
+                        stall_until = lat + transfer_time_s(sz, CXL_SSD_NAND)
+                    raw_stall = max(0, stall_until - lat)
+                    lat += raw_stall * (1 - SEMANTIC_STREAM_OVERLAP)
+
+                # ── Compute + memory time ─────────────────────────────────────
+                comp  = compute_time_s(eff_flops, cpu_cores)
+                mem   = transfer_time_s(
+                    sz, HOST_DRAM if place[idx] == PL_HOST_DRAM else CXL_DRAM)
+                ltime = max(comp, mem)
+
+                tmon.record_read(sz)
+
+                # ── Placement-aware duplex write stall ────────────────────────
+                # Rules:
+                #   MLP (has_kv=False)  → skip entirely, never any write stall
+                #   Attention @ Host    → full serial KV write stall, no penalty
+                #   Attention @ CXL DRAM→ duplex hides write fully, penalty only
+                #   Attention @ CXL NAND→ separate buses after prefetch, nothing
+                if has_kv:
+                    kv_write_scaled = inc[L["name"]] * BATCH_SIZE
+                    tmon.record_write(kv_write_scaled)
+                    sched.pending_kv_writebacks += kv_write_scaled
+                    kv_write_t = transfer_time_s(kv_write_scaled, CXL_DRAM)
+
+                    if place[idx] == PL_HOST_DRAM:
+                        # Simplex Host DRAM bus — KV write fully serialized
+                        # Charged once, no duplex penalty
+                        exposed_stall        = kv_write_t
+                        tmon.write_stall_time_s += exposed_stall
+                        tmon.write_stall_count  += 1
+                        ltime        += exposed_stall
+                        step_stall_s += exposed_stall
+
+                    elif place[idx] == PL_CXL_DEV_DRAM:
+                        # Duplex CXL bus — KV write fully overlaps read window
+                        # Zero stall: hardware absorbs write concurrently
+                        # Only pay bus contention penalty on base ltime
+                        ltime *= DUPLEX_PENALTY
+                        # NO stall charged, NO stall count increment
+
+                    elif place[idx] == PL_CXL_DEV_NAND:
+                        # Layer served from CXL DRAM after prefetch
+                        # KV write goes to CXL DRAM on same bus — duplex absorbs it
+                        # Same logic as CXL DRAM: penalty only, no stall
+                        ltime *= DUPLEX_PENALTY
+                        # NO stall charged, NO stall count increment
+                # ─────────────────────────────────────────────────────────────
+
+                lat         += ltime
+                step_time_s += ltime
+                tmon.record_layer_time(ltime)
+
+                # ── Resolve completed prefetch tasks ──────────────────────────
+                for t in threads:
+                    if t.current_task and t.busy_until <= lat:
+                        cache.add(t.current_task[0], t.current_task[1])
+                        t.current_task = None
+
+                # ── Record layer row only on first token ──────────────────────
+                if token_step == 0:
+                    rows.append({
+                        "Layer":        idx + 1,
+                        "Name":         L["name"],
+                        "Type":         ltypes[idx].value,
+                        "Sparsity":     f"{sparsity[idx]:.1%}",
+                        "Placement":    place[idx],
+                        "Served_From":  src,
+                        "Layer_Time_s": ltime + raw_stall,
+                        "Read_Ratio":   f"{tmon.get_read_ratio():.2%}"
+                    })
+
+            # ── Per-token: write stall as % of this token's total decode time ─
+            stall_pct_this_token = (step_stall_s / step_time_s * 100) \
+                                   if step_time_s > 0 else 0.0
+            per_token_write_stall_pcts.append(stall_pct_this_token)
+
+        # ── Post-loop aggregates ───────────────────────────────────────────────
+        avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
 
         total_layers = len(rows)
         misses       = sum(1 for r in rows if "Stall" in r["Served_From"])
@@ -525,7 +615,6 @@ def run_semantic_duplex_simulation():
         print(pd.DataFrame(comb).to_string())
         print(f"\nSingle-token decode latency: {lat:.6f}s")
 
-        # BATCH FIX: B tokens produced per step
         print(f"Decode throughput: {BATCH_SIZE / lat:.6f} t/s")
         print(f"Prefill throughput: {PREFILL_TOKENS * BATCH_SIZE / pf_time_val:.2f} t/s")
 
@@ -542,18 +631,29 @@ def run_semantic_duplex_simulation():
         print(f"Write_Op_Percent: {(kv_wr / total_io_vol) * 100:.4f}%")
 
         measured_ratio = tmon.get_read_ratio() * 100
-        if measured_ratio >= 100.0 and kv_wr > 0:
-            final_util_ratio = (weight_rd / total_io_vol) * 100
-        else:
-            final_util_ratio = measured_ratio
+        final_util_ratio = (weight_rd / total_io_vol) * 100 \
+                           if measured_ratio >= 100.0 and kv_wr > 0 \
+                           else measured_ratio
 
         print(f"Read_Ratio: {final_util_ratio:.4f}%")
+        print(f"Write_Util_Pct: {tmon.get_write_util_pct():.4f}%")
+
+        total_decode_layers = len([L for L in layers if inc[L["name"]] > 0])
+        stall_freq_pct      = (tmon.write_stall_count / (total_decode_layers * TOKENS) * 100) \
+                              if total_decode_layers > 0 else 0.0
+
+        print(f"Write_Stall_Time_s: {tmon.write_stall_time_s / TOKENS:.6f}")
+        print(f"Write_Stall_Pct: {avg_write_stall_pct:.4f}%")
+        print(f"Write_Stall_Count: {tmon.write_stall_count}")
+        print(f"Write_Stall_Freq_Pct: {stall_freq_pct:.4f}%")
+        print(f"Per_Token_Write_Stall_Pcts: {','.join(f'{x:.6f}' for x in per_token_write_stall_pcts)}")
 
     except Exception:
         traceback.print_exc()
         sys.exit(1)
 
 
+
 if __name__ == "__main__":
     run_semantic_duplex_simulation()
-    track_write_stalls()
+    #track_write_stalls()

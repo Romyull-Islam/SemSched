@@ -124,43 +124,49 @@ def simulate_llmflash():
         """Transfer from CXL NAND with row-column bundling boost."""
         return transfer_time_s(n_bytes, CXL_SSD_NAND) / BUNDLING_THROUGHPUT_BOOST
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # DECODE PHASE
-    # Weights amortized: loaded once per step, serve all B sequences
-    # KV writes: B separate per-token increments (one per sequence)
-    # TPS = B / step_time
-    # ══════════════════════════════════════════════════════════════════════════
-    total_decode_time = 0.0
+
+
+        # ── Decode loop with per-token write stall tracking ───────────────────────
+    total_kv_write_stall_s  = 0.0
+    total_decode_time       = 0.0
+    per_token_write_stall_pcts = []
 
     for _ in range(NUM_DECODE_TOKENS):
-        t = 0.0
+        t        = 0.0
+        step_kv  = 0.0
 
-        # Attention weights: pinned in DRAM, served to all B sequences
+        # Attention weights: pinned in CXL DRAM
         for L in pinned_layers:
             t += transfer_time_s(L["bytes"] * pinned_dram_frac, CXL_DRAM)
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
-        # FFN DRAM turnover: activation-aware window churn (ReLU 24% vs SiLU 60%)
+        # FFN DRAM turnover
         t += transfer_time_s(ffn_dram_bytes, CXL_DRAM)
 
-        # FFN NAND overflow: active neurons beyond DRAM window
-        # = 0 at large DRAM + small batch (no sparsity penalty)
-        # > 0 at tight DRAM + large batch (sparsity collapse exposed)
+        # FFN NAND overflow
         if ffn_nand_bytes > 0:
             t += nand_bundled(ffn_nand_bytes)
 
-        # DRAM neuron swap overhead (amortized — once per step)
+        # DRAM neuron swap overhead
         t += transfer_time_s(dram_rewrite_bytes, CXL_DRAM)
 
-        # KV writes: B sequences × per-token increment
-        # (NOT full 512-token budget — only one new token per step)
-        t += BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, CXL_DRAM)
+        # KV write: fully serialized (simplex) — this is the write stall
+        step_kv = BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, CXL_DRAM)
+        total_kv_write_stall_s += step_kv
+        t += step_kv
 
         total_decode_time += t
 
+        # Write stall as % of this token's total step time
+        stall_pct_this_token = (step_kv / t * 100) if t > 0 else 0.0
+        per_token_write_stall_pcts.append(stall_pct_this_token)
+
     avg_decode_t = total_decode_time / NUM_DECODE_TOKENS
     decode_tps   = BATCH_SIZE / avg_decode_t if avg_decode_t > 0 else 0.0
+    avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
+
+
 
     # ══════════════════════════════════════════════════════════════════════════
     # PREFILL PHASE
@@ -223,9 +229,32 @@ def simulate_llmflash():
     print(f"Prefill throughput: {prefill_tps:.1f}")
     print(f"Overall throughput: "
           f"{(NUM_PREFILL_TOKENS + 16) / (cold_load + avg_prefill_t + avg_decode_t * 16):.3f}")
-    print(f"Read_Op_Percent: 100.0%")
-    print(f"Write_Op_Percent: 0.0%")
+
     print(f"Read_Ratio: 100.0%")
+
+    print(f"Write_Stall_Time_s: {total_kv_write_stall_s / NUM_DECODE_TOKENS:.6f}")
+    print(f"Write_Stall_Pct: {(total_kv_write_stall_s / NUM_DECODE_TOKENS / avg_decode_t) * 100:.4f}%")
+    print(f"Write_Util_Pct: 0.0000%")
+
+
+    # ── compute real IO split ──────────────────────────────────────────────────
+    total_read_bytes  = (sum(L["bytes"] * pinned_dram_frac for L in pinned_layers)
+                        + ffn_dram_bytes + ffn_nand_bytes + dram_rewrite_bytes)
+    total_write_bytes = BATCH_SIZE * kv_per_seq_bytes
+    total_io_bytes    = total_read_bytes + total_write_bytes
+
+    read_pct  = (total_read_bytes  / total_io_bytes) * 100 if total_io_bytes > 0 else 100.0
+    write_pct = (total_write_bytes / total_io_bytes) * 100 if total_io_bytes > 0 else 0.0
+
+    print(f"Read_Op_Percent: {read_pct:.4f}%")
+    print(f"Write_Op_Percent: {write_pct:.4f}%")
+    print(f"Read_Ratio: {read_pct:.4f}%")
+
+    print(f"Write_Stall_Time_s: {total_kv_write_stall_s / NUM_DECODE_TOKENS:.6f}")
+    print(f"Write_Stall_Pct: {avg_write_stall_pct:.4f}%")
+    print(f"Write_Util_Pct: 0.0000%")
+    print(f"Per_Token_Write_Stall_Pcts: {','.join(f'{x:.4f}' for x in per_token_write_stall_pcts)}")
+
 
 
 if __name__ == "__main__":
