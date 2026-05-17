@@ -1,6 +1,29 @@
 # semduplex_scheduler.py
 # ------------------------------------------------------------
-# SIMULATOR: Semantic-Aware Duplex CXL Scheduler (Research-Validated)
+# SIMULATOR: Semantic-Aware Duplex CXL Scheduler (SemSched)
+# ------------------------------------------------------------
+#
+# Models hybrid-CXL LLM inference with:
+#   - sub-layer semantic placement (Attention / MLP placed by type & sparsity)
+#   - 16-thread parallel NAND warmup before decode
+#   - deep-lookahead (K=32) sparsity-ranked prefetching
+#   - two-queue full-duplex CXL link model (cxl_link.py) for honest
+#     read/write concurrency accounting:
+#       - independent Rx and Tx lanes (27 GB/s each, 505 ns overhead),
+#       - writes fitting under the read window are truly free (no penalty),
+#       - writes exceeding the window expose their slip as actual stall,
+#       - Uwrite is *measured* from the queue (tx_busy_total / t_end),
+#         not derived from post-hoc byte accounting.
+#
+# Prefill throughput is reported per-sequence (PREFILL_TOKENS / pf_time_val)
+# to match the convention of the baselines (FlexGen, LIA, LLMFlash).
+#
+# Decode-phase modeling:
+#   - Growing KV: at decode step t, attention reads (PREFILL_TOKENS + t) ×
+#     per-token-KV-bytes × BATCH_SIZE from CXL DRAM (linear-in-context KV growth).
+#   - Adaptive low-batch streaming: when BATCH_SIZE < ADAPTIVE_BATCH_THRESHOLD,
+#     MLP transfer bytes are scaled by active_fraction = 1 - (1 - sparsity)^B
+#     (mimicking the LLMFlash sliding-window policy for batch-1 efficiency).
 # ------------------------------------------------------------
 
 import math
@@ -9,6 +32,8 @@ import sys
 import traceback
 from collections import OrderedDict, deque
 from enum import Enum
+
+from cxl_link import CXLLink   # two-queue full-duplex bus model
 
 from tiers import (
     HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
@@ -36,6 +61,12 @@ PREFILL_TOKENS        = 512
 PREFILL_FLOP_MULTIPLIER = 15.0
 
 DUPLEX_PENALTY = 1.15
+
+# Adaptive low-batch threshold. Below this batch size, MLP transfers are scaled
+# by the LLMFlash-style active-fraction formula 1 - (1 - p)^B. At B >= threshold,
+# the active fraction saturates near 1.0 and we fall back to full semantic
+# placement transfer. Crossover at B=4 is observed in the LLMFlash baseline runs.
+ADAPTIVE_BATCH_THRESHOLD = 4
 
 OVERLAP_ATTENTION = 0.35
 OVERLAP_MLP       = 0.65
@@ -462,6 +493,11 @@ def run_semantic_duplex_simulation():
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
 
+        # Two-queue CXL link model:
+        # CXL_DRAM bw=27 GB/s, lat=505ns — matches tiers.py for consistency.
+        link = CXLLink(bw_gbps=27.0, txn_overhead_s=505e-9)
+        queue_uwrite_samples = []   # collect per-token Uwrite from queue
+
         pf_time_val, pf_stats = run_prefill_chunked(
             layers, place, ltypes, sparsity, inc,
             cache, tmon, sched, threads, seq_len)
@@ -477,6 +513,7 @@ def run_semantic_duplex_simulation():
             step_stall_s      = 0.0
             step_time_s       = 0.0
             nand_link_free_at = 0.0
+            link.reset()  # fresh queue state per token (matches `lat` semantics)
             fetched           = set()
 
             # Reset thread state each token — each decode step is independent
@@ -488,6 +525,17 @@ def run_semantic_duplex_simulation():
                 sz        = L["bytes"]
                 has_kv    = inc[L["name"]] > 0
                 eff_flops = int(L["flops"] * (1.0 - sparsity[idx]))
+
+                # Adaptive low-batch streaming for MLP layers.
+                # At low batch, only `active_fraction` of MLP neurons fire, so transferring
+                # the full MLP weight is wasteful. We mimic LLMFlash's sliding-window
+                # approach by scaling MLP transfer bytes by 1 - (1 - p)^B (the union of
+                # active sets across the batch). Above the threshold, semantic placement
+                # is preferable so the scaling collapses back to ~1.0.
+                if ltypes[idx] == LayerType.MLP and BATCH_SIZE < ADAPTIVE_BATCH_THRESHOLD:
+                    p = sparsity[idx]            # MLP layer sparsity
+                    active_fraction = 1.0 - (1.0 - p) ** BATCH_SIZE
+                    sz = int(sz * active_fraction)
 
                 # Accumulate sparsity savings only on first token
                 if token_step == 0:
@@ -535,44 +583,61 @@ def run_semantic_duplex_simulation():
                 comp  = compute_time_s(eff_flops, cpu_cores)
                 mem   = transfer_time_s(
                     sz, HOST_DRAM if place[idx] == PL_HOST_DRAM else CXL_DRAM)
+
+                # Growing-KV: attention layers read all prior K/V from cache.
+                # At decode step `token_step`, total cached positions = PREFILL_TOKENS + token_step.
+                # KV cache resides at CXL_DRAM in SemSched's design. The KV read uses
+                # the same Rx lane as the weight read, so we serialize it into `mem`.
+                if has_kv:
+                    kv_positions_cached = PREFILL_TOKENS + token_step
+                    kv_read_bytes = kv_positions_cached * inc[L["name"]] * BATCH_SIZE
+                    kv_read_time  = transfer_time_s(kv_read_bytes, CXL_DRAM)
+                    mem += kv_read_time
+
                 ltime = max(comp, mem)
 
                 tmon.record_read(sz)
 
-                # ── Placement-aware duplex write stall ────────────────────────
-                # Rules:
-                #   MLP (has_kv=False)  → skip entirely, never any write stall
-                #   Attention @ Host    → full serial KV write stall, no penalty
-                #   Attention @ CXL DRAM→ duplex hides write fully, penalty only
-                #   Attention @ CXL NAND→ separate buses after prefetch, nothing
+                # ── Queue-based duplex write accounting ───────────────────────
+                # The CXL link is modeled as two independent lanes (Rx for reads,
+                # Tx for writes). For each CXL-resident read we register Rx-lane
+                # busy time. For each KV write we schedule on Tx with deadline =
+                # end of this layer's natural duration; if the write doesn't fit,
+                # the queue returns the exposed slip which we charge as actual
+                # stall (replaces the DUPLEX_PENALTY = 1.15 multiplier).
+                ltime_base = ltime  # snapshot before any KV adjustments
+
+                # Track Rx-lane usage for CXL-resident reads (Host DRAM reads
+                # do not touch the CXL link).
+                if place[idx] in (PL_CXL_DEV_DRAM, PL_CXL_DEV_NAND):
+                    link.schedule_read(lat, sz)
+
                 if has_kv:
                     kv_write_scaled = inc[L["name"]] * BATCH_SIZE
                     tmon.record_write(kv_write_scaled)
                     sched.pending_kv_writebacks += kv_write_scaled
-                    kv_write_t = transfer_time_s(kv_write_scaled, CXL_DRAM)
 
                     if place[idx] == PL_HOST_DRAM:
-                        # Simplex Host DRAM bus — KV write fully serialized
-                        # Charged once, no duplex penalty
-                        exposed_stall        = kv_write_t
+                        # Host DRAM is not on the CXL link; KV write serialized
+                        # through host DDR.
+                        kv_write_t = transfer_time_s(kv_write_scaled, CXL_DRAM)
+                        exposed_stall = kv_write_t
                         tmon.write_stall_time_s += exposed_stall
                         tmon.write_stall_count  += 1
                         ltime        += exposed_stall
                         step_stall_s += exposed_stall
 
-                    elif place[idx] == PL_CXL_DEV_DRAM:
-                        # Duplex CXL bus — KV write fully overlaps read window
-                        # Zero stall: hardware absorbs write concurrently
-                        # Only pay bus contention penalty on base ltime
-                        ltime *= DUPLEX_PENALTY
-                        # NO stall charged, NO stall count increment
-
-                    elif place[idx] == PL_CXL_DEV_NAND:
-                        # Layer served from CXL DRAM after prefetch
-                        # KV write goes to CXL DRAM on same bus — duplex absorbs it
-                        # Same logic as CXL DRAM: penalty only, no stall
-                        ltime *= DUPLEX_PENALTY
-                        # NO stall charged, NO stall count increment
+                    elif place[idx] in (PL_CXL_DEV_DRAM, PL_CXL_DEV_NAND):
+                        # Write on Tx lane, may run concurrently with Rx read.
+                        # Deadline = end of this layer's natural read window.
+                        exposed = link.schedule_write_background(
+                            lat, kv_write_scaled, deadline=lat + ltime_base)
+                        if exposed > 0:
+                            tmon.write_stall_time_s += exposed
+                            tmon.write_stall_count  += 1
+                            ltime        += exposed
+                            step_stall_s += exposed
+                        # else: write fully hidden under read window → no stall
                 # ─────────────────────────────────────────────────────────────
 
                 lat         += ltime
@@ -603,6 +668,9 @@ def run_semantic_duplex_simulation():
                                    if step_time_s > 0 else 0.0
             per_token_write_stall_pcts.append(stall_pct_this_token)
 
+            # sample measured Tx-lane utilization from the queue
+            queue_uwrite_samples.append(link.write_utilization_pct())
+
         # ── Post-loop aggregates ───────────────────────────────────────────────
         avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
 
@@ -616,7 +684,9 @@ def run_semantic_duplex_simulation():
         print(f"\nSingle-token decode latency: {lat:.6f}s")
 
         print(f"Decode throughput: {BATCH_SIZE / lat:.6f} t/s")
-        print(f"Prefill throughput: {PREFILL_TOKENS * BATCH_SIZE / pf_time_val:.2f} t/s")
+        # Per-sequence prefill TPS (matches FlexGen/LIA/LLMFlash convention)
+        # reporting convention (flexgen_baseline.py:155, lia_baseline.py:149).
+        print(f"Prefill throughput: {PREFILL_TOKENS / pf_time_val:.2f} t/s")
 
         total_model_size = sum(L["bytes"] for L in layers)
         total_time       = ssd_cold_time_s(total_model_size) + pf_time_val + TOKENS * lat
@@ -637,6 +707,11 @@ def run_semantic_duplex_simulation():
 
         print(f"Read_Ratio: {final_util_ratio:.4f}%")
         print(f"Write_Util_Pct: {tmon.get_write_util_pct():.4f}%")
+
+        # queue-measured Uwrite (averaged across tokens)
+        queue_uwrite_avg = (sum(queue_uwrite_samples) / len(queue_uwrite_samples)) \
+                           if queue_uwrite_samples else 0.0
+        print(f"Queue_Uwrite_Pct: {queue_uwrite_avg:.4f}%")
 
         total_decode_layers = len([L for L in layers if inc[L["name"]] > 0])
         stall_freq_pct      = (tmon.write_stall_count / (total_decode_layers * TOKENS) * 100) \

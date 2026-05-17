@@ -1,3 +1,19 @@
+"""
+cache_ablation_study.py — generates Fig 1(b) "Caching Algorithm Comparison".
+
+Output:
+    figures/fig_motivation_comprehensive.pdf
+
+This script simulates four caching strategies (Blind LRU, Frequency-LFU,
+Static-Tiering, Semantic-Pinning) under capacity pressure and reports the
+per-token stall time per strategy at 72B across FP32/FP16/INT8/INT4. The
+numbers are derived from the layer-cache model in this file (not from the
+main run_experiments.py CSV).
+
+Sibling scripts:
+    plot_paper_figures.py — main paper figures (driven by final_results_with_coldload.csv)
+    plot_timeline.py       — per-token bus timeline figure (driven by duplex_timeline_data.csv)
+"""
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -386,140 +402,5 @@ def plot_motivation_comprehensive():
           f"  (B={SERVING_BATCH})")
 
 
-# ==========================================
-# 2. STALL DUPLEX PHY — FP32, B=128
-# ==========================================
-def plot_stall_duplex_phy(df):
-    baseline_total     = 57.1821
-    write_stall_total  = 1.1821
-    num_layers         = 80
-    cxl_bw             = 28.0
-    stall_per_layer    = write_stall_total / num_layers
-    read_per_layer     = (baseline_total - write_stall_total) / num_layers
-    narrow_write_width = 0.004
-    zoom_limit_s       = 5.0
-    time_scale         = np.linspace(0, zoom_limit_s, 5000)
-
-    fig = plt.figure(figsize=(16, 4.5))
-    gs  = fig.add_gridspec(2, 2, width_ratios=[0.8, 1.4], height_ratios=[1, 1])
-    ax1 = fig.add_subplot(gs[:, 0])
-
-    # ← FIXED: strictly FP32 + B=128 from Memory experiment
-    sub = df[
-        (df["Experiment"] == "Memory") &
-        (df["Model"]      == 72) &
-        (df["Quant"]      == "fp32") &
-        (df["BatchSize"]  == SERVING_BATCH)
-    ].copy()
-
-    if sub.empty:
-        print(f"[StallDuplex] No FP32 B={SERVING_BATCH} Memory data. Available:")
-        mem = df[(df["Experiment"] == "Memory") & (df["Model"] == 72)]
-        print(mem[["Quant", "BatchSize"]].drop_duplicates().to_string())
-        # fallback: any FP32 at 72B
-        sub = df[
-            (df["Experiment"] == "Memory") &
-            (df["Model"]      == 72) &
-            (df["Quant"]      == "fp32")
-        ].copy()
-        if sub.empty:
-            print("[StallDuplex] No FP32 72B data at all. Skipping bar chart.")
-        else:
-            b_actual = sub["BatchSize"].mode().iloc[0]
-            sub      = sub[sub["BatchSize"] == b_actual].copy()
-            print(f"[StallDuplex] Fallback: FP32 B={b_actual}")
-    else:
-        b_actual = SERVING_BATCH
-        print(f"[StallDuplex] Using FP32 B={b_actual} ✓")
-
-    if not sub.empty:
-        # Use MemConfig 16H+32C if available, else all configs averaged
-        if "MemConfig" in sub.columns and "16GB_Host+32GB_CXL" in sub["MemConfig"].values:
-            sub = sub[sub["MemConfig"] == "16GB_Host+32GB_CXL"].copy()
-
-        sub["Stall_s"] = 1.0 / sub["TPS"]
-        sub = sub.sort_values(by="Stall_s", ascending=False)
-
-        b_label = sub["BatchSize"].iloc[0] if "BatchSize" in sub.columns else "?"
-        q_label = sub["Quant"].iloc[0].upper() if "Quant" in sub.columns else "FP32"
-
-        BAR_COLORS = {'FlexGen': '#8c8c8c', 'LIA': '#bcbd22',
-                      'LLMFlash': '#1f77b4', 'SemDuplex': 'red'}
-        sns.barplot(x='Simulator', y='Stall_s', data=sub, hue='Simulator',
-                    palette=BAR_COLORS, edgecolor='black', legend=False, ax=ax1)
-        ax1.set_title(f"(a) Per-Token Latency (72B {q_label}, B={b_label}, 16H+32C)",
-                      fontsize=16)
-        ax1.set_ylabel("Seconds per Token", fontsize=14)
-        ax1.set_ylim(0, sub["Stall_s"].max() * 1.35)
-        ax1.set_xlabel("Scheduler")
-        for p in ax1.patches:
-            if p.get_height() > 0:
-                ax1.annotate(f'{p.get_height():.2f}s',
-                             (p.get_x() + p.get_width() / 2., p.get_height()),
-                             ha='center', va='center', xytext=(0, 10),
-                             textcoords='offset points', fontsize=12, fontweight='bold')
-    else:
-        ax1.text(0.5, 0.5, "No FP32 data available", ha='center', va='center',
-                 transform=ax1.transAxes, fontsize=13)
-
-    # Physics panels (unchanged)
-    ax2 = fig.add_subplot(gs[0, 1], facecolor='#e6e6e6')
-    b_read  = np.zeros_like(time_scale)
-    b_stall = np.zeros_like(time_scale)
-    b_write = np.zeros_like(time_scale)
-
-    for i in range(8):
-        start_r = i * (read_per_layer + stall_per_layer)
-        end_r   = start_r + read_per_layer
-        start_s = end_r
-        end_s   = end_r + stall_per_layer
-        start_w = start_s + (stall_per_layer * 0.4)
-        end_w   = start_w + narrow_write_width
-
-        b_read [(time_scale >= start_r) & (time_scale < end_r)]  = cxl_bw
-        b_stall[(time_scale >= start_s) & (time_scale < end_s)]  = cxl_bw
-        b_write[(time_scale >= start_w) & (time_scale < end_w)]  = cxl_bw
-
-        ax2.annotate('', xy=(end_r + (stall_per_layer / 2), 30),
-                     xytext=(end_r + (stall_per_layer / 2), 42),
-                     arrowprops=dict(arrowstyle='->', color='black', lw=1.5))
-
-    ax2.fill_between(time_scale, 0, b_read,  color='red',   label="Read (Weights)")
-    ax2.fill_between(time_scale, 0, b_stall, color='white', label="Bus Turnaround Stall")
-    ax2.fill_between(time_scale, 0, b_write, color='blue',  label="KV Write")
-    ax2.annotate('Sequential Stalls', xy=(1.5, 43), fontsize=12, fontweight='bold')
-    ax2.set_title("(b) Baseline Simplex: Sequential", fontsize=16)
-    ax2.set_ylabel("BW (GB/s)")
-    ax2.set_ylim(0, 60)
-    ax2.legend(loc='upper right', fontsize=12, ncol=3)
-
-    ax3 = fig.add_subplot(gs[1, 1], sharex=ax2, facecolor='#e6e6e6')
-    s_read  = np.full_like(time_scale, cxl_bw)
-    s_write = np.zeros_like(time_scale)
-    for i in range(8):
-        start_w = i * read_per_layer + (read_per_layer * 0.9)
-        s_write[(time_scale >= start_w) &
-                (time_scale < start_w + narrow_write_width)] = -cxl_bw
-
-    ax3.fill_between(time_scale, 0, s_read,  color='red',  label="Read Lane (Solid)")
-    ax3.fill_between(time_scale, 0, s_write, color='blue', label="Write Lane (Parallel)")
-    ax3.annotate('NO STALL: Continuous Read', xy=(2.5, 10), ha='center',
-                 fontsize=14, color='white',
-                 bbox=dict(boxstyle="round,pad=0.3", fc="darkgreen", ec="none", alpha=0.8))
-    ax3.set_title("(c) SemDuplex Full-Duplex: Write Utilization", fontsize=16)
-    ax3.set_ylabel("BW (GB/s)", fontsize=14)
-    ax3.set_ylim(-40, 40)
-    ax3.axhline(0, color='black', lw=1.5)
-    ax3.set_xlabel("Elapsed Time (Seconds)", fontsize=14)
-    ax3.set_xticks(np.arange(0, 6, 1))
-    ax3.set_xticklabels([f"{i}s" for i in range(6)])
-    #ax3.legend(loc='upper right', fontsize=12, ncol=2)
-
-    plt.tight_layout()
-    plt.savefig("figures/fig_stall_duplex_phy.pdf", bbox_inches='tight')
-    print("Saved figures/fig_stall_duplex_phy.pdf  [FP32, B=128]")
-
-
 if __name__ == "__main__":
     plot_motivation_comprehensive()
-    plot_stall_duplex_phy(pd.read_csv("final_results_with_coldload.csv"))

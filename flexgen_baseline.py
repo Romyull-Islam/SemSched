@@ -1,7 +1,12 @@
-# flexgen_simulator.py
+# flexgen_baseline.py
 # ─────────────────────────────────────────────────────────────────────────────
 # SIMULATOR: FlexGen — High-Throughput Generative Inference
-# Paper-faithful: Sheng et al., ICML 2023
+#
+# Decode-phase includes growing-KV reads: at decode step t the attention layer
+# reads (PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from host DRAM
+# (FlexGen's KV residence tier).
+#
+# Reference: Sheng et al., ICML 2023.
 #
 # Stall accounting (separated):
 #   Read  stall : max(0, mem_time - comp_s)  — weight fetch blocks compute
@@ -102,7 +107,15 @@ for token_step in range(TOKENS):
         mem_time = dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
                    else ssd_time_s(L["bytes"])
 
-        # Read stall: weight fetch in excess of compute
+        # Growing-KV: attention layers read all prior K/V from cache.
+        # KV lives in Host DRAM in FlexGen, so this is a host-DRAM read.
+        kv_inc_l = kv_cache_increment[L["name"]]
+        if kv_inc_l > 0:
+            kv_positions_cached = PREFILL_TOKENS + token_step
+            kv_read_bytes = kv_positions_cached * kv_inc_l * BATCH_SIZE
+            mem_time += dram_time_s(kv_read_bytes)
+
+        # Read stall: weight + KV fetch in excess of compute
         read_stall = max(0.0, mem_time - comp_s)
         total_read_stall_s += read_stall
         step_read_stall_s  += read_stall
@@ -115,9 +128,8 @@ for token_step in range(TOKENS):
         # duplex capability. Bus separation (SSD vs DRAM) does NOT help
         # because FlexGen issues ops sequentially, not concurrently.
         kv_stall = 0.0
-        kv_inc   = kv_cache_increment[L["name"]]
-        if kv_inc > 0:
-            kv_write_bytes          = kv_inc * BATCH_SIZE
+        if kv_inc_l > 0:
+            kv_write_bytes          = kv_inc_l * BATCH_SIZE
             kv_stall                = dram_time_s(kv_write_bytes)  # always
             total_kv_write_stall_s += kv_stall
             step_write_stall_s     += kv_stall

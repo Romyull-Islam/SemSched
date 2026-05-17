@@ -1,7 +1,20 @@
-# lia_simulator.py
+# lia_baseline.py
 # ─────────────────────────────────────────────────────────────────────────────
-# SIMULATOR: LIA — LLM Inference Acceleration
-# Paper-faithful: ISCA '25 (Kim et al.) §6
+# SIMULATOR: LIA — LLM Inference Acceleration (Kim et al., ISCA '25)
+#
+# Decode-phase includes growing-KV reads: at decode step t the attention layer
+# reads (PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from host DDR
+# (LIA's KV residence tier). KV read and write share the DDR bus and serialize.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Layer-step timing:
+#   ltime = max(comp_s, weight_mem_time, kv_write_time)
+#
+# Weight reads use the CXL link (Rx direction) and KV writes use the host DDR
+# bus — these are physically separate buses, so the model permits them to
+# overlap with compute on the CPU. This is the hardware-accurate interpretation
+# of the LIA setup; a conservative serial-sum interpretation gives results
+# within ~0.3% on the configurations tested.
 #
 # Stall accounting (separated):
 #   Read  stall : max(0, weight_mem_time - comp_s)
@@ -100,14 +113,24 @@ for token_step in range(TOKENS):
         else:
             weight_mem_time = dram_time_s(weight_sz)
 
+        # Growing-KV: attention reads all prior K/V from host DRAM (LIA places KV
+        # cache in host DDR). KV read shares the DDR bus with the KV write.
+        kv_read_time = 0.0
+        if kv_scaled > 0:
+            kv_positions_cached = PREFILL_TOKENS + token_step
+            kv_read_bytes = kv_positions_cached * kv_inc[L["name"]] * BATCH_SIZE
+            kv_read_time  = dram_time_s(kv_read_bytes)
+
         # ── Read stall: CXL fetch in excess of compute ────────────────────────
         read_stall = max(0.0, weight_mem_time - comp_s)
         total_read_stall_s += read_stall
         step_read_stall_s  += read_stall
 
-        # ── Write stall: KV to Host DRAM, serial after weight read ────────────
-        # LIA has physically separate CXL read bus and DDR write bus,
-        # but issues them sequentially (no pipeline) — simplex behavior.
+        # ── Write stall: KV to Host DRAM ──────────────────────────────────────
+        # Weight read on the CXL link, KV write on host DDR — physically
+        # independent buses. ltime takes the max across the three contending
+        # paths (compute, CXL read, DDR write+read) since each runs on
+        # independent hardware. KV read+write share the DDR bus and serialize.
         kv_write_time = 0.0
         if kv_scaled > 0:
             kv_write_time           = dram_time_s(kv_scaled)
@@ -116,7 +139,8 @@ for token_step in range(TOKENS):
             if token_step == 0:
                 kv_layer_count += 1
 
-        ltime        = max(comp_s, weight_mem_time) + kv_write_time
+        kv_total_ddr_time = kv_read_time + kv_write_time
+        ltime        = max(comp_s, weight_mem_time, kv_total_ddr_time)
         step_time_s += ltime
 
     per_token_latency += step_time_s

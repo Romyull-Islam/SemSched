@@ -8,3 +8,6 @@ gem5-py310/
 .venv/
 venv/
 
+# Transient run logs
+*.log
+

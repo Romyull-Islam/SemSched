@@ -1,7 +1,12 @@
 """
 llmflash_baseline.py
 
-CXL-adapted LLM-in-a-Flash Baseline (Alizadeh et al., ACL 2024)
+CXL-adapted LLM-in-a-Flash Baseline (Alizadeh et al., ACL 2024).
+
+Decode-phase includes growing-KV reads: at decode step t the attention reads
+(NUM_PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from the pooled
+(CXL) DRAM tier.
+
 Mechanisms implemented (paper-faithful):
   1. Selective Persistence  — attention + embeddings PINNED in CXL DRAM always
   2. Low-rank Sparsity      — active_frac derived from actual model layer sparsity
@@ -131,7 +136,7 @@ def simulate_llmflash():
     total_decode_time       = 0.0
     per_token_write_stall_pcts = []
 
-    for _ in range(NUM_DECODE_TOKENS):
+    for token_step in range(NUM_DECODE_TOKENS):
         t        = 0.0
         step_kv  = 0.0
 
@@ -140,6 +145,12 @@ def simulate_llmflash():
             t += transfer_time_s(L["bytes"] * pinned_dram_frac, CXL_DRAM)
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
+
+        # Growing-KV: attention layers read all prior K/V from the pooled CXL DRAM tier.
+        # LLMFlash treats host+CXL DRAM as unified; we use CXL_DRAM as the KV tier.
+        kv_positions_cached = NUM_PREFILL_TOKENS + token_step
+        kv_read_bytes_total = BATCH_SIZE * kv_per_seq_bytes * kv_positions_cached
+        t += transfer_time_s(kv_read_bytes_total, CXL_DRAM)
 
         # FFN DRAM turnover
         t += transfer_time_s(ffn_dram_bytes, CXL_DRAM)
