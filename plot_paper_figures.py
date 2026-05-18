@@ -338,7 +338,8 @@ def plot_combined_scalability(df):
         print("Stopping — please add B=128 Scalability runs to your CSV.")
         return
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 4.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 3.5))
+    #fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 7.5))
 
     # ── Line plot ──────────────────────────────────────────────
     sns.lineplot(data=sub, x="Model", y="TPS", hue="Simulator", style="Simulator",
@@ -358,7 +359,8 @@ def plot_combined_scalability(df):
     MODELS = sorted(sub["Model"].unique())
     SIMS   = ['FlexGen', 'LIA', 'LLMFlash', 'SemSched'] # Updated list
 
-    OFFSET_LADDER = [-20, -15, +15, +27]
+    #OFFSET_LADDER = [-18, -15, +13, +27]
+    OFFSET_LADDER = [(-4, -16), (15, -15), (15, 10), (0, 16)]
 
     for model in MODELS:
         model_data = sub[sub["Model"] == model].copy()
@@ -371,12 +373,12 @@ def plot_combined_scalability(df):
                 continue
             tps   = row["TPS"].values[0]
             color = COLORS.get(sim, 'black')
-            yoff  = OFFSET_LADDER[rank]
+            xoff, yoff = OFFSET_LADDER[rank]
 
             ax1.annotate(
                 f'{tps:.1f}',
                 xy=(model, tps),
-                xytext=(0, yoff),
+                xytext=(xoff, yoff),
                 textcoords='offset points',
                 ha='center',
                 va='center',
@@ -737,7 +739,7 @@ def plot_duplex_reconstruction():
     for i in range(100, 1000, 200):
         sem_write[i:i+50] = 32
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 3), sharex=True)
     ax1.fill_between(time_ms, 0,  base_read,  color='#fdae61', alpha=0.9, label="Read Weights")
     ax1.fill_between(time_ms, 0, -base_write, color='#999999', alpha=0.9, label="Write KV-Cache")
     ax1.set_title("(a) Baseline Architecture", fontsize=15)
@@ -897,7 +899,7 @@ def plot_scaling_trends_from_csv(df):
         return
 
     precisions = ['fp32', 'fp16', 'int8', 'int4']
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4.1))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 3.8))
 
     for i, prec in enumerate(precisions):
         ax = axes[i]

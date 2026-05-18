@@ -1,0 +1,11 @@
+config,Variant,Decode_TPS,Write_Stall_s
+fp16_16H+64C,Full SemSched,19.542653,0.00049
+fp16_16H+64C,- Parallel Warmup,16.90549,0.00049
+fp16_16H+64C,- Semantic Placement,19.50915,0.0
+fp16_16H+64C,- Two-Queue Link,19.53924,0.001634
+fp16_16H+64C,- Sparsity Eviction,19.542653,0.00049
+int8_16H+32C,Full SemSched,40.347283,0.000531
+int8_16H+32C,- Parallel Warmup,37.237998,0.000531
+int8_16H+32C,- Semantic Placement,40.299099,0.0
+int8_16H+32C,- Two-Queue Link,40.343646,0.000817
+int8_16H+32C,- Sparsity Eviction,40.347283,0.000531

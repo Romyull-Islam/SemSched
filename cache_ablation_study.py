@@ -297,7 +297,7 @@ def plot_motivation_comprehensive():
     df_ablation = pd.DataFrame(ablation_results)
 
     # ── PLOT ─────────────────────────────────────────────────────────
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 5.5),
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 4.6),
                                    gridspec_kw={'width_ratios': [1, 1.4]})
 
     # ── Panel (a) annotation loop — FIXED ────────────────────────────
@@ -315,7 +315,7 @@ def plot_motivation_comprehensive():
         sizes = sorted(sub_wall["ModelSize"].dropna().unique())
 
         # Offset ladder (x_offset, y_offset) in fixed pixels.
-        OFFSET_LADDER = [(0, -18), (25, -5), (0, 22), (-28, 0)]
+        OFFSET_LADDER = [(0, -15), (25, -5), (0, 18), (-28, 0)]
 
         for x in sizes:
             # Get all data points at this specific Model Size
@@ -388,12 +388,12 @@ def plot_motivation_comprehensive():
                 edgecolor='black', ax=ax2)
     ax2.set_title(f"(b) Caching Algorithm Comparison"
                   f"(72B, B={SERVING_BATCH}, 32H+64C)", fontsize=20)
-    ax2.set_ylabel("Avg. Stall per Token (s)")
+    ax2.set_ylabel("Cumulative miss penalty / token (s)")
     ax2.set_xlabel("Quantization Precision")
-    ax2.set_ylim(0, df_ablation['Stall_s'].max() * 1.3)
+    ax2.set_ylim(0, df_ablation['Stall_s'].max() * 1.4)
     for c in ax2.containers:
         ax2.bar_label(c, fmt='%.2fs', padding=10,
-                      fontsize=16, rotation=90)
+                      fontsize=16, rotation=45)
 
     plt.tight_layout()
     plt.savefig("figures/fig_motivation_comprehensive.pdf",
