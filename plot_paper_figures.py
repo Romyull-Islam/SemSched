@@ -37,9 +37,7 @@ import os
 plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
 
-# ---------------------------
 # Global style and constants
-# ---------------------------
 # Use a robust seaborn style name that exists across Matplotlib versions
 available_styles = plt.style.available
 if 'seaborn-v0_8-paper' in available_styles:
@@ -66,15 +64,13 @@ plt.rcParams['axes.grid'] = True
 plt.rcParams['grid.alpha'] = 0.3
 plt.rcParams['grid.linestyle'] = '--'
 
-# Changed key to SemSched
+
 COLORS  = {'FlexGen': '#7f7f7f', 'LIA': '#377eb8', 'LLMFlash': '#ff7f0e', 'SemSched': '#e41a1c'}
 MARKERS = {'FlexGen': 'o',       'LIA': 's',        'LLMFlash': '^',        'SemSched': 'D'}
 
 SERVING_BATCH = 128  # desired serving batch for paper figures
 
-# ---------------------------
 # Data loading & cleaning
-# ---------------------------
 def load_and_clean_data():
     files = ["final_results_with_coldload.csv", "final_results_all_combinations.csv"]
     df = None
@@ -91,10 +87,10 @@ def load_and_clean_data():
         'flexgen_baseline.py':   'FlexGen',
         'lia_baseline.py':       'LIA',
         'llmflash_baseline.py':  'LLMFlash',
-        'semduplex_scheduler.py':'SemSched', # Changed to SemSched
+        'semduplex_scheduler.py':'SemSched',
         'flashllm_baseline.py':  'LLMFlash',
         'FlashLLM':              'LLMFlash',
-        'SemDuplex':             'SemSched', # Changed to SemSched
+        'SemDuplex':             'SemSched',
     }
     df['Simulator'] = df['Simulator'].replace(name_map)
 
@@ -115,9 +111,7 @@ def load_and_clean_data():
 
     return df
 
-# ---------------------------
 # 1. Total inference figure
-# ---------------------------
 def plot_total_inference(df):
     sub = df[df["Experiment"] == "Scalability"].copy()
     if sub.empty:
@@ -154,7 +148,7 @@ def plot_total_inference(df):
     ax1.grid(True, which='both', ls='--', alpha=0.3)
 
     llm72 = sub[(sub["Simulator"] == "LLMFlash") & (sub["Model"] == 72)]
-    sem72 = sub[(sub["Simulator"] == "SemSched") & (sub["Model"] == 72)] # Changed name
+    sem72 = sub[(sub["Simulator"] == "SemSched") & (sub["Model"] == 72)]
     if not llm72.empty and not sem72.empty:
         llmt  = llm72["Totals"].values[0]
         semt  = sem72["Totals"].values[0]
@@ -185,10 +179,10 @@ def plot_total_inference(df):
     for c in ax2.containers:
         ax2.bar_label(c, fmt='.1f', padding=3, fontsize=10, rotation=45)
 
-    semspeedup72 = subspeed[(subspeed["Simulator"] == "SemSched") & # Changed name
+    semspeedup72 = subspeed[(subspeed["Simulator"] == "SemSched") &
                              (subspeed["Model"] == 72)]["Speeduptotal"]
     if not semspeedup72.empty:
-        ax2.annotate(f'SemSched\n{semspeedup72.values[0]:.0f}× speedup\n(prefill-driven)', # Changed name
+        ax2.annotate(f'SemSched\n{semspeedup72.values[0]:.0f}× speedup\n(prefill-driven)',
                      xy=(3, semspeedup72.values[0]),
                      xytext=(1.5, semspeedup72.values[0] + 0.6), fontsize=10,
                      color=COLORS['SemSched'], # Updated key
@@ -200,9 +194,7 @@ def plot_total_inference(df):
     print("Saved figures/fig_total_inference.pdf  [PRIMARY PAPER FIGURE]")
 
 
-# ==========================================
 # 2. STALL DUPLEX PHY — FP32, B=1..128
-# ==========================================
 def plot_stall_duplex_phy(df):
 
     fig = plt.figure(figsize=(16, 3.8))
@@ -241,7 +233,7 @@ def plot_stall_duplex_phy(df):
         return
 
     batch_order = sorted(sweep["BatchSize"].dropna().unique().tolist())
-    sims_order  = ["FlexGen", "LIA", "LLMFlash", "SemSched"] # Changed name
+    sims_order  = ["FlexGen", "LIA", "LLMFlash", "SemSched"]
 
     # ── Panel (a): Write Stall bar at B=SERVING_BATCH ─────────────────────
     bar_data = sweep[sweep["BatchSize"] == SERVING_BATCH].copy()
@@ -317,9 +309,7 @@ def plot_stall_duplex_phy(df):
 
 
 
-# ==========================================
 # 3. COMBINED SCALABILITY — STRICT B=128
-# ==========================================
 def plot_combined_scalability(df):
     sub = df[df["Experiment"] == "Scalability"].copy()
     if sub.empty:
@@ -357,7 +347,7 @@ def plot_combined_scalability(df):
 
     # ── Add non-overlapping value labels on line plot ──────────
     MODELS = sorted(sub["Model"].unique())
-    SIMS   = ['FlexGen', 'LIA', 'LLMFlash', 'SemSched'] # Updated list
+    SIMS   = ['FlexGen', 'LIA', 'LLMFlash', 'SemSched']
 
     #OFFSET_LADDER = [-18, -15, +13, +27]
     OFFSET_LADDER = [(-4, -16), (15, -15), (15, 10), (0, 16)]
@@ -410,9 +400,7 @@ def plot_combined_scalability(df):
 
 
 
-# ---------------------------
 # 4. Combined quantization
-# ---------------------------
 def plot_combined_quantization(df):
     quant_df = df[(df["Experiment"] == "Quantization") & (df["Model"] == 72)].copy()
     if quant_df.empty:
@@ -463,9 +451,7 @@ def plot_combined_quantization(df):
     plt.savefig("figures/fig_combined_quantization.pdf", bbox_inches='tight')
     print(f"Saved figures/fig_combined_quantization.pdf  [B={b_use}]")
 
-# ==========================================
 # 5. MEMORY SENSITIVITY — STRICTLY 2 SUBPLOTS (INT4 + FP32), B=128
-# ==========================================
 def plot_memory_sensitivity(df):
     suball = df[
         (df["Experiment"] == "Memory") &
@@ -530,9 +516,7 @@ def plot_memory_sensitivity(df):
     print(f"Saved figures/fig_memory.pdf  [INT4+FP32 only, B={SERVING_BATCH}]")
 
 
-# ==========================================
 # 5b. MEMORY SENSITIVITY (all 4 quants) — separate combined figure
-# ==========================================
 def plot_memory_sensitivity_int8_fp16(df):
     suball = df[
         (df["Experiment"] == "Memory") &
@@ -749,7 +733,7 @@ def plot_duplex_reconstruction():
 
     ax2.fill_between(time_ms, 0,  sem_read,  color='#e41a1c', alpha=0.7, label="Read Lane")
     ax2.fill_between(time_ms, 0, -sem_write, color='#377eb8', alpha=0.8, label="Write Injection")
-    ax2.set_title("(b) SemSched Architecture", fontsize=14) # Changed name
+    ax2.set_title("(b) SemSched Architecture", fontsize=14)
     ax2.set_ylabel("BW (GB/s)", fontsize=14)
     ax2.set_xlabel("Time (microseconds)", fontsize=14)
     ax2.axhline(0, color='black', linewidth=1)
@@ -925,9 +909,7 @@ def plot_scaling_trends_from_csv(df):
     plt.tight_layout()
     plt.savefig("figures/scaling_trends_dynamic.pdf", bbox_inches='tight')
 
-# ---------------------------
 # MAIN
-# ---------------------------
 if __name__ == "__main__":
     os.makedirs("figures", exist_ok=True)
     print("=" * 55)

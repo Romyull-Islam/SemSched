@@ -32,9 +32,7 @@ from sim_cfg import (cxl_dev_dram_capacity_bytes, cpu_freq_hz, cpu_cores,
                      flops_per_cycle_per_core, parallel_efficiency)
 
 
-# ==========================================
-# CONSTANTS
-# ==========================================
+# Constants
 SERVING_BATCH = 128
 P_SILU        = 0.46
 
@@ -65,9 +63,7 @@ MODEL_SIZES = {
 }
 
 
-# ==========================================
-# HELPERS
-# ==========================================
+# Helpers
 def compute_time_s(flops):
     if flops <= 0:
         return 0.0
@@ -86,15 +82,13 @@ def miss_penalty(L):
 
 
 def get_tight_cache(total_model_bytes, cache_cap, batch_size=SERVING_BATCH):
-    """FIX 1: 50% fill ratio forces real eviction trade-offs."""
+    """Cap the cache at 50% of the active working set so eviction matters."""
     active_frac  = 1.0 - (1.0 - P_SILU) ** batch_size
     effective_ws = total_model_bytes * active_frac
-    return min(cache_cap, int(effective_ws * 0.50))   # was 0.75
+    return min(cache_cap, int(effective_ws * 0.50))
 
 
-# ==========================================
-# LRU CACHE (used only by Blind LRU path)
-# ==========================================
+# LRU cache (used only by the Blind LRU path).
 class LRUCache:
     def __init__(self, capacity):
         self.capacity     = capacity
@@ -114,16 +108,12 @@ class LRUCache:
         return False                            # miss
 
 
-# ==========================================
-# CACHING SIMULATION  (all four strategies)
-# ==========================================
+# Caching simulation — all four strategies.
 def simulate_cache_behavior(strategy_name, layers, cache_cap,
                              batch_size=SERVING_BATCH):
     num_tokens = 16
 
-    # ------------------------------------------------------------------
-    # Blind LRU — fully dynamic eviction, no semantic awareness
-    # ------------------------------------------------------------------
+    # Blind LRU: dynamic eviction with no semantic awareness.
     if strategy_name == "Blind LRU":
         lru   = LRUCache(cache_cap)
         stall = 0.0
@@ -133,9 +123,7 @@ def simulate_cache_behavior(strategy_name, layers, cache_cap,
                     stall += miss_penalty(L)
         return stall / num_tokens
 
-    # ------------------------------------------------------------------
-    # Static-Tiering — sequential fill: first N layers until cache full
-    # ------------------------------------------------------------------
+    # Static tiering: pin layers in index order until the cache is full.
     elif strategy_name == "Static-Tiering":
         pinned, used = set(), 0
         for i, L in enumerate(layers):
@@ -149,12 +137,9 @@ def simulate_cache_behavior(strategy_name, layers, cache_cap,
                     stall += miss_penalty(L)
         return stall / num_tokens
 
-    # ------------------------------------------------------------------
-    # FIX 3 — Frequency-LFU: real LFU with dynamic eviction
-    # In sequential decode ALL layers are accessed equally (freq always
-    # equal after one pass), so LFU correctly degenerates to near-FIFO —
-    # this IS the accurate model of LFU under sequential access.
-    # ------------------------------------------------------------------
+    # Frequency-LFU: in sequential decode every layer is touched once per
+    # token, so LFU degenerates to near-FIFO — which is the accurate model
+    # of LFU under this access pattern.
     elif strategy_name == "Frequency-LFU":
         freq      = defaultdict(int)
         lfu_cache = {}          # idx → bytes
@@ -175,18 +160,13 @@ def simulate_cache_behavior(strategy_name, layers, cache_cap,
                 stall += miss_penalty(L)        # miss
         return stall / num_tokens
 
-    # ------------------------------------------------------------------
-    # FIX 2 — Semantic-Pinning: rank by penalty DENSITY (penalty/bytes)
-    # Raw miss_penalty favoured tiny attention layers even when the
-    # cache would hold far more total stall reduction by pinning a
-    # larger high-sparsity MLP instead.  Density = value per byte.
-    # ------------------------------------------------------------------
+    # Semantic pinning: rank layers by raw miss_penalty (proportional to
+    # bytes) so the most NAND-expensive layers are pinned first. This
+    # maximises total stall reduction within the cache budget.
     elif strategy_name == "Semantic-Pinning":
-        # rank by raw miss_penalty (∝ bytes) → largest NAND-expensive layers first
-        # this is optimal: maximises total stall reduction within cache budget
         ranked = sorted(
             range(len(layers)),
-            key=lambda i: miss_penalty(layers[i]),   # ← remove the / max(bytes,1)
+            key=lambda i: miss_penalty(layers[i]),
             reverse=True
         )
         pinned, used = set(), 0
@@ -203,9 +183,7 @@ def simulate_cache_behavior(strategy_name, layers, cache_cap,
 
 
 
-# ==========================================
-# MAIN FIGURE
-# ==========================================
+# Main figure
 def plot_motivation_comprehensive():
     os.makedirs("figures", exist_ok=True)
 
@@ -254,7 +232,7 @@ def plot_motivation_comprehensive():
             )
             sub_wall = sc
 
-    # ── Panel (b): Caching Ablation ───────────────────────────────────
+    # Panel (b): caching ablation
     quants           = {"FP32": 4.0, "FP16": 2.0, "INT8": 1.0, "INT4": 0.5}
     ablation_results = []
 
@@ -296,13 +274,12 @@ def plot_motivation_comprehensive():
 
     df_ablation = pd.DataFrame(ablation_results)
 
-    # ── PLOT ─────────────────────────────────────────────────────────
+    # Plot
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 4.6),
                                    gridspec_kw={'width_ratios': [1, 1.4]})
 
-    # ── Panel (a) annotation loop — FIXED ────────────────────────────
+    # Panel (a): line plot + non-overlapping data labels
     if not sub_wall.empty:
-        # 1. Plot the lines first
         for sim in baselines:
             sd = sub_wall[sub_wall["Simulator"] == sim].sort_values("ModelSize")
             if sd.empty:
@@ -311,30 +288,22 @@ def plot_motivation_comprehensive():
                      color=COLORS_BASE.get(sim, 'black'), marker=MARKERS.get(sim, 'o'),
                      markersize=14, linewidth=3, label=sim, zorder=3)
 
-        # 2. Add non-overlapping labels using exact pixel offsets
+        # Add data labels via a (x, y) pixel-offset ladder so adjacent
+        # points do not overlap.
         sizes = sorted(sub_wall["ModelSize"].dropna().unique())
-
-        # Offset ladder (x_offset, y_offset) in fixed pixels.
         OFFSET_LADDER = [(0, -15), (25, -5), (0, 18), (-28, 0)]
 
         for x in sizes:
-            # Get all data points at this specific Model Size
             df_x = sub_wall[(sub_wall["ModelSize"] == x) & (sub_wall["Simulator"].isin(baselines))]
             if df_x.empty:
                 continue
-            
-            # Sort by throughput so rank 0 is always the bottom point
-            df_x = df_x.sort_values("TPS")
-            
+            df_x = df_x.sort_values("TPS")  # rank 0 = bottom point
+
             for rank, (_, row) in enumerate(df_x.iterrows()):
                 sim = row["Simulator"]
                 y = row["TPS"]
                 color = COLORS_BASE.get(sim, 'black')
-                
-                # Apply the offset based on vertical rank
                 xoff, yoff = OFFSET_LADDER[rank % len(OFFSET_LADDER)]
-                
-                # Format text: 1 decimal place if >= 1.0, otherwise 3 decimal places
                 label_text = f'{y:.1f}' if y >= 1.0 else f'{y:.3f}'
                 
                 ax1.annotate(
@@ -357,15 +326,13 @@ def plot_motivation_comprehensive():
         ax1.set_xticks(sizes)
         ax1.set_xticklabels([f"{int(s)}B" for s in sizes])
         
-        # -------------------------------------------------------------
-        # NEW FIX: Explicitly expand the bounding box to prevent cut-offs
-        # -------------------------------------------------------------
+        # Expand the bounding box to keep edge labels from being clipped.
         y_vals = sub_wall[sub_wall["Simulator"].isin(baselines)]["TPS"]
         if not y_vals.empty:
-            ax1.set_xlim(min(sizes) * 0.9, max(sizes) * 1.2)  # 20% room left, 40% room right
-            ax1.set_ylim(y_vals.min() * 0.6, y_vals.max() * 2) # 50% room bottom, 150% room top
-        # -------------------------------------------------------------
-        
+            ax1.set_xlim(min(sizes) * 0.9, max(sizes) * 1.2)
+            ax1.set_ylim(y_vals.min() * 0.6, y_vals.max() * 2)
+
+
         ax1.set_xlabel("Model Size (Parameters)")
         ax1.set_ylabel("Decode Throughput (Tokens/s)")
         ax1.yaxis.set_major_formatter(
