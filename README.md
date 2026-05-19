@@ -1,4 +1,6 @@
-# SemSched: Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference
+# SemSched
+
+**SemSched: Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference**
 
 This repository contains the simulator, baselines, experiment driver, and
 plotting code that produce the figures and tables in the SemSched paper.
