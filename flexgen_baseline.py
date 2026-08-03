@@ -82,7 +82,7 @@ for i, L in enumerate(layers):
 # ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
 prefill_latency = 0.0
 for i, L in enumerate(layers):
-    comp_s   = compute_time_s(L["flops"] * PREFILL_FLOP_MULTIPLIER)
+    comp_s   = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
     mem_time = dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
                else ssd_time_s(L["bytes"])
     prefill_latency += max(comp_s, mem_time)
@@ -103,7 +103,7 @@ for token_step in range(TOKENS):
     step_write_stall_s = 0.0
 
     for i, L in enumerate(layers):
-        comp_s   = compute_time_s(L["flops"])
+        comp_s   = compute_time_s(L["flops"] * BATCH_SIZE)
         mem_time = dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
                    else ssd_time_s(L["bytes"])
 

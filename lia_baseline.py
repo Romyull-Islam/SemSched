@@ -77,7 +77,7 @@ for L in layers:
 # ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
 prefill_latency = 0.0
 for i, L in enumerate(layers):
-    comp_s = compute_time_s(L["flops"] * PREFILL_FLOP_MULTIPLIER)
+    comp_s = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
     if placement[i] == PL_CXL_DEV_DRAM:
         mem_time = cxl_time_s(L["bytes"])
     elif placement[i] == PL_CXL_DEV_NAND:
@@ -103,7 +103,7 @@ for token_step in range(TOKENS):
     for i, L in enumerate(layers):
         weight_sz = L["bytes"]
         kv_scaled = kv_inc[L["name"]] * BATCH_SIZE
-        comp_s    = compute_time_s(L["flops"])
+        comp_s    = compute_time_s(L["flops"] * BATCH_SIZE)
 
         # ── Weight read from CXL tier ─────────────────────────────────────────
         if placement[i] == PL_CXL_DEV_DRAM:

@@ -37,7 +37,7 @@ from cxl_link import CXLLink   # two-queue full-duplex bus model
 
 from tiers import (
     HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
-    Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S
+    Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, IO_CHUNK_BYTES
 )
 from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
 from sim_cfg import (
@@ -375,20 +375,35 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     lat, nand_link_free_at = 0.0, 0.0
     stats = {"bytes_prefetched": 0, "warmup_time": 0}
 
-    # AGGRESSIVE RESEARCH WARMUP: Load NAND layers in parallel to computation
+    # Phase 1: parallel NAND warmup (staging NAND-resident layers into device DRAM).
+    # FIX (BigData 2026): the previous model divided the *whole* transfer time by
+    # |T|=16, which divides the bandwidth term as well and implies ~80 GB/s from a
+    # 5 GB/s device. Aggregate NAND bandwidth is a hard physical floor; a thread
+    # pool can only amortize the per-chunk access latency. The resulting cost is
+    # now charged into `lat` (previously it was computed and then discarded, so
+    # staging was free -- see REVISION_PLAN.md Part 2.A).
+    _nand_bytes = 0
+    _lat_term   = 0.0
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
-            dur   = transfer_time_s(L["bytes"], CXL_SSD_NAND)
-            start = max(lat, nand_link_free_at)
-            nand_link_free_at = start + (dur / IO_THREAD_POOL_SIZE)
+            _nand_bytes += L["bytes"]
+            _lat_term   += math.ceil(L["bytes"] / IO_CHUNK_BYTES) * CXL_SSD_NAND.chunk_latency_s
             cache.add(i, L["bytes"])
             cache.pin_for_session(i)
             stats["bytes_prefetched"] += L["bytes"]
+    nand_link_free_at = max(_nand_bytes / CXL_SSD_NAND.bw_Bps,
+                            _lat_term / IO_THREAD_POOL_SIZE)
+    stats["warmup_time"] = nand_link_free_at
+    lat += nand_link_free_at
 
     for i, L in enumerate(layers):
         sz        = L["bytes"]
-        #eff_flops = int(L["flops"] * (1.0 - sparsity[i]))
-        eff_flops = L["flops"]
+        # FIX (BigData 2026): prefill processes `seq_len` tokens for each of B
+        # sequences, so FLOPs = 2*P*seq_len*B. The baselines previously used a
+        # magic PREFILL_FLOP_MULTIPLIER=15 that SemSched did not apply at all,
+        # giving SemSched a 15x compute advantage in prefill. Parameters remain
+        # dense (no sparsity discount) -- prefill fires all neurons.
+        eff_flops = L["flops"] * seq_len * BATCH_SIZE
         mem = transfer_time_s(sz, HOST_DRAM if place[i] == PL_HOST_DRAM else CXL_DRAM)
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
@@ -507,6 +522,10 @@ def run_semantic_duplex_simulation():
         per_token_write_stall_pcts = []
         rows                       = []
         lat                        = 0.0
+        # FIX (BigData 2026): accumulate every decode step so throughput is the
+        # MEAN across tokens, matching FlexGen/LIA/LLMFlash. Previously SemSched
+        # reported only the final step, which with growing-KV is its slowest.
+        total_decode_lat           = 0.0
 
         for token_step in range(TOKENS):
             lat               = 0.0
@@ -524,7 +543,13 @@ def run_semantic_duplex_simulation():
             for idx, L in enumerate(layers):
                 sz        = L["bytes"]
                 has_kv    = inc[L["name"]] > 0
-                eff_flops = int(L["flops"] * (1.0 - sparsity[idx]))
+                # FIX (BigData 2026): (a) decode FLOPs scale with batch size --
+                # each of the B sequences runs the layer; (b) the previous
+                # (1 - sparsity) FLOP discount is removed. SemSched uses sparsity
+                # for *placement*, not to skip compute (§III/§IV), and neither
+                # FlexGen nor LIA received the discount. Sparsity-based compute
+                # skipping belongs to LLMFlash, where it is now modeled.
+                eff_flops = L["flops"] * BATCH_SIZE
 
                 # Adaptive low-batch streaming for MLP layers.
                 # At low batch, only `active_fraction` of MLP neurons fire, so transferring
@@ -670,6 +695,7 @@ def run_semantic_duplex_simulation():
 
             # sample measured Tx-lane utilization from the queue
             queue_uwrite_samples.append(link.write_utilization_pct())
+            total_decode_lat += lat
 
         # ── Post-loop aggregates ───────────────────────────────────────────────
         avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
@@ -681,15 +707,16 @@ def run_semantic_duplex_simulation():
         print(f"Cache_Hit_Rate: {hit_rate:.4f}%")
         comb = combine_sublayer_stats(rows)
         print(pd.DataFrame(comb).to_string())
-        print(f"\nSingle-token decode latency: {lat:.6f}s")
+        mean_lat = total_decode_lat / TOKENS
+        print(f"\nSingle-token decode latency: {mean_lat:.6f}s")
 
-        print(f"Decode throughput: {BATCH_SIZE / lat:.6f} t/s")
+        print(f"Decode throughput: {BATCH_SIZE / mean_lat:.6f} t/s")
         # Per-sequence prefill TPS (matches FlexGen/LIA/LLMFlash convention)
         # reporting convention (flexgen_baseline.py:155, lia_baseline.py:149).
         print(f"Prefill throughput: {PREFILL_TOKENS / pf_time_val:.2f} t/s")
 
         total_model_size = sum(L["bytes"] for L in layers)
-        total_time       = ssd_cold_time_s(total_model_size) + pf_time_val + TOKENS * lat
+        total_time       = ssd_cold_time_s(total_model_size) + pf_time_val + total_decode_lat
         print(f"Overall throughput: {(PREFILL_TOKENS + TOKENS) / total_time:.3f} t/s")
         print(f"Sparsity-based FLOP savings: {total_spar_flops:,}")
 

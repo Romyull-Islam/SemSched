@@ -28,7 +28,17 @@ from sim_cfg import (
     host_dram_capacity_bytes,
     cxl_dev_dram_capacity_bytes,
     BATCH_SIZE,
+    cpu_freq_hz, cpu_cores, flops_per_cycle_per_core, parallel_efficiency,
 )
+
+
+def compute_time_s(flops):
+    """Identical compute model to FlexGen/LIA/SemSched — compute is a property of
+    the simulated hardware, not of any baseline's scheduling policy."""
+    if flops <= 0:
+        return 0.0
+    return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
+                    * parallel_efficiency)
 from tiers import CXL_DRAM, CXL_SSD_NAND, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
 
@@ -167,6 +177,17 @@ def simulate_llmflash():
         total_kv_write_stall_s += step_kv
         t += step_kv
 
+        # FIX (BigData 2026): LLMFlash previously had NO compute term at all.
+        # Sparsity-driven compute skipping is this paper's own mechanism [1], so
+        # it legitimately receives the FLOP discount that FlexGen/LIA/SemSched do
+        # not: attention runs dense, FFN runs only the active neuron fraction.
+        # We take max(memory, compute) over the whole step, which credits
+        # LLMFlash with perfect load/compute overlap — deliberately generous to
+        # the strongest baseline.
+        comp_attn = sum(L["flops"] for L in pinned_layers) * BATCH_SIZE
+        comp_ffn  = sum(L["flops"] for L in ffn_layers) * BATCH_SIZE * active_frac_batch
+        t = max(t, compute_time_s(comp_attn + comp_ffn))
+
         total_decode_time += t
 
         # Write stall as % of this token's total step time
@@ -205,6 +226,11 @@ def simulate_llmflash():
         # DRAM rewrite + KV writes for B sequences
         t += transfer_time_s(prefill_rewrite, CXL_DRAM)
         t += BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, CXL_DRAM)
+
+        # Compute for this prefill token across B sequences. Sparsity collapses
+        # during prefill (all neurons fire), so no FFN discount here — matching
+        # this loop's own stated modeling assumption.
+        t = max(t, compute_time_s(sum(L["flops"] for L in layers) * BATCH_SIZE))
 
         total_prefill_time += t
 
