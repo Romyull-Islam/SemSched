@@ -382,19 +382,25 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     # pool can only amortize the per-chunk access latency. The resulting cost is
     # now charged into `lat` (previously it was computed and then discarded, so
     # staging was free -- see REVISION_PLAN.md Part 2.A).
-    _nand_bytes = 0
-    _lat_term   = 0.0
+    # Staging runs on the asynchronous I/O pool, i.e. on the NAND->device-DRAM
+    # DMA path, which is a resource independent of the compute engine. It is
+    # therefore OVERLAPPED with prefill compute, not serialized ahead of it: a
+    # layer stalls only if its staging has not completed by the time execution
+    # reaches it. `stage_finish[i]` is layer i's staging completion time on a
+    # bandwidth-limited NAND channel (threads amortize per-chunk latency only).
+    stage_finish = {}
+    t_stage      = 0.0
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
-            _nand_bytes += L["bytes"]
-            _lat_term   += math.ceil(L["bytes"] / IO_CHUNK_BYTES) * CXL_SSD_NAND.chunk_latency_s
+            bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps
+            lat_term = (math.ceil(L["bytes"] / IO_CHUNK_BYTES)
+                        * CXL_SSD_NAND.chunk_latency_s) / IO_THREAD_POOL_SIZE
+            t_stage += bw_term + lat_term
+            stage_finish[i] = t_stage
             cache.add(i, L["bytes"])
             cache.pin_for_session(i)
             stats["bytes_prefetched"] += L["bytes"]
-    nand_link_free_at = max(_nand_bytes / CXL_SSD_NAND.bw_Bps,
-                            _lat_term / IO_THREAD_POOL_SIZE)
-    stats["warmup_time"] = nand_link_free_at
-    lat += nand_link_free_at
+    stats["warmup_time"] = t_stage
 
     for i, L in enumerate(layers):
         sz        = L["bytes"]
@@ -409,10 +415,12 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
         pipe_time  = mem + (chunks - 1) * comp_chunk if chunks > 1 else max(mem, comp_chunk)
 
+        # Wait for this layer's asynchronous staging only if it has not finished.
+        start = max(lat, stage_finish.get(i, 0.0))
         if not sched.should_activate_duplex(sparsity[i]):
-            lat += pipe_time
+            lat = start + pipe_time
         else:
-            lat += pipe_time * DUPLEX_PENALTY
+            lat = start + pipe_time * DUPLEX_PENALTY
 
         tmon.record_read(sz)
     return lat, stats
