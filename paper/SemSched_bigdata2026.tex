@@ -1,0 +1,545 @@
+\documentclass[10pt,conference,letterpaper]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage[T1]{fontenc}
+\usepackage{balance}
+\usepackage{url}
+\bibliographystyle{splncs04}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{array}
+\usepackage{textcomp}
+\usepackage{subcaption}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{comment}
+\usepackage{listings}
+\usepackage{subfigure}
+\pagestyle{plain}
+\emergencystretch 3em
+\linepenalty=10
+\widowpenalty=10000
+\clubpenalty=10000
+
+\usepackage{tikz}
+\newcommand{\circled}[1]{%
+  \tikz[baseline=(C.base)]\node[%
+    circle, fill=white, draw=black, inner sep=1pt, minimum size=1em
+  ] (C) {\textcolor{black}{\footnotesize #1}};%
+}
+
+% ---- REVISION MARKER: remove \todo definition and all \todo{} before submitting
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+\setlength{\floatsep}{-1pt plus 1pt minus 3pt}
+\setlength{\textfloatsep}{-1pt plus 1pt minus 3pt}
+\setlength{\intextsep}{1pt plus 1pt minus 3pt}
+\setlength{\abovecaptionskip}{-1pt plus 1pt minus 3pt}
+\setlength{\belowcaptionskip}{-3.5pt}
+\setlength{\abovedisplayskip}{0pt}
+\setlength{\belowdisplayskip}{0pt}
+\setlength{\abovedisplayshortskip}{-1pt}
+\setlength{\belowdisplayshortskip}{0pt}
+
+\usepackage[colorlinks, linkcolor=black, anchorcolor=black,
+            citecolor=black, urlcolor=black]{hyperref}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{
+SemSched: Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference%
+\thanks{Simulator implementation and steps to reproduce our results are available at \url{https://github.com/Romyull-Islam/SemSched}.}
+}
+
+\author{\IEEEauthorblockN{Md Romyull Islam, Tu N. Nguyen, Selena He, Yong Shi, Kun Suo}
+\IEEEauthorblockA{
+Department of Computer Science, Kennesaw State University, GA, USA\\
+Email:
+\ mislam22@students.kennesaw.edu, \{she4, tu.nguyen,  yshi5, ksuo\}@kennesaw.edu}
+}
+
+\maketitle
+
+%--------------------[Abstract]--------------------
+\begin{abstract}
+Modern large language models (LLMs) used in long-context applications produce working sets that often exceed typical DRAM capacity, leading to memory-induced stalls during inference. Hybrid Compute Express Link (CXL) devices combine a fast device-side DRAM cache with high-capacity NAND storage on a single PCIe card, a promising platform for memory expansion. However, current software treats this as passive storage and fails to use its internal hierarchy or full-duplex links. This causes latency stalls and wastes available bandwidth. We propose SemSched, a Hybrid-CXL orchestration layer built on a single insight: LLM scheduling on hybrid DRAM--NAND memory becomes tractable when decoder blocks are split into attention and MLP sub-layers and scheduled separately. SemSched proactively places and prefetches attention and MLP blocks according to their memory behavior, stages NAND-resident layers through an asynchronous I/O pool that overlaps with prefill compute, and schedules KV-cache writes on the otherwise idle CXL write lane. On a 72B model, SemSched delivers a $1.67\times$ decode speedup at FP16 16H+64C, $1.45\times$ at INT8 16H+32C, and $1.23\times$ at FP32 32H+64C over the strongest streaming baseline, while matching or slightly exceeding demand paging on prefill. We further show that these gains are contingent on the compute engine: below roughly $3.5$~TFLOPS the workload is compute-bound and the advantage disappears entirely, which both bounds the applicability of our design and clarifies why memory-hierarchy scheduling matters precisely on the fast accelerators used in practice.
+\end{abstract}
+%--------------------[Abstract]--------------------
+
+\begin{IEEEkeywords}
+CXL, Hybrid Memory, LLM Inference, Semantic Scheduling, KV-Cache Management, Prefetching
+\end{IEEEkeywords}
+
+\section{Introduction}
+\label{sec:intro}
+
+\noindent
+LLMs used in long-context applications produce working sets that exceed typical server DRAM, making memory capacity and bandwidth major bottlenecks in token generation~\cite{tang2024exploring}. Compute Express Link (CXL) technology offers a solution, letting CPUs and GPUs access large memory pools via standard load/store instructions. Recent measurements~\cite{gu2025pim,li2023pond,yang2025cxlaimpod} show CXL provides the bandwidth and latency needed to scale memory capacity at low cost.
+
+Hybrid CXL devices (CMM-H) combine on-device DRAM cache with high-capacity NAND flash on a single PCIe card, forming a two-level memory hierarchy~\cite{soltaniyeh2025revisiting}. Existing software treats hybrid CXL as a single passive storage layer with reactive, page-level demand paging, failing to use the DRAM/NAND separation or the full-duplex CXL link. The result is underutilized write-channel bandwidth, increased latency from synchronous NAND access, and cache thrashing from indiscriminate eviction.
+
+CMM-H supports two modes: device-managed (DRAM acts as a transparent LRU cache, flat namespace) and host-managed (the CXL 2.0 \texttt{CXL.mem} protocol exposes device DRAM as a NUMA node accessible via load/store instructions~\cite{soltaniyeh2025revisiting}). SemSched uses host-managed mode because device-managed LRU cannot distinguish attention sub-layers from MLP sub-layers, evicting critical attention blocks at the same rate as dense MLPs under capacity pressure. The vendor characterization confirms this replacement policy is 8-way LRU with MRU insertion~\cite{soltaniyeh2025revisiting,zeng2025performance}, so the limitation is a property of the shipping hardware rather than an assumption.
+
+SemSched models hybrid CXL memory as a three-layer hierarchy (host DRAM, CXL device DRAM, CXL device NAND) and exploits the predictable execution order of Transformer layers to prefetch upcoming blocks and overlap transfers with compute. Because attention and MLP sub-layers exhibit distinct memory behaviors (varying sizes, sparsity, latency sensitivity), SemSched splits blocks into semantic components and routes them across tiers accordingly. Once attention and MLP are addressable separately, semantic placement, prefill warmup, KV-write scheduling, and sparsity-aware eviction all follow as natural consequences. Unlike prior work that offloads compute~\cite{kim2025lia} or pools DRAM tiers without write-channel awareness~\cite{alizadeh2024llm}, SemSched is the first to unify semantic sub-layer-aware placement with full-duplex CXL scheduling in a single orchestration layer.
+
+\noindent\textbf{Scope.} SemSched targets \emph{batched serving} ($B \ge 16$) of typical chat workloads with prefill lengths below roughly 1000 tokens, running on a compute engine fast enough that the workload remains memory-bound. This regime matters because it is where hosted inference services operate: throughput per socket, not single-request latency, sets deployment cost. Outside it --- single-user latency ($B{=}1$), very long prompts ($\ge$2K tokens), or slow compute engines --- simpler streaming policies match or beat SemSched, and we quantify each boundary in \S\ref{sec:evaluation}. We state this up front because the applicability limits are a result of this work, not a caveat to it.
+
+\noindent Table~\ref{tab:gap_mapping} summarizes our three contributions, each tied to a specific gap in current CXL inference stacks: (1)~Semantic Prefill Warmup with sub-layer-aware lookahead, (2)~Sparsity-Aware Placement, and (3)~Opportunistic Write Scheduling on the idle CXL write~lane.
+
+\begin{table*}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{-0.1cm}
+\scriptsize
+\centering
+\caption{SemSched Roadmap: Connecting Research Gaps to Contributions}
+\label{tab:gap_mapping}
+\begin{tabular}{@{}c p{0.19\linewidth}p{0.2\linewidth}p{0.53\linewidth}@{}}
+\toprule
+\textbf{\#} & \textbf{Research Gap} & \textbf{Motivation Case Study} & \textbf{SemSched Contribution} \\
+\midrule
+1 & \textbf{I/O Latency Wall} Existing stacks cause reactive NAND stalls.
+& 72B model performance collapses due to synchronous fetches (Fig.~\ref{fig:combined_motivation}a).
+& \textbf{Phase 1:} Semantic Prefill Warmup stages weights into device DRAM on an asynchronous I/O pool that overlaps with prefill compute
+\newline \textbf{Phase 2:} Sub-layer-aware lookahead overlaps transfers with compute during decode. \\
+\midrule
+2 & \textbf{Semantic Blindness} 8-way LRU device caching evicts critical layers.
+& Policies hit ceiling once working set exceeds DRAM (Fig.~\ref{fig:combined_motivation}b).
+& \textbf{Pre-Execution \& Phase 2:} Sparsity-Aware Placement prioritizes pinning of attention and high-sparsity MLP sub-layers. \\
+\midrule
+3 & \textbf{Bus Under-utilization} Inference is read-dominant.
+& CXL link underused during decode (0\% write utilization) (Table.~\ref{tab:hardware_efficiency}).
+& \textbf{Phase 2:} Opportunistic Write Scheduling injects KV-cache writes on the idle CXL lane without interrupting the read stream. \\
+\bottomrule
+\end{tabular}
+\vspace{-3mm}
+\end{table*}
+
+\section{Background and Motivation}
+\label{sec:background_motivation}
+
+\subsection{The Memory Crisis and CXL}
+\noindent
+Modern LLMs need memory capacities far beyond standard server configurations. Llama 2 70B requires about 140 GB in half-precision~\cite{touvron2023llama2openfoundation}, creating a capacity gap for deployment at scale. Memory cost differences amplify this gap: NAND flash is an order of magnitude cheaper (\$0.15/GB) than DRAM at \$10.00--\$12.50 per gigabyte~\cite{ddr5pricing2026,pcmag2025soar}. Hybrid-CXL devices address this by pairing high-speed device DRAM with large-capacity NAND on one platform. The resulting three-tier hierarchy enables memory expansion for LLM inference~\cite{soltaniyeh2025revisiting}.
+
+NVMe-SSD host-side tiering is limited by the software I/O stack: interrupts and context switches add 10--100~$\mu$s per access. Hybrid CXL bypasses this layer and reaches device NAND in a few~$\mu$s via CXL.mem~\cite{zeng2025performance}.
+
+\subsection{Transformer Memory Characteristics}
+\noindent
+Autoregressive models process tokens through a fixed pipeline. Layers run in a deterministic order with known sizes, making memory access patterns predictable and allowing efficient prefetching~\cite{kim2025lia,tang2024exploring}.
+
+\noindent\textbf{Operational Heterogeneity.} Each decoder block contains a self-attention layer and an MLP~\cite{jiang2023mistral7b}, with distinct resource demands. Self-attention is memory-bound and latency-sensitive; MLP has higher arithmetic intensity. We exploit this diversity to mask memory latency by overlapping compute-heavy MLP execution with asynchronous weight transfers.
+
+\noindent\textbf{Quantization.} Modern quantization reduces model size by 2--8$\times$ while speeding up compute~\cite{dettmers2022gpt3}. Faster compute leaves less time to overlap data transfers, so the processor often waits idle for the next layer. CXL bandwidth is lower than host DRAM, so the interface becomes a persistent bottleneck unless a hierarchy-aware caching layer masks link latency~\cite{kim2025lia}.
+
+\subsection{Motivation and Roadmap}
+\label{sec:motivation}
+\noindent
+Standard software stacks fail to use Hybrid-CXL effectively. Table~\ref{tab:gap_mapping} summarizes the gap between standard schedulers and the hardware hierarchy.
+
+\begin{figure*}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{0.1cm}
+    \centering
+    \includegraphics[width=\linewidth]{figures/fig_motivation_comprehensive.pdf}
+    \caption{(a) Decode throughput scaling reveals the latency wall.
+(b) Cumulative per-token miss penalty across caching policies. \todo{regenerate from corrected simulator}}
+    \label{fig:combined_motivation}
+\end{figure*}
+
+\noindent\textbf{The Performance Collapse.} Scaling from 13B to 72B parameters causes a sharp performance drop across standard baselines: capacity-oriented (FlexGen), OS-integrated (LIA), and sparsity-aware (LLMFlash). The 72B model collapses under NAND-bound configurations, with the system spending the overwhelming majority of decode time stalled on reactive NAND fetches~\cite{soltaniyeh2025revisiting}. SemSched addresses this by staging weights before decoding begins.
+
+\noindent\textbf{The Semantic Gap.} Reactive caching (LRU, LFU) incurs a substantially higher miss penalty than pinning policies. As shown in Fig.~\ref{fig:combined_motivation}(b), LRU and LFU perform identically: the periodic, sequential nature of LLM inference gives every layer equal frequency and recency priority, causing constant cache thrashing. We define the \emph{cumulative per-token miss penalty} as the additional time a layer costs when served from NAND rather than from device DRAM, summed over all layers in one decode step:
+\[
+\Pi = \sum_{\ell} \max\!\big(0,\; \max(T^{\ell}_{\text{comp}},T^{\ell}_{\text{NAND}}) - \max(T^{\ell}_{\text{comp}},T^{\ell}_{\text{CXL}})\big).
+\]
+Static and semantic pinning look equivalent when DRAM holds the critical layers, but under capacity pressure static tiering fails to adapt to dynamic sparsity. SemSched breaks this ceiling by using semantic sub-layer awareness to selectively pin components.
+
+\noindent\textbf{The Bandwidth Underutilization.} Standard inference is read-dominant~\cite{yang2025cxlaimpod}. Modern memory controllers use write buffers and favor reads, but reads and writes share one bus and must take turns. The vendor characterization of CMM-H makes this explicit, noting that back-to-back read issue ``cannot make use of the full-duplex PCIe link''~\cite{zeng2025performance}. When LLMs spill parameters and KV to Hybrid-CXL, writes compete with reads on the same link, and switching between them creates gaps where the CXL lane carries little useful read traffic. SemSched treats the CXL device transmit path as a separate write lane and schedules KV-cache writes there, so the receive path can focus on fetching weights and KV.
+
+\section{Related Work}
+\label{sec:related}
+
+\noindent
+\textbf{CXL Systems and Memory Expansion.}
+Foundational studies~\cite{wang2024exploring,wang2025performance,liu2024dissecting} characterize CXL bandwidth and latency. For LLMs, recent work focuses on offloading the Key-Value (KV) cache. Tang et al.~\cite{tang2024exploring} show CXL-based KV placement enables 30\% larger batch sizes and reduces GPU requirements by up to 87\%. Beluga~\cite{yang2025beluga} adds direct GPU access to shared memory via a CXL switch, improving throughput by 7.35$\times$ over RDMA. OASIS~\cite{seo2025oasis} clusters outlier data to address CXL bandwidth bottlenecks. Liaw and Chen~\cite{liaw2025analysis} target memory allocation for fine-tuning with a 1.8$\times$ speedup. Tang et al.~\cite{tang2024simulating} extend CXL to cluster-scale training. These systems use CXL for \emph{state} or \emph{training}; we focus on \emph{inference parameters}. Unlike generic pooling~\cite{li2023pond}, SemSched exploits the DRAM/NAND hierarchy of Hybrid-CXL devices and shapes traffic to use full-duplex bandwidth~\cite{yang2025cxlaimpod}.
+\todo{refresh with 2025--26 CXL-for-LLM work: near-data processing for CXL bandwidth amplification; CXL-enabled KV-cache management beyond GPU limits; TraCT rack-scale disaggregated serving; Equilibria multi-tenant CXL tiering}
+
+\noindent
+\textbf{Hardware-Software Co-Design and Tiering.}
+Hardware-software co-design has been used to overcome physical limits. CENT~\cite{gu2025pim} uses GDDR6-PIM for 2.3$\times$ higher throughput than GPU baselines. Park et al.~\cite{park2024lpddr} propose LPDDR-based CXL-PNM, reducing TCO by 40\%. Liu et al.~\cite{liu2024enabling} report 2.1$\times$ gains for recommendation models via near-CXL processing. SkyByte~\cite{zhang2025skybyte} bridges byte-addressable CXL and page-addressable flash through an OS-co-designed controller. On the software side, Transparent Page Placement (TPP)~\cite{marufh2023tpp} promotes pages by access frequency, and HeMem~\cite{raybuck2021hemem} improves NVM scalability via asynchronous batching. These approaches are reactive and incur hotness-detection latency. SemSched instead leverages deterministic LLM decoding for proactive, zero-stall data movement without OS-level context switches.
+
+\begin{table}[t]
+\scriptsize
+\centering
+\caption{System Configuration Parameters. Memory configurations use the shorthand \texttt{<host>H+<cxl>C}, e.g.\ 16H+32C denotes 16~GB host DRAM plus 32~GB CXL device DRAM.}
+\label{tab:system_params}
+\begin{tabular}{llp{0.24\linewidth}}
+\hline
+\textbf{Component} & \textbf{Specification} & \textbf{Source} \\
+\hline
+\textbf{Compute} & Xeon 6 (AMX), 64C @ 2.0 GHz, & vendor spec \\
+                 & 1024 FLOP/cyc/core BF16, 88\% eff. & \\
+                 & $=115.3$ TFLOPS sustained & \\
+\textbf{Host DRAM} & 16--32~GB, DDR5-4800, 38.4~GB/s, 200~ns & JEDEC \\
+\textbf{CXL DRAM} & 32--64~GB, 27~GB/s, 505~ns & \cite{soltaniyeh2025revisiting} \\
+\textbf{CXL NAND} & 256~GB, 5~GB/s, 1.5~$\mu$s & \cite{soltaniyeh2025revisiting} \\
+\textbf{NVMe SSD} & 512~GB, 7.6~GB/s (Gen4), 20~$\mu$s & Gen4 x4 \\
+\hline
+\textbf{Models} & Mistral 7B, Llama 13B, Qwen3 20B, Qwen2.5 72B & \\
+\textbf{I/O chunk} & 256~KB (NAND/SSD access granularity) & \\
+\textbf{Quantization} & FP32 (4B), FP16 (2B), INT8 (1B), INT4 (0.5B) & \\
+\textbf{Seq. length} & 512 tokens (prefill/KV) & \\
+\textbf{Decode tokens} & 16 (gen phase) & \\
+\textbf{Batch size} & 1--128 & \\
+\bottomrule
+\end{tabular}
+\vspace{1mm}
+\end{table}
+
+\noindent
+\textbf{Inference Offloading and Optimization.}
+Before CXL, software systems addressed the memory wall via offloading. DeepSpeed-Inference~\cite{aminabadi2022deepspeed} and FlexGen~\cite{sheng2023flexgen} pioneered aggressive CPU/NVMe offloading for massive models on a single GPU. They optimize throughput via zig-zag scheduling but treat storage as a block device ($10\text{--}100\mu s$); large batch sizes degrade interactive performance.
+The closest work to ours is LIA~\cite{kim2025lia}, which uses CXL for single-GPU inference but offloads \emph{computation} to the CPU via AMX instructions. SemSched instead hides latency within the memory hierarchy using the CXL device's internal DRAM cache. Standard optimizations complement our approach: quantization (e.g., W4A8KV4~\cite{lin2025qserve}) reduces memory footprints by 1.2--3.5$\times$ but accelerates compute faster than the CXL link can supply data, making tier-aware placement more critical. Continuous batching (Orca~\cite{yu2022orca}, vLLM~\cite{kwon2023efficient}) maximizes iteration-level concurrency, and memory-aware scheduling~\cite{pang2025optimizing} improves throughput by 8--28\%.
+Sparsity-prediction systems (Deja Vu~\cite{liu2023dejavu}, layer-dependent activation sparsity~\cite{wild2024uncovering}) skip computation by predicting zero-activations. SemSched repurposes these insights for memory management, using the \emph{effect} of sparsity on working set size to prioritize memory-bound layers for the CXL DRAM cache; it does \emph{not} skip compute.
+
+\section{System Design}
+\label{sec:systemdesign}
+
+\subsection{System Assumptions and Parameters}
+\label{sec:assumptions}
+\noindent
+Our simulator models commodity hardware bandwidths and memory hierarchies~\cite{wang2025performance,soltaniyeh2025revisiting}. Current CMM-H devices fill their DRAM cache on demand with no application-aware prefetching, so a software runtime is needed to stage layers ahead of use. Existing CXL simulators such as CXLMemSim~\cite{yang2023cxlmemsim} and CXL-SSD-Sim~\cite{wang2025full} do not model the CMM-H DRAM-over-NAND cache at sub-layer granularity, so we built a trace-driven Python simulator for layer-by-layer inference. Hardware, workload, and quantization parameters appear in Table~\ref{tab:system_params}.
+
+\noindent\textbf{Device bandwidths.} The CXL tier parameters follow the CMM-H prototype of Soltaniyeh et al.~\cite{soltaniyeh2025revisiting}: a PCIe Gen5~$\times$8 device with a 48~GB DDR4 cache, measured at $\approx$27~GB/s on DRAM-cache hits and $\approx$5~GB/s once the working set exceeds the cache. We note that a separate characterization~\cite{zeng2025performance} reports 4.5~GB/s for a different, earlier prototype with a PCIe Gen4~$\times$8 host link and a 16~GB cache; the two figures describe different devices, and we model the Gen5 part throughout.
+
+\noindent\textbf{Compute engine.} We model an AMX-capable Intel Xeon~6 sustaining 115.3~TFLOPS. This choice is load-bearing rather than incidental. Decode arithmetic intensity at batch $B$ is $2B/\text{bytes-per-param}$, so at $B{=}128$ in FP16 it is 128~FLOP/byte, and saturating the 27~GB/s CXL DRAM tier requires at least $3.46$~TFLOPS. Below that threshold the engine, not the memory hierarchy, sets the step time, and tier placement becomes irrelevant --- a regime we quantify in \S\ref{sec:compute-sens}. Modeling a slow CPU would therefore not make our mechanism look better; it would erase it. We use the same compute model for all four simulators, since compute is a property of the simulated hardware rather than of any baseline's policy.
+
+\noindent
+\textbf{Workload Model.} We simulate autoregressive inference with batch sizes and token prefill from Table~\ref{tab:system_params}, followed by a 16-token decode per batch. Each decode token triggers all model layers sequentially, with incremental KV-cache growth per batch slot.
+
+\noindent
+\textbf{Compute Model.} Layer execution time is $T_\text{comp}(\ell) = \text{FLOPs}(\ell)\,/\,f_\text{engine}$, with $\text{FLOPs}(\ell) = 2\,P_\ell B$ during decode and $2\,P_\ell\,S\,B$ during prefill for sequence length $S$. FLOPs scale with batch size in every simulator.
+
+\noindent
+\textbf{Transfer Latency Model.} Layer transfer latency is
+$T_\text{transfer}(\ell) = \text{bytes}(\ell) / \text{BW}_\text{tier} + L_\text{tier}$,
+following the parametric methodology of~\cite{soltaniyeh2025revisiting}.
+
+\noindent\textbf{Layer Representation \& Modeling.} Simulated parameters remain dense, and no simulator receives a sparsity-based FLOP discount except LLMFlash, for which sparsity-driven compute skipping is the mechanism its own paper contributes. FlexGen and LIA treat decoder blocks as monolithic units for reactive paging. LLM-in-a-Flash decomposes blocks into attention and MLP sub-layers and pools Host and CXL DRAM into a single tier. SemSched also decomposes blocks but routes them semantically: prioritizing attention and high-sparsity MLPs for Host DRAM, while denser MLPs are mapped to CXL Device DRAM.
+
+\begin{figure}[t]
+  \setlength{\abovecaptionskip}{0.2cm}
+  \setlength{\belowcaptionskip}{0.3cm}
+    \centering
+    \includegraphics[width=0.99\linewidth]{figures/Duplex2.pdf}
+    \caption{SemSched orchestrates the placement of model layers across Host DRAM, CXL Device DRAM, and NAND based on semantic importance.}
+    \label{fig:sim_Duplex}
+\end{figure}
+
+\begin{figure}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{0.1cm}
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures/scheduler2-crop.pdf}
+    \caption{The SemSched Scheduler monitors the CXL read/write ratio in real-time and controls semantic-aware placement.}
+    \vspace{3pt}
+\label{fig:scheduler}
+\end{figure}
+
+\subsection{Baseline Simulators}
+\noindent
+We selected three baselines spanning the design space of LLM offloading and CXL memory management: FlexGen for capacity-oriented offloading, LIA for OS-integrated CXL tiering, and LLM-in-a-flash for hardware-aware asynchronous scheduling.
+
+\noindent\textbf{Baseline fidelity principle.} Each baseline follows its own paper's \emph{policy} --- placement, eviction, streaming strategy, and published constants --- while all four share identical \emph{hardware} modeling: compute rate, FLOP accounting, tier bandwidths and latencies, KV growth, and metric definitions. A baseline may be advantaged or disadvantaged only by its own design decisions, never by our modeling of the machine. Any deviation from a source paper is stated explicitly below.
+
+\noindent
+\textbf{Capacity-Optimized Simulator: FlexGen.}
+We implement the FlexGen~\cite{sheng2023flexgen} memory policy. FlexGen uses a ``Strict Block-Diagonal Offloading'' strategy, treating memory as a unified hierarchy (GPU $\rightarrow$ CPU $\rightarrow$ Disk). Our simulator mimics this by pinning hot layers (embeddings, heads) to Host DRAM and streaming the remaining decoder blocks from SSD (or CXL NAND) via demand paging. This maximizes capacity but suffers from serialization latency.
+
+\noindent
+\textbf{System-Optimized Simulator: LIA.}
+We implement LIA's~\cite{kim2025lia} memory policy. LIA places all model parameters in CXL device DRAM, reserving Host DRAM exclusively for KV-cache writes and activations. Overflow spills to CXL Device NAND. Weight reads use the CXL bus and KV writebacks the DDR bus; since these are physically separate, we model them as overlapping with compute. A conservative serial-sum variant gives results within 0.3\%. \emph{Deviation:} we omit LIA's cooperative AMX CPU--GPU compute offloading and model only its CXL memory tiering. This is defensible at our operating point: at $B{=}128$, LIA's own optimal policy assigns all parameter-dependent sublayers to the accelerator, and our shared compute engine already sits far above the $3.46$~TFLOPS memory-bound threshold, so compute placement is not decisive for throughput.
+
+\noindent\textbf{Sparsity Optimized Simulator: LLMFlash.}
+We implement a CXL-adapted baseline based on LLM-in-a-flash~\cite{alizadeh2024llm}. LLMFlash pools Host and CXL DRAM into a unified tier --- modeled here as a capacity-weighted blend of the two DRAM bandwidths --- and uses ``selective persistence'' to pin attention weights in DRAM. For MLP sub-layers it exploits dynamic activation sparsity, streaming only active neurons from NAND via a sliding window ($k{=}5$) with row-column bundling ($1.8\times$ NAND throughput). Because sparsity-driven compute skipping is this paper's own contribution, LLMFlash is the one baseline that receives a sparsity FLOP discount. Its structural limits are inherited from the design: during prefill all FFN neurons must fire, forcing a full FFN reload from CXL NAND per token; during decode, the union of active neurons across sequences causes ``sparsity collapse'' once the expanded working set overflows the DRAM window.
+
+\subsection{The SemSched Architecture}
+\label{sec:semantic-duplex}
+\noindent
+The SemSched framework implements the semantic placement strategy in Figure~\ref{fig:sim_Duplex}. We use the term ``semantic'' because the scheduler leverages the functional properties of Transformer sub-layers (Attention vs.\ MLP) to inform its decisions. The system runs a pre-execution static analysis followed by two runtime phases.
+
+\noindent
+\textbf{Pre-Execution: Static Analysis and Placement.} The Static Analyzer computes per-layer sparsity to establish Semantic-Aware Placement. Decoder blocks contain comparable parameter counts, but activation sparsity varies across the model architecture~\cite{wild2024uncovering}. Placement proceeds by priority: output head, then latency-sensitive Attention sublayers, then embeddings, then MLP sublayers whose sparsity exceeds $0.60$, all into Host DRAM while capacity remains (\textbf{Gap~2}). Remaining low-sparsity, compute-bound MLP sublayers are assigned to CXL device DRAM, where their higher arithmetic intensity masks the added CXL latency. Sparsity here is a static, architectural property derived from published per-layer profiles~\cite{wild2024uncovering}; it takes no workload input, so placement is fixed for a given model and memory configuration and does not vary with the request stream. Real systems use standard OS tools (\texttt{mmap}, \texttt{mbind}) to lock high-priority memory into the CXL device as a zero-core virtual NUMA node. Layers assigned to Host DRAM remain pinned for the entire session.
+
+\noindent
+\textbf{Phase 1: Asynchronous Parallel Warmup (Prefill).} Before the first decode token is issued, SemSched stages all NAND-resident layers into CXL Device DRAM using an asynchronous I/O thread pool ($|T|{=}16$) (\textbf{Gap~1}). Two properties matter. First, aggregate NAND bandwidth is a hard physical floor: a thread pool amortizes the per-chunk access latency but cannot multiply the device's byte-movement rate, so layer $i$ completes staging at $t_{\text{stage}}(i) = \sum_{j \le i} \big(\text{bytes}_j/\text{BW}_\text{NAND} + \text{chunks}_j \cdot L_\text{NAND}/|T|\big)$. Second, staging occupies the NAND-to-device-DRAM DMA path, a resource independent of the compute engine, so it \emph{overlaps} with prefill computation rather than preceding it: a layer stalls only if its staging has not completed when execution reaches it. Staged layers are session-pinned, preventing eviction during decode. Because per-layer prefill compute exceeds per-layer staging time at our operating point, staging is almost entirely hidden --- the mechanism removes NAND fetches from the decode critical path at close to zero prefill cost, rather than by making staging free.
+
+\noindent
+\textbf{Phase 2: Semantic-Scheduled Decode.} The controller manages the hierarchy through four components. \circled{1} \textbf{Bandwidth Monitor.} Standard inference is read-heavy ($>99.9\%$), so the write channel stays idle~\cite{yang2025cxlaimpod} (\textbf{Gap~3}). The monitor tracks the CXL read/write ratio to identify unused bandwidth. \circled{2} \textbf{Write Scheduler.} Guided by the monitor, it performs Opportunistic Write Scheduling on the idle write lane, evicting cold layers using sparsity-aware scoring and streaming KV deltas to the Tx queue. Write volume per token is bounded by KV-cache growth, ensuring no contention with the dominant read stream. \circled{3} \textbf{Attention Guided Cache.} This manages CXL Device DRAM as a dynamic cache exclusively for NAND-bound layers, never migrating data to or from Host DRAM. Layers are scored by $\textit{Score}(j) = \text{Type}(j)\cdot\text{Sparsity}_j$, with attention weighted above MLP; high-score layers are pinned and dense layers stream from NAND~\cite{alizadeh2024llm,wild2024uncovering}. Note that this runtime score is distinct from the static placement rule above: placement uses a priority ordering with a sparsity threshold, whereas prefetch ranking and eviction share the multiplicative score. \circled{4} \textbf{Execution Pipeline.} This implements Algorithm~\ref{alg:SemSched_final}, using a deep lookahead window ($K{=}32$) to re-stage layers evicted under capacity pressure. It employs a Semantic Streaming Overlap factor ($\sigma{=}0.85$), letting computation start before full I/O completion. At small batch ($B<B_{th}{=}4$) the pipeline scales MLP transfer bytes by $1-(1-\text{sparsity}_i)^B$. The CXL link is modeled as two independent lanes (Rx for reads, Tx for KV writes) at 27~GB/s per lane~\cite{soltaniyeh2025revisiting,wang2025performance,liu2024dissecting}; the Rx lane is an accounting lane, with read timing set by the tier model. A KV write completing within the active read window incurs no penalty; otherwise its slip is charged as a stall. Tx-lane utilization is measured from queue state rather than byte accounting.
+
+\begin{algorithm}[t]
+\caption{SemSched: Unified Staging and Execution}
+\label{alg:SemSched_final}
+\begin{algorithmic}[1]
+\footnotesize
+\Require Sub-layers $L$; Placement $P$; Cache $C$; CXL Link $\mathcal{Q}$; I/O Threads $|T|=16$; Lookahead $K=32$; Overlap $\sigma=0.85$; Adaptive Batch Threshold $B_{th}=4$
+\State $t_{\text{stage}} \leftarrow 0$; $\textit{stage\_finish} \leftarrow \emptyset$
+
+\Statex \textbf{Phase 1: Asynchronous Parallel Warmup (Prefill)}
+\For{each layer $i \in L$ where $P[i] = \text{NAND}$}
+    \State $t_{\text{bw}} \leftarrow L[i].\text{bytes} \,/\, \text{BW}_{\text{NAND}}$
+    \Comment{bandwidth is a hard floor}
+    \State $t_{\text{lat}} \leftarrow \text{chunks}(L[i]) \cdot \mathcal{L}_{\text{NAND}} / |T|$
+    \Comment{threads amortize latency only}
+    \State $t_{\text{stage}} \leftarrow t_{\text{stage}} + t_{\text{bw}} + t_{\text{lat}}$
+    \State $\textit{stage\_finish}[i] \leftarrow t_{\text{stage}}$
+    \State $C.\mathrm{add}(i, L[i].\text{bytes})$; $C.\mathrm{session\_pin}(i)$
+\EndFor
+\Statex \textbf{Prefill execution (staging overlaps with compute)}
+\State $\textit{lat} \leftarrow 0$
+\For{each layer $i = 1$ to $|L|$}
+    \State $t_{\text{comp}} \leftarrow \text{compute\_time}(2 \cdot P_i \cdot S \cdot B)$
+    \State $\textit{start} \leftarrow \max(\textit{lat},\ \textit{stage\_finish}[i])$
+    \Comment{stall only if not staged}
+    \State $\textit{lat} \leftarrow \textit{start} + \text{pipe}(t_{\text{comp}}, \text{transfer\_time}(i, P[i]))$
+\EndFor
+
+\Statex \textbf{Phase 2: Semantic-Scheduled Decode}
+\For{token $t = 1$ to $N_{\text{gen}}$}
+    \State $w \leftarrow 0$
+    \For{each layer $i = 1$ to $|L|$}
+        \State $t_{\text{comp}} \leftarrow \text{compute\_time}(2 \cdot P_i \cdot B)$
+        \Comment{dense; scales with batch}
+        \If{$L[i]$ is MLP \textbf{and} $B < B_{th}$}
+            \State $L[i].\text{bytes} \leftarrow L[i].\text{bytes} \times (1 - (1 - \text{sparsity}_i)^B)$
+        \EndIf
+        \State $S \leftarrow \{j \in [i+1, \dots, i+K] \mid P[j]=\text{NAND}, j \notin \text{fetched}\}$
+        \State Rank $S$ by $\textit{Score} = \text{Type}(j) \cdot \text{Sparsity}_j$ and assign to idle $T$
+        \If{$C.\mathrm{contains}(i)$}
+            \State $step\_lat \leftarrow \max(t_{\text{comp}}, \text{transfer\_time}(i, \text{CXL-DRAM}))$
+        \Else
+            \State $t_{\text{stall}} \leftarrow \max(0, \text{Ready}(i, T) - w)$
+            \State $step\_lat \leftarrow t_{\text{stall}} (1 - \sigma) + \max(t_{\text{comp}}, \text{transfer\_time}(i, \text{NAND}))$
+        \EndIf
+        \If{$L[i]$ is Attention}
+            \State $kv\_read \leftarrow (S+t) \cdot \text{kv\_per\_tok} \cdot B$
+            \State $step\_lat \leftarrow step\_lat + \text{transfer\_time}(kv\_read, \text{CXL-DRAM})$
+        \EndIf
+        \If{$\text{has\_kv}(i)$ \textbf{and} $P[i] \in \{\text{CXL-DRAM}, \text{CXL-NAND}\}$}
+            \State $\text{exposed} \leftarrow \mathcal{Q}.\text{schedule\_write}(t_{\text{now}}, \text{kv\_bytes}, t_{\text{now}}{+}step\_lat)$
+            \State $step\_lat \leftarrow step\_lat + \text{exposed}$
+        \EndIf
+        \State $w \leftarrow w + step\_lat$; $C.\mathrm{evict\_by\_sparsity\_score}()$
+    \EndFor
+    \State $W_t \leftarrow w$
+    \Comment{throughput uses the mean over all $N_{\text{gen}}$ steps}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=.9\linewidth]{figures/fig_combined_scalability.pdf}
+    \caption{(a) Decode throughput scalability. (b) Prefill throughput. \todo{regenerate}}
+    \label{fig:scale}
+\end{figure*}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=1\linewidth]{figures/scaling_trends_dynamic.pdf}
+    \caption{Throughput scaling across varying batch sizes (16GB Host + 32GB CXL). \todo{regenerate}}
+    \label{fig:batch_scaling_trends}
+\end{figure*}
+
+\section{Evaluation}
+\label{sec:evaluation}
+
+\subsection{Experimental Setup}
+\noindent
+Table~\ref{tab:system_params} lists the hardware and sweep ranges. We use Qwen 72B ($\approx$288\,GB FP32 footprint) as the stress workload across four memory pairings \{16H+32C, 16H+64C, 32H+32C, 32H+64C\}. The canonical operating point is $B{=}128$, prefill$=$512, decode$=$16 unless stated otherwise. Reported metrics are decode throughput (TPS), prefill throughput, time-per-output-token (TPOT), per-token write stall, and SemSched-to-baseline speedup. All four simulators report decode throughput as the mean across decode steps and prefill throughput on a per-sequence basis, so figures are directly comparable.
+
+\subsection{End-to-End Decode Performance}
+\noindent
+Table~\ref{tab:headline} gives the headline result. SemSched improves decode throughput by $1.67\times$ at FP16 16H+64C, $1.45\times$ at INT8 16H+32C, and $1.23\times$ at FP32 32H+64C over LLMFlash, the strongest baseline. The advantage is largest where DRAM is scarcest relative to the working set, which is the regime the design targets.
+
+\begin{table}[t]
+\scriptsize
+\centering
+\caption{Decode throughput (tokens/s), Qwen 72B, $B{=}128$, decode$=$16.}
+\label{tab:headline}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Configuration} & \textbf{FlexGen} & \textbf{LIA} & \textbf{LLMFlash} & \textbf{SemSched} \\
+\midrule
+FP16 16H+64C & 4.39 & 6.48 & 11.73 & \textbf{19.58} ($1.67\times$) \\
+INT8 16H+32C & 9.91 & 12.97 & 27.79 & \textbf{40.43} ($1.45\times$) \\
+FP32 32H+64C & 2.20 & 2.51 & 4.64 & \textbf{5.70} ($1.23\times$) \\
+\bottomrule
+\end{tabular}
+\vspace{1mm}
+\end{table}
+
+For smaller models (7B, 13B) the model fits in Host and CXL DRAM; there, FlexGen and LIA match or slightly beat SemSched, since splitting layers into attention and MLP adds overhead that only pays off when NAND becomes the bottleneck. As batch sizes scale (Fig.~\ref{fig:batch_scaling_trends}), baselines suffer sparsity collapse where the union of active neurons overflows the DRAM cache. LLMFlash benefits from activation sparsity at $B{=}1$ but is hit at $B\ge4$. At INT4 the working set is small enough that LLMFlash's sliding window remains dominant across all batch sizes.
+
+\subsection{Prefill Performance}
+\noindent
+At $B{=}128$ with a 512-token prompt, prefill requires $2PSB \approx 9.44\times10^{15}$ FLOPs, or $81.8$~s of pure computation on our engine --- for every scheduler. Prefill is therefore compute-bound, and memory scheduling cannot substantially change it: FlexGen measures $83.3$~s and LIA $83.7$~s, both essentially at the compute bound.
+
+SemSched reaches 6.53~t/s against FlexGen's 6.15~t/s at FP16 16H+64C (6.19 vs 6.16 at INT8 16H+32C; 6.09 vs 6.14 at FP32 32H+64C). The contribution of Phase~1 in this phase is therefore not acceleration but \emph{cost concealment}: staging the entire NAND-resident working set costs 13.1~s of DMA at FP16 16H+64C, yet because it runs on a resource independent of the compute engine and per-layer compute exceeds per-layer staging, it is almost entirely hidden. SemSched removes NAND fetches from the decode critical path while paying essentially nothing in prefill. LLMFlash is a distant outlier at 0.10~t/s, a direct consequence of its design: prefill fires all FFN neurons, forcing a full $\approx$113~GB FFN reload from NAND per token.
+
+\subsection{Impact of Quantization and Memory Configuration}
+\noindent
+SemSched maintains a speedup over LLMFlash across precisions, growing as memory tightens. Sensitivity analysis shows SemSched's utility depends on DRAM scarcity: under FP32 the 72B footprint creates zero-sum competition for memory and SemSched holds a consistent advantage across all four memory configurations, whereas at INT4 the working set fits in the CXL device cache and simpler streaming wins. \todo{regenerate Figs.~\ref{fig:quant},~\ref{fig:memory} and restate exact per-precision speedups from the corrected sweep}
+
+\begin{figure*}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{-0.3cm}
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures/fig_combined_quantization.pdf}
+    \caption{(a) Decode throughput across precisions (b) SemSched speedup vs. LLMFlash at $B{=}128$. \todo{regenerate}}
+    \label{fig:quant}
+\end{figure*}
+
+\begin{figure*}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{-0.3cm}
+    \centering
+    \includegraphics[width=0.98\linewidth]{figures/fig_memory_all.pdf}
+    \caption{Throughput sensitivity across varying memory configurations. \todo{regenerate}}
+    \label{fig:memory}
+\end{figure*}
+
+\subsection{Compute-Engine Sensitivity}
+\label{sec:compute-sens}
+\noindent
+A natural concern with any memory-scheduling result is that a deliberately slow compute engine manufactures an overlap window that flatters the scheduler. We test this directly by sweeping the compute rate across four orders of magnitude, applying the identical knob to all four simulators (Table~\ref{tab:compute_sens}).
+
+\begin{table}[t]
+\scriptsize
+\centering
+\caption{Compute-engine sensitivity (Qwen 72B FP16, 16H+64C, $B{=}128$). The same compute model is applied to every simulator.}
+\label{tab:compute_sens}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Engine} & \textbf{TFLOPS} & \textbf{LLMFlash} & \textbf{SemSched} & \textbf{Speedup} \\
+\midrule
+4-core AVX2 CPU        & 0.08   & 0.54  & 0.54  & $1.00\times$ \\
+16-core AVX2 CPU       & 0.32   & 2.16  & 2.15  & $1.00\times$ \\
+64-core AVX2 CPU       & 1.08   & 7.39  & 7.32  & $0.99\times$ \\
+\textbf{Xeon 6 (AMX)}  & 115.3  & 11.73 & \textbf{19.58} & $\mathbf{1.67\times}$ \\
+\bottomrule
+\end{tabular}
+\vspace{1mm}
+\end{table}
+
+The effect runs opposite to the concern. A slow engine does not inflate the advantage; it \emph{eliminates} it. At $0.08$~TFLOPS the speedup is exactly $1.00\times$, because computation swamps the tier difference that SemSched exists to exploit --- moving a layer from NAND to device DRAM saves nothing when the processor is the bottleneck either way. The advantage appears only once the engine clears the $3.46$~TFLOPS memory-bound threshold derived in \S\ref{sec:assumptions}. This bounds our claim precisely: SemSched is a scheduler for systems whose compute is fast enough that memory placement determines throughput, which is the defining characteristic of modern accelerator-based serving.
+
+\subsection{Simulator Fidelity}
+\label{sec:fidelity}
+\noindent
+Our evaluation rests on three separately grounded components. Memory-tier bandwidths and latencies are taken from published measurements of physical CMM-H hardware~\cite{soltaniyeh2025revisiting}, not estimated. The two-queue CXL link model is covered by a unit-test suite of ten tests, including a hand-calculable ten-layer loop and a paper-scale 72B estimate, which verify read/write concurrency, deadline slip accounting, and queue-measured utilization. We additionally assert bandwidth conservation: no tier may exceed its physical rate over any window --- an invariant that makes an entire class of modeling error unrepresentable rather than merely absent. \todo{add LLMCompass calibration of the compute term (ISCA 2024, 4.1\% reported error) to close the loop on compute fidelity}
+
+\subsection{Mechanism Analysis and Ablation}
+\label{sec:mechanism}
+\noindent
+Semantic placement keeps attention layers in Host DRAM where bandwidth pressure is highest, and pushes MLP weights to CXL DRAM where higher arithmetic intensity hides the added transfer time. The duplex link injects writes during active read cycles, bypassing the sequential bus-turnaround penalty; the queue-measured Tx-lane utilization stays small because KV writes are low in volume yet cause large stalls when serialized. \todo{re-run trace\_workload/ablation.py and restate Table~\ref{tab:ablation}, the write-stall reduction, and Table~\ref{tab:hardware_efficiency} TPOT figures from the corrected simulator}
+
+\begin{table*}[t]
+  \setlength{\abovecaptionskip}{0.1cm}
+  \setlength{\belowcaptionskip}{-0.1cm}
+\scriptsize
+\centering
+\caption{Decode Hardware Efficiency and Speedup (Qwen 72B FP16, $B{=}128$, 16H+64C).}
+\label{tab:hardware_efficiency}
+\begin{tabular}{@{}p{0.15\linewidth}p{0.15\linewidth}p{0.15\linewidth}p{0.15\linewidth}p{0.15\linewidth}@{}}
+\toprule
+\textbf{Scheduler} & \textbf{Placement} & \textbf{TPOT (s/tok)} & \textbf{$U_{write}$ (\%)} & \textbf{Speedup} \\
+\midrule
+FlexGen    & Monolithic Paging & 0.228 & 0.00\% & 0.37$\times$ \\
+LIA        & NUMA Tiering      & 0.154 & 0.00\% & 0.55$\times$ \\
+LLMFlash   & Unified Streaming & 0.085 & 0.00\% & \textbf{1.00$\times$ (Ref)} \\
+\textbf{SemSched} & \textbf{Semantic Pinning} & \textbf{0.051} & \textbf{0.03\%*} & \textbf{1.67$\times$} \\
+\bottomrule
+ \multicolumn{5}{l}{\scriptsize \textit{*$U_{write}$ is the queue-measured Tx-lane utilization.}} \\
+\multicolumn{5}{l}{\scriptsize \textit{Speedup = $\text{TPOT}_{Ref} / \text{TPOT}_{SemSched}$; decode-phase only.}}
+\end{tabular}
+\vspace{-12pt}
+\end{table*}
+
+\begin{table}[t]
+\scriptsize
+\centering
+\setlength{\tabcolsep}{3pt}
+\caption{Per-mechanism ablation on Qwen 72B ($B{=}128$, prefill=512, decode=16). \todo{re-run}}
+\label{tab:ablation}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Variant} & \multicolumn{2}{c}{\textbf{FP16 16H+64C}} & \multicolumn{2}{c}{\textbf{INT8 16H+32C}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & TPS & W-Stall (ms) & TPS & W-Stall (ms) \\
+\midrule
+LLMFlash (Ref)         & 11.73 & --- & 27.79 & --- \\
+Full SemSched          & \textbf{19.58} & --- & \textbf{40.43} & --- \\
+$-$ Parallel Warmup    & --- & --- & --- & --- \\
+$-$ Semantic Placement & --- & --- & --- & --- \\
+$-$ Two-Queue Link     & --- & --- & --- & --- \\
+$-$ Sparsity Eviction  & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}%
+}
+\vspace{2mm}
+\end{table}
+
+\subsection{Decode Latency Model}
+\label{sec:model}
+\noindent
+A simple analytical model explains the measured gains. Per-step decode latency is
+$T_{\text{step}} = \max(T_{\text{comp}}, T_{\text{weight}}) + T_{\text{KV-read}} + T_{\text{KV-stall}}$,
+where $T_{\text{weight}}$ depends on the layer's tier, $T_{\text{KV-read}}=(P+t) \cdot k \cdot B/\text{BW}_{\text{KV}}$ grows linearly with prefill length $P$ and decode step $t$, and $T_{\text{KV-stall}}=\max(0, T_{\text{KV-write}}-T_{\text{read-window}})$ is the KV write time left exposed after the duplex link hides it inside the read-occupancy window. Phase~1 warmup forces $T_{\text{weight}}$ to use $\text{BW}_{\text{CXL-DRAM}}$ instead of $\text{BW}_{\text{NAND}}$, so the SemSched/LLMFlash speedup is approximately
+\[ S(P) \approx \frac{T_{\text{comp}}+T_{\text{weight}}^{\text{NAND}}+T_{\text{KV-read}}(P)}{T_{\text{comp}}+T_{\text{weight}}^{\text{CXL}}+T_{\text{KV-read}}(P)}. \]
+The model makes two predictions borne out by the measurements. At short $P$ the NAND term dominates and $S(P)$ is large; at long $P$, $T_{\text{KV-read}}$ dominates both numerator and denominator and $S(P)\to 1$, giving a prefill-dependent crossover. It also explains \S\ref{sec:compute-sens}: as $T_{\text{comp}}$ grows it appears in both terms, driving $S \to 1$ regardless of tier placement, which is precisely the $1.00\times$ observed on slow engines.
+
+\subsection{Real-Workload Validation on ShareGPT}
+\label{sec:sharegpt}
+\noindent
+Our simulator reads only the sequence-length distribution from ShareGPT, not the prompt text. Per-layer compute, transfer, and KV-cache costs come from the Qwen2.5 72B architecture combined with bytes-and-bandwidth movement under each placement policy; the simulator never executes attention or matrix multiplication. This matches standard methodology for memory-system simulators, including the CMM-H characterization of~\cite{soltaniyeh2025revisiting}. We replay 50 randomly sampled prompts from the ShareGPT V3 corpus at FP16 16H+64C, $B{=}128$, decode$=$64 tokens. The sampled prefill distribution has median 114 tokens, P90 1038, and max 2579, covering typical chat workloads.
+\todo{re-run trace\_workload/trace\_runner.py on the corrected simulator and restate the median speedup, win-rate, P10/P90, and Fig.~\ref{fig:sharegpt}}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=1\linewidth]{figures/fig_sharegpt.pdf}
+    \vspace{1pt}
+    \caption{ShareGPT validation at FP16 16H+64C, $B{=}128$, decode=64.
+    (a) CDF of SemSched/LLMFlash decode speedup across 50 real prompts.
+    (b) Speedup vs.\ prompt length. \todo{regenerate}}
+    \vspace{4pt}
+    \label{fig:sharegpt}
+\end{figure}
+
+\section{Discussion}
+\label{sec:discussion}
+\noindent
+SemSched is most effective when the working set exceeds DRAM capacity, the workload tolerates batching, and the compute engine is fast enough to leave the system memory-bound. Under those conditions it enables 72B deployment on commodity sockets with standard DDR and NAND hierarchies rather than HBM clusters. When the working set fits entirely within the CXL device's DRAM (e.g., INT4), simpler unified streaming achieves higher throughput. Because placement is determined upfront and eviction runs asynchronously, the scheduler does not slow down the critical path.
+
+\noindent\textbf{Limitations.}
+Three boundaries deserve emphasis. First, the gains are conditional on compute: below roughly $3.5$~TFLOPS the workload is compute-bound and SemSched provides no benefit at all (\S\ref{sec:compute-sens}). Second, we model the CXL-to-host memory path; a GPU-attached deployment adds a PCIe hop from host to device memory that we do not model end-to-end, though the ordering of tier bandwidths --- and hence the placement decisions --- is preserved, since even a Gen5~$\times$16 GPU link is faster than the CXL device it would be fed from. Third, prefill is compute-bound at our operating point, so the prefill contribution is cost concealment rather than acceleration.
+
+CMM-H devices provide no device-side hardware prefetcher, and even if present, a hardware prefetcher has no knowledge of layer boundaries or the large transfer sizes CXL inference requires~\cite{soltaniyeh2025revisiting}; a software runtime is therefore the only way to stage layers proactively. Our evaluation uses a trace-driven simulator based on documented CMM-H specifications; while accurate for design conditions, it does not capture PCIe jitter, operating-system noise, or the device DRAM cache's 8-way conflict misses, which prior measurements show can expose tail latencies once the footprint exceeds a fraction of the cache~\cite{zeng2025performance}. That effect penalizes device-managed caching and not explicit placement, so modeling it would widen rather than narrow our reported gap. We assume uniform decoder block sizes and use published sparsity profiles~\cite{wild2024uncovering} rather than per-model measurements. Physical CMM-H validation is the primary focus of future work.
+
+\section{Conclusion}
+\label{sec:conclusion}
+\noindent
+We introduced SemSched, a scheduler that co-designs memory placement with the semantic properties of Transformer layers. By distinguishing memory-bound Attention from compute-bound, sparse MLP sub-layers, SemSched enables proactive, semantic-aware data staging. On a 72B model it delivers $1.23\times$ to $1.67\times$ decode-throughput improvement over the strongest baseline while paying essentially nothing in prefill, because staging runs on a DMA path independent of computation. We further show the result is conditional in an instructive way: the advantage vanishes entirely on slow compute engines and appears only once the system is genuinely memory-bound. Semantic-aware orchestration is therefore most valuable exactly where inference is heading --- fast accelerators paired with deep, cheap memory hierarchies.
+
+\bibliography{Ref/ref}
+
+\end{document}

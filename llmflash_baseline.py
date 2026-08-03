@@ -39,8 +39,20 @@ def compute_time_s(flops):
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
-from tiers import CXL_DRAM, CXL_SSD_NAND, transfer_time_s, \
+from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
+
+# A10 FIX (BigData 2026): LLM-in-a-Flash pools Host and CXL DRAM into a single
+# unified tier [1] -- as our own section IV-B states. Previously every transfer
+# was charged at CXL_DRAM speed, so the host-resident share of the pool was
+# under-modeled and the strongest baseline was unfairly penalised. The pool is
+# now a capacity-weighted blend of the two DRAM tiers.
+_h = host_dram_capacity_bytes
+_c = cxl_dev_dram_capacity_bytes
+_pool_bw  = (_h * HOST_DRAM.bw_Bps + _c * CXL_DRAM.bw_Bps) / (_h + _c)
+_pool_lat = (_h * HOST_DRAM.chunk_latency_s
+             + _c * CXL_DRAM.chunk_latency_s) / (_h + _c)
+DRAM_POOL = Tier("Unified Host+CXL DRAM pool", _pool_bw, _pool_lat)
 
 # ── Paper constants (OPT/ReLU baseline, §3.1 and §4.1) ────────────────────────
 WINDOW_SIZE_K             = 5    # Sliding window token count
@@ -152,7 +164,7 @@ def simulate_llmflash():
 
         # Attention weights: pinned in CXL DRAM
         for L in pinned_layers:
-            t += transfer_time_s(L["bytes"] * pinned_dram_frac, CXL_DRAM)
+            t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
@@ -160,20 +172,20 @@ def simulate_llmflash():
         # LLMFlash treats host+CXL DRAM as unified; we use CXL_DRAM as the KV tier.
         kv_positions_cached = NUM_PREFILL_TOKENS + token_step
         kv_read_bytes_total = BATCH_SIZE * kv_per_seq_bytes * kv_positions_cached
-        t += transfer_time_s(kv_read_bytes_total, CXL_DRAM)
+        t += transfer_time_s(kv_read_bytes_total, DRAM_POOL)
 
         # FFN DRAM turnover
-        t += transfer_time_s(ffn_dram_bytes, CXL_DRAM)
+        t += transfer_time_s(ffn_dram_bytes, DRAM_POOL)
 
         # FFN NAND overflow
         if ffn_nand_bytes > 0:
             t += nand_bundled(ffn_nand_bytes)
 
         # DRAM neuron swap overhead
-        t += transfer_time_s(dram_rewrite_bytes, CXL_DRAM)
+        t += transfer_time_s(dram_rewrite_bytes, DRAM_POOL)
 
         # KV write: fully serialized (simplex) — this is the write stall
-        step_kv = BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, CXL_DRAM)
+        step_kv = BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, DRAM_POOL)
         total_kv_write_stall_s += step_kv
         t += step_kv
 
@@ -216,7 +228,7 @@ def simulate_llmflash():
 
         # Attention: pinned in DRAM
         for L in pinned_layers:
-            t += transfer_time_s(L["bytes"] * pinned_dram_frac, CXL_DRAM)
+            t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
@@ -224,8 +236,8 @@ def simulate_llmflash():
         t += nand_bundled(prefill_ffn_load)
 
         # DRAM rewrite + KV writes for B sequences
-        t += transfer_time_s(prefill_rewrite, CXL_DRAM)
-        t += BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, CXL_DRAM)
+        t += transfer_time_s(prefill_rewrite, DRAM_POOL)
+        t += BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, DRAM_POOL)
 
         # Compute for this prefill token across B sequences. Sparsity collapses
         # during prefill (all neurons fire), so no FFN discount here — matching
@@ -235,7 +247,9 @@ def simulate_llmflash():
         total_prefill_time += t
 
     avg_prefill_t = total_prefill_time / NUM_PREFILL_TOKENS
-    prefill_tps   = BATCH_SIZE / avg_prefill_t if avg_prefill_t > 0 else 0.0
+    # A12 FIX: per-sequence convention, matching FlexGen/LIA/SemSched
+    prefill_tps   = (NUM_PREFILL_TOKENS / total_prefill_time
+                     if total_prefill_time > 0 else 0.0)
 
     total_model_bytes = sum(L["bytes"] for L in layers)
     cold_load = ssd_time_s(total_model_bytes)
