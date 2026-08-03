@@ -5,7 +5,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{balance}
 \usepackage{url}
-\bibliographystyle{splncs04}
+\bibliographystyle{IEEEtran}
 \usepackage{multirow}
 \usepackage{float}
 \usepackage{array}
@@ -20,7 +20,7 @@
 \usepackage{xcolor}
 \usepackage{comment}
 \usepackage{listings}
-\usepackage{subfigure}
+% \usepackage{subfigure}  % removed: obsolete, conflicts with subcaption
 \pagestyle{plain}
 \emergencystretch 3em
 \linepenalty=10
@@ -239,7 +239,7 @@ following the parametric methodology of~\cite{soltaniyeh2025revisiting}.
   \setlength{\abovecaptionskip}{0.2cm}
   \setlength{\belowcaptionskip}{0.3cm}
     \centering
-    \includegraphics[width=0.99\linewidth]{figures/Duplex2.pdf}
+    \includegraphics[width=0.99\linewidth]{figures/architecture_diagram.png}
     \caption{SemSched orchestrates the placement of model layers across Host DRAM, CXL Device DRAM, and NAND based on semantic importance.}
     \label{fig:sim_Duplex}
 \end{figure}
@@ -248,7 +248,7 @@ following the parametric methodology of~\cite{soltaniyeh2025revisiting}.
   \setlength{\abovecaptionskip}{0.1cm}
   \setlength{\belowcaptionskip}{0.1cm}
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/scheduler2-crop.pdf}
+    \includegraphics[width=0.9\linewidth]{figures/scheduler_workflow.png}
     \caption{The SemSched Scheduler monitors the CXL read/write ratio in real-time and controls semantic-aware placement.}
     \vspace{3pt}
 \label{fig:scheduler}
