@@ -29,9 +29,11 @@ def ablate_no_warmup(src):
     """A1: skip prefill warmup loop — layers stay on NAND."""
     old = (
         '        if place[i] == PL_CXL_DEV_NAND:\n'
-        '            dur   = transfer_time_s(L["bytes"], CXL_SSD_NAND)\n'
-        '            start = max(lat, nand_link_free_at)\n'
-        '            nand_link_free_at = start + (dur / IO_THREAD_POOL_SIZE)\n'
+        '            bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps\n'
+        '            lat_term = (math.ceil(L["bytes"] / IO_CHUNK_BYTES)\n'
+        '                        * CXL_SSD_NAND.chunk_latency_s) / IO_THREAD_POOL_SIZE\n'
+        '            t_stage += bw_term + lat_term\n'
+        '            stage_finish[i] = t_stage\n'
         '            cache.add(i, L["bytes"])\n'
         '            cache.pin_for_session(i)\n'
         '            stats["bytes_prefetched"] += L["bytes"]\n'
