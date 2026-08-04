@@ -65,8 +65,8 @@ plt.rcParams['grid.alpha'] = 0.3
 plt.rcParams['grid.linestyle'] = '--'
 
 
-COLORS  = {'FlexGen': '#7f7f7f', 'LIA': '#377eb8', 'LLMFlash': '#ff7f0e', 'SemSched': '#e41a1c'}
-MARKERS = {'FlexGen': 'o',       'LIA': 's',        'LLMFlash': '^',        'SemSched': 'D'}
+COLORS  = {'FlexGen': '#7f7f7f', 'LIA': '#377eb8', 'LLMFlash': '#ff7f0e', 'CXLAimPod': '#4daf4a', 'SemSched': '#e41a1c'}
+MARKERS = {'FlexGen': 'o',       'LIA': 's',        'LLMFlash': '^',        'CXLAimPod': 'v',         'SemSched': 'D'}
 
 SERVING_BATCH = 128  # desired serving batch for paper figures
 
@@ -347,10 +347,10 @@ def plot_combined_scalability(df):
 
     # ── Add non-overlapping value labels on line plot ──────────
     MODELS = sorted(sub["Model"].unique())
-    SIMS   = ['FlexGen', 'LIA', 'LLMFlash', 'SemSched']
+    SIMS   = ['FlexGen', 'LIA', 'LLMFlash', 'CXLAimPod', 'SemSched']
 
     #OFFSET_LADDER = [-18, -15, +13, +27]
-    OFFSET_LADDER = [(-4, -16), (15, -15), (15, 10), (0, 16)]
+    OFFSET_LADDER = [(-4, -16), (15, -15), (15, 10), (-16, 12), (0, 16)]
 
     for model in MODELS:
         model_data = sub[sub["Model"] == model].copy()
