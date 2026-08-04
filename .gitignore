@@ -1,13 +1,12 @@
-# Python
-__pycache__/
-*.pyc
 
-# Virtual envs
 CXL_venv/
 gem5-py310/
+*.log
+*.pyc
+__pycache__/
+# Python
+refs_pdf/
+# Transient run logs
 .venv/
 venv/
-
-# Transient run logs
-*.log
-
+# Virtual envs
