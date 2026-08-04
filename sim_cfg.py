@@ -33,7 +33,13 @@ BATCH_SIZE = 1 # Auto-set
 cpu_freq_hz = 1.755e9              # H100 boost clock
 cpu_cores = 114                    # streaming multiprocessors
 flops_per_cycle_per_core = 4096.0  # BF16 tensor-core FLOPs per cycle per SM
-parallel_efficiency = 0.70         # achieved utilization
+parallel_efficiency = 0.70         # achieved utilization -- CALIBRATED, and
+                                   # deliberately conservative. LLMCompass
+                                   # (ISCA 2024) measures 1.00 for our exact
+                                   # GEMM shapes at B=128; see
+                                   # calibrate_sublayer.py. Assuming less than
+                                   # the achieved value makes compute look
+                                   # slower and our advantage smaller.
 
 # Host DRAM: DDR5-4800
 host_dram_capacity_bytes = 32 * GiB # Auto-set
