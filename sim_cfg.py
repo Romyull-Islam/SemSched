@@ -15,7 +15,8 @@ BATCH_SIZE = 1 # Auto-set
 # dual-socket host with the device on PCIe Gen5 x8. We therefore model a compute
 # engine that can actually be attached to THAT platform.
 #
-# The 6710E is a Sierra Forest E-core part: no AMX, and ~1.08 TFLOPS of AVX2 --
+# The 6710E is a Sierra Forest (Crestmont) E-core part: 64 cores @ 2.4 GHz with
+# enhanced AVX2 (2x128-bit) and NO AVX-512 or AMX, giving ~2.16 TFLOPS --
 # below the 3.46 TFLOPS needed to keep this workload memory-bound at B=128 FP16
 # (see REVISION_PLAN.md Part 2, D3). The host CPU alone cannot serve this
 # workload. We therefore attach an NVIDIA H100 PCIe on the platform's spare Gen5
