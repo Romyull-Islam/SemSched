@@ -26,6 +26,7 @@ SIMS = [
     ("FlexGen",  "flexgen_baseline.py"),
     ("LIA",      "lia_baseline.py"),
     ("LLMFlash", "llmflash_baseline.py"),
+    ("CXLAimPod", "cxlaimpod_baseline.py"),
     ("SemSched", "semduplex_scheduler.py"),
 ]
 MODELS = [("Mistral7BCfg", 7), ("Llama13BCfg", 13),
