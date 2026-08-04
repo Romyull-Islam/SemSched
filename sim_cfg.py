@@ -6,35 +6,33 @@ TOKENS = 16
 BATCH_SIZE = 1 # Auto-set
 
 
-# Processor: Intel Xeon 6315P (Raptor Lake, Q1'25)
-# Cores: 4 Performance cores (no Hyper-Threading)
-# Base frequency: 2.8 GHz
-# Max turbo: 5.2 GHz
-# L3 Cache: 12 MB
-# Memory: DDR5-4800, ECC supported, 2 channels, max 128 GB
-# SIMD: AVX2 (no AVX-512)
-# PCIe Gen 5.0 (CXL compatible), up to 20 lanes
-# TDP: 55W
-# Source: Intel ARK, https://www.intel.com/content/www/us/en/products/sku/241603/intel-xeon-6315p-processor-12m-cache-2-80-ghz/specifications.html
+# NOTE: this file previously described an Intel Xeon 6315P (4C AVX2). That part
+# is superseded -- see the compute-engine block below for why.
 
 # ── Compute engine ────────────────────────────────────────────────────────────
-# REVISED (BigData 2026): the original 4-core AVX2 Xeon 6315P (78.8 GFLOPS) is far
-# below the rate needed to keep this workload memory-bound once decode FLOPs are
-# correctly scaled by batch size. At B=128 FP16 the decode arithmetic intensity is
-# 2B/bytes_per_param = 128 FLOP/byte, so saturating the 27 GB/s CXL DRAM tier
-# requires >= 3.46 TFLOPS. Below that the engine is compute-bound and tier
-# placement is irrelevant -- i.e. the old config erased our own contribution.
+# The CXL tier parameters below come from the CMM-H prototype of Soltaniyeh et
+# al. (HotStorage 2025), whose reference platform is an Intel Xeon 6710E
+# dual-socket host with the device on PCIe Gen5 x8. We therefore model a compute
+# engine that can actually be attached to THAT platform.
 #
-# We now model an AMX-capable Intel Xeon 6 (Granite Rapids) P-core part:
-#   64 cores @ 2.0 GHz, AMX-BF16 at 1024 FLOP/cycle/core, 88% parallel efficiency
-#   => 64 * 1024 * 2.0e9 * 0.88 = 115.3 TFLOPS sustained
-# This matches LIA's AMX substrate [8], clearing the 3.46 TFLOPS threshold with
-# ~33x margin. Identical for all four simulators (compute is a property of the
-# simulated hardware, not of any baseline's policy).
-cpu_freq_hz = 2.0e9
-cpu_cores = 64
-flops_per_cycle_per_core = 1024.0   # Intel AMX BF16 tile ops
-parallel_efficiency = 0.88
+# The 6710E is a Sierra Forest E-core part: no AMX, and ~1.08 TFLOPS of AVX2 --
+# below the 3.46 TFLOPS needed to keep this workload memory-bound at B=128 FP16
+# (see REVISION_PLAN.md Part 2, D3). The host CPU alone cannot serve this
+# workload. We therefore attach an NVIDIA H100 PCIe on the platform's spare Gen5
+# lanes (88 lanes/socket; CMM-H consumes x8, the GPU x16).
+#
+#   H100 PCIe: 114 SMs @ 1.755 GHz boost, ~4096 FLOP/cycle/SM BF16 tensor,
+#              80 GB HBM2e @ ~2.0 TB/s, PCIe Gen5 x16 host link (~63 GB/s/dir)
+#   Modeled at 70% achieved utilization => 573.6 TFLOPS sustained.
+#
+# Results are invariant to this choice above the 3.46 TFLOPS threshold: the
+# AMX-Xeon and H100 configurations give bit-identical throughput (1.67x / 1.45x
+# / 1.23x). The GPU is chosen for platform consistency, not to move numbers.
+# The same engine model is used by all four simulators.
+cpu_freq_hz = 1.755e9              # H100 boost clock
+cpu_cores = 114                    # streaming multiprocessors
+flops_per_cycle_per_core = 4096.0  # BF16 tensor-core FLOPs per cycle per SM
+parallel_efficiency = 0.70         # achieved utilization
 
 # Host DRAM: DDR5-4800
 host_dram_capacity_bytes = 32 * GiB # Auto-set

@@ -34,8 +34,8 @@ plt.rcParams['grid.linestyle'] = '--'
 
 # (label, capacity GB, bandwidth GB/s, group, annotation offset)
 TIERS = [
-    ("GPU HBM\n(A100 40GB)",   40,   1555.0, "gpu",  (62,  -6)),
-    ("Host DRAM\n(DDR5)",      32,     38.4, "host", (-6, -40)),
+    ("GPU HBM\n(H100 PCIe 80GB)", 80, 2039.0, "gpu",  (66,  -6)),
+    ("Host DRAM\n(DDR5-5600)",  32,     38.4, "host", (-6, -40)),
     ("CXL device DRAM\n(CMM-H cache)", 48, 27.0, "cxl", (86, 24)),
     ("CXL NAND\n(CMM-H)",    1024,      5.0, "cxl",  (-4,  26)),
     ("NVMe SSD\n(Gen4)",      512,      7.6, "ssd",  (-14, 26)),
