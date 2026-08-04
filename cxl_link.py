@@ -8,9 +8,12 @@ Models CXL.mem as a full-duplex link with two independent lanes:
 Each lane has independent bandwidth (typical: ~27 GB/s effective per direction
 on a PCIe 5.0 x8 link, sources: Wang et al. IPDPS'25; Liu et al. arXiv 2409.14317).
 
-NOT YET WIRED INTO semduplex_scheduler.py — this is a candidate replacement
-for the current DUPLEX_PENALTY = 1.15 multiplier-based duplex model. Verify
-with test_cxl_link.py before integration.
+Wired into semduplex_scheduler.py, where it replaced the earlier
+DUPLEX_PENALTY multiplier for decode-phase write accounting.
+
+Note on the Rx lane: schedule_read() accumulates occupancy for utilization
+reporting only. Read *timing* is set by the tier model in tiers.py, so the
+return value is intentionally unused and reads are not double-charged.
 """
 
 
