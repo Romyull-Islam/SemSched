@@ -68,6 +68,20 @@ class Qwen2_5_72BCfg:
     kv_heads: int = 8               # GQA (KV heads)
 
 
+# Llama-3.1 405B -- the largest open dense model, added to test whether the
+# mechanism holds when the weight footprint far exceeds every DRAM tier.
+# 126 layers, 16384 emb dim, 128 Q heads / 8 KV heads (GQA), 53248 MLP hidden,
+# 128256 vocab. FP16 footprint ~810 GB against 64 GB of DRAM: 92% NAND-resident.
+@dataclass(frozen=True)
+class Llama3_1_405BCfg:
+    num_blocks: int = 126
+    vocab_size: int = 128256
+    emb_dim: int = 16384
+    mlp_hidden: int = 53248
+    q_heads: int = 128
+    kv_heads: int = 8
+
+
 # Default model configuration (change to switch models for all sims)
 DEFAULT_MODEL_CFG = Qwen2_5_72BCfg # Auto-set
 # ----------------------------------------------------------------

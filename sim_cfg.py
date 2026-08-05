@@ -49,7 +49,10 @@ host_dram_capacity_bytes = 32 * GiB # Auto-set
 
 # CXL Expansion Device (Samsung CMM-H type)
 cxl_dev_dram_capacity_bytes = 64 * GiB # Auto-set
-cxl_ssd_capacity_bytes = 256 * GiB
+cxl_ssd_capacity_bytes = 1024 * GiB   # 1 TB, the documented CMM-H prototype
+                                      # (Soltaniyeh et al.); was 256 GiB, which
+                                      # contradicted Table II and could not hold
+                                      # a 405B model's NAND residency.
 
 # NVMe SSD Baseline (PCIe Gen4 x4)
 ssd_capacity_bytes = 512 * GiB
