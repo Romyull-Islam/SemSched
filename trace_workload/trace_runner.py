@@ -19,6 +19,10 @@ The script writes one row per (pair_idx, simulator) with Decode_TPS,
 Prefill_TPS, prefill_len, decode_len.
 """
 import argparse
+
+# set from --gpu; module-level so the patcher can see it without rethreading
+# every call site.
+GPU_GB = [0]
 import csv
 import json
 import os
@@ -34,6 +38,7 @@ SIM_FILES = {
     "FlexGen":   "flexgen_baseline.py",
     "LIA":       "lia_baseline.py",
     "LLMFlash":  "llmflash_baseline.py",
+    "CXLAimPod": "cxlaimpod_baseline.py",
     "SemSched":  "semduplex_scheduler.py",
 }
 
@@ -58,6 +63,10 @@ def patch_sim_cfg(src: str, decode: int, batch: int,
                  src, count=1, flags=re.MULTILINE)
     src = re.sub(r"^cxl_dev_dram_capacity_bytes\s*=\s*\S+\s*\*\s*GiB",
                  f"cxl_dev_dram_capacity_bytes = {cxl_gb} * GiB",
+                 src, count=1, flags=re.MULTILINE)
+    # Accelerator HBM available to hold weights; 0 keeps the CPU-only default.
+    src = re.sub(r"^gpu_hbm_capacity_bytes\s*=\s*\S+\s*\*\s*GiB",
+                 f"gpu_hbm_capacity_bytes = {GPU_GB[0]} * GiB",
                  src, count=1, flags=re.MULTILINE)
     return src
 
@@ -148,6 +157,8 @@ def main():
     ap.add_argument("--n", type=int, default=20,
                     help="number of (prefill, decode) pairs to sample")
     ap.add_argument("--batch", type=int, default=128)
+    ap.add_argument("--gpu", type=int, default=0,
+                    help="accelerator HBM in GB usable for weights (0 = CPU-only)")
     ap.add_argument("--quant", default="fp16")
     ap.add_argument("--mem", default="16H+64C")
     ap.add_argument("--decode-cap", type=int, default=64,
@@ -156,6 +167,7 @@ def main():
     ap.add_argument("--sims", nargs="+",
                     default=list(SIM_FILES.keys()))
     args = ap.parse_args()
+    GPU_GB[0] = args.gpu
 
     pairs_path = os.path.join(REPO, args.pairs) if not os.path.isabs(args.pairs) else args.pairs
     out_path = os.path.join(REPO, args.out) if not os.path.isabs(args.out) else args.out
