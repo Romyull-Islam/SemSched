@@ -34,7 +34,7 @@ plt.rcParams['grid.linestyle'] = '--'
 
 # (label, capacity GB, bandwidth GB/s, group, annotation offset)
 TIERS = [
-    ("GPU HBM\n(H100 PCIe 80GB)", 80, 2039.0, "gpu",  (66,  -6)),
+    ("GPU HBM\n(H100 PCIe 80GB)", 80, 2039.0, "gpu",  (72,   0)),
     ("Host DRAM\n(DDR5-5600)",  32,     38.4, "host", (-6, -40)),
     ("CXL device DRAM\n(CMM-H cache)", 48, 27.0, "cxl", (86, 24)),
     ("CXL NAND\n(CMM-H)",    1024,      5.0, "cxl",  (-4,  26)),
@@ -54,7 +54,7 @@ fig, ax = plt.subplots(figsize=(8, 4.4))
 # Working-set band: the model must be resident somewhere to the right of this.
 ax.axvspan(MODEL_GB, 2000, color="#e41a1c", alpha=0.05, zorder=0)
 ax.axvline(MODEL_GB, color="#e41a1c", ls=":", lw=2, zorder=1)
-ax.text(MODEL_GB * 1.14, 3000, "72B FP16 working set\n151 GB — exceeds every\ntier fast enough to serve it",
+ax.text(8.8, 6800, "72B FP16 working set: 151 GB\nexceeds every tier that is\nfast enough to serve it",
         fontsize=11.5, color="#e41a1c", va="top", ha="left")
 
 # The GPU feed link. Above CXL DRAM, so it is never the binding constraint.
