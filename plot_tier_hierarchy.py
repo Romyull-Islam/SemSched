@@ -34,7 +34,7 @@ plt.rcParams['grid.linestyle'] = '--'
 
 # (label, capacity GB, bandwidth GB/s, group, annotation offset)
 TIERS = [
-    ("GPU HBM\n(H100 PCIe 80GB)", 80, 2039.0, "gpu",  (72,   0)),
+    ("GPU memory\n(L4 24GB)",     24,  300.0, "gpu",  (-8,  26)),
     ("Host DRAM\n(DDR5-5600)",  32,     38.4, "host", (-6, -40)),
     ("CXL device DRAM\n(CMM-H cache)", 48, 27.0, "cxl", (86, 24)),
     ("CXL NAND\n(CMM-H)",    1024,      5.0, "cxl",  (-4,  26)),
@@ -47,7 +47,7 @@ CMAP = {"gpu": "#4d4d4d", "host": "#377eb8", "cxl": "#e41a1c", "ssd": "#7f7f7f"}
 MARK = {"gpu": "s", "host": "o", "cxl": "D", "ssd": "^"}
 
 MODEL_GB = 151.3   # Qwen2.5 72B at FP16
-PCIE_GEN5_X16 = 63.0
+PCIE_GEN5_X16 = 31.5
 
 fig, ax = plt.subplots(figsize=(8, 4.4))
 
@@ -59,7 +59,7 @@ ax.text(8.8, 6800, "72B FP16 working set: 151 GB\nexceeds every tier that is\nfa
 
 # The GPU feed link. Above CXL DRAM, so it is never the binding constraint.
 ax.axhline(PCIE_GEN5_X16, color="#4d4d4d", ls="--", lw=1.8, alpha=0.8, zorder=1)
-ax.text(9.3, PCIE_GEN5_X16 * 1.25, "PCIe Gen5 $\\times$16 GPU feed — 63 GB/s",
+ax.text(9.3, PCIE_GEN5_X16 * 1.25, "PCIe Gen4 $\\times$16 GPU feed — 31.5 GB/s",
         fontsize=11.5, color="#4d4d4d", ha="left")
 
 for label, cap, bw, grp, (dx, dy) in TIERS:
