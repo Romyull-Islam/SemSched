@@ -39,7 +39,7 @@ def compute_time_s(flops):
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
-from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, transfer_time_s, \
+from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
 
 # A10 FIX (BigData 2026): LLM-in-a-Flash pools Host and CXL DRAM into a single
@@ -47,11 +47,15 @@ from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, transfer_time_s, \
 # was charged at CXL_DRAM speed, so the host-resident share of the pool was
 # under-modeled and the strongest baseline was unfairly penalised. The pool is
 # now a capacity-weighted blend of the two DRAM tiers.
+# When an accelerator is attached its HBM joins the pool, which is faithful to
+# LLM-in-a-Flash: its policy is a single unified fast tier, so it benefits from
+# accelerator memory on exactly the same terms we do.
+from sim_cfg import gpu_hbm_capacity_bytes as _g
 _h = host_dram_capacity_bytes
 _c = cxl_dev_dram_capacity_bytes
-_pool_bw  = (_h * HOST_DRAM.bw_Bps + _c * CXL_DRAM.bw_Bps) / (_h + _c)
-_pool_lat = (_h * HOST_DRAM.chunk_latency_s
-             + _c * CXL_DRAM.chunk_latency_s) / (_h + _c)
+_pool_bw  = (_g * GPU_HBM.bw_Bps + _h * HOST_DRAM.bw_Bps + _c * CXL_DRAM.bw_Bps) / (_g + _h + _c)
+_pool_lat = (_g * GPU_HBM.chunk_latency_s + _h * HOST_DRAM.chunk_latency_s
+             + _c * CXL_DRAM.chunk_latency_s) / (_g + _h + _c)
 DRAM_POOL = Tier("Unified Host+CXL DRAM pool", _pool_bw, _pool_lat)
 
 # ── Paper constants (OPT/ReLU baseline, §3.1 and §4.1) ────────────────────────
