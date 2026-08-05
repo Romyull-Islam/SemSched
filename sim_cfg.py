@@ -36,6 +36,13 @@ parallel_efficiency = 0.85          # achieved across 2 sockets; CALIBRATED
                                     # assuming less makes our advantage
                                     # smaller rather than larger.
 
+# Accelerator HBM available to hold weights. 0 = no accelerator, which is the
+# default and matches both CMM-H papers. When non-zero it is a real tier at
+# HBM bandwidth, not extra host capacity: every policy's placement cascade
+# shifts up by one level, so what was pinned in host DRAM moves to HBM, what
+# was in CXL DRAM moves to host, and NAND residency shrinks accordingly.
+gpu_hbm_capacity_bytes = 0 * GiB
+
 # Host DRAM: DDR5-4800
 host_dram_capacity_bytes = 32 * GiB # Auto-set
 # DDR5-4800 bandwidth: 38.4 GB/s per channel (official spec)

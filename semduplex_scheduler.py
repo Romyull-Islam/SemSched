@@ -36,11 +36,12 @@ from enum import Enum
 from cxl_link import CXLLink   # two-queue full-duplex bus model
 
 from tiers import (
-    HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
+    HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM, transfer_time_s,
     Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, IO_CHUNK_BYTES
 )
 from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
 from sim_cfg import (
+    gpu_hbm_capacity_bytes,
     TOKENS,
     cpu_freq_hz, cpu_cores, flops_per_cycle_per_core, parallel_efficiency,
     host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, cxl_ssd_capacity_bytes,
@@ -48,6 +49,7 @@ from sim_cfg import (
 )
 
 GiB = 1024**3
+PL_GPU_HBM      = "GPU HBM"
 PL_HOST_DRAM    = "Host DRAM"
 PL_CXL_DEV_DRAM = "CXL Device DRAM"
 PL_CXL_DEV_NAND = "CXL Device NAND"
@@ -268,7 +270,16 @@ class IOThread:
         self.current_task = None
 
 
-def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks):
+def tier_of(p):
+    """Map a placement label to its Tier. NAND-resident layers are read at
+    CXL DRAM speed during decode because Phase 1 has staged them there."""
+    if p == PL_GPU_HBM:   return GPU_HBM
+    if p == PL_HOST_DRAM: return HOST_DRAM
+    return CXL_DRAM
+
+
+def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
+                             gpu_cap=0):
     place    = [None] * len(layers)
     ltypes   = [classify_layer_type(L) for L in layers]
     sparsity = {}
@@ -285,54 +296,55 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks):
         else:
             kv_inc[L["name"]] = 0
 
-    h_free, c_free = host_cap, cxl_cap
+    def size_of(i, L):
+        # Attention layers must also hold their growing KV increment.
+        return L["bytes"] + (kv_inc[L["name"]] if ltypes[i] == LayerType.ATTENTION else 0)
 
-    # Priority 0: LM Head
-    for i, L in enumerate(layers):
-        if ltypes[i] == LayerType.OUTPUT and L["bytes"] <= h_free:
-            place[i] = PL_HOST_DRAM
-            h_free -= L["bytes"]
+    def fill(tier_label, cap):
+        """Apply the semantic priority order into one tier; return unused bytes.
 
-    # 1. Pinned Attention → Host DRAM
-    for i, L in enumerate(layers):
-        if ltypes[i] == LayerType.ATTENTION and place[i] is None:
-            sz = L["bytes"] + kv_inc[L["name"]]
-            if sz <= h_free:
-                place[i] = PL_HOST_DRAM
-                h_free -= sz
+        The order is the contribution: output head first (touched every step),
+        then attention with its KV (latency-critical), then embeddings, then MLP
+        by descending activation sparsity (least bandwidth per useful FLOP),
+        then whatever dense MLP still fits.
+        """
+        free = cap
+        if free <= 0:
+            return free
+        for i, L in enumerate(layers):                       # 0: output head
+            if place[i] is None and ltypes[i] == LayerType.OUTPUT and size_of(i, L) <= free:
+                place[i] = tier_label; free -= size_of(i, L)
+        for i, L in enumerate(layers):                       # 1: attention + KV
+            if place[i] is None and ltypes[i] == LayerType.ATTENTION and size_of(i, L) <= free:
+                place[i] = tier_label; free -= size_of(i, L)
+        for i, L in enumerate(layers):                       # 2: embeddings
+            if place[i] is None and ltypes[i] == LayerType.EMBEDDING and L["bytes"] <= free:
+                place[i] = tier_label; free -= L["bytes"]
+        cands = sorted([(i, L, sparsity[i]) for i, L in enumerate(layers)
+                        if place[i] is None and ltypes[i] == LayerType.MLP],
+                       key=lambda x: x[2], reverse=True)
+        for i, L, sp in cands:                               # 3: sparse MLP
+            if sp > 0.60 and L["bytes"] <= free:
+                place[i] = tier_label; free -= L["bytes"]
+        for i, L in enumerate(layers):                        # 3.5: dense MLP
+            if place[i] is None and ltypes[i] == LayerType.MLP and L["bytes"] <= free:
+                place[i] = tier_label; free -= L["bytes"]
+        return free
 
-    # 2. Embedding → Host
-    for i, L in enumerate(layers):
-        if place[i] is None and ltypes[i] == LayerType.EMBEDDING and L["bytes"] <= h_free:
-            place[i] = PL_HOST_DRAM
-            h_free -= L["bytes"]
+    # The cascade. With an accelerator attached the whole ordering shifts up a
+    # level: what would have been pinned in host DRAM goes to HBM, what would
+    # have been in CXL DRAM moves to host, and NAND residency shrinks. With
+    # gpu_cap = 0 this reduces exactly to the three-tier placement.
+    fill(PL_GPU_HBM, gpu_cap)
+    fill(PL_HOST_DRAM, host_cap)
 
-    # 3. High Sparsity MLP → Host
-    mlp_cands = [(i, L, sparsity[i]) for i, L in enumerate(layers)
-                 if place[i] is None and ltypes[i] == LayerType.MLP]
-    mlp_cands.sort(key=lambda x: x[2], reverse=True)
-    for i, L, sp in mlp_cands:
-        if sp > 0.60 and L["bytes"] <= h_free:
-            place[i] = PL_HOST_DRAM
-            h_free -= L["bytes"]
-
-    # =====================================================================
-    # NEW STEP 3.5: FALLBACK
-    # Put remaining Dense MLPs in Host if there is still space available!
-    # =====================================================================
-    for i, L in enumerate(layers):
-        if place[i] is None and ltypes[i] == LayerType.MLP and L["bytes"] <= h_free:
-            place[i] = PL_HOST_DRAM
-            h_free -= L["bytes"]
-
-    # 4. Dense MLP → CXL DRAM Cache (Only what didn't fit in Host)
+    c_free = cxl_cap                                          # 4: CXL DRAM
     for i, L in enumerate(layers):
         if place[i] is None and L["bytes"] <= c_free:
             place[i] = PL_CXL_DEV_DRAM
             c_free -= L["bytes"]
 
-    # 5. NAND
-    for i in range(len(layers)):
+    for i in range(len(layers)):                              # 5: NAND
         if place[i] is None: place[i] = PL_CXL_DEV_NAND
 
     return place, ltypes, kv_inc, sparsity
@@ -410,7 +422,7 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         # giving SemSched a 15x compute advantage in prefill. Parameters remain
         # dense (no sparsity discount) -- prefill fires all neurons.
         eff_flops = L["flops"] * seq_len * BATCH_SIZE
-        mem = transfer_time_s(sz, HOST_DRAM if place[i] == PL_HOST_DRAM else CXL_DRAM)
+        mem = transfer_time_s(sz, tier_of(place[i]))
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
         pipe_time  = mem + (chunks - 1) * comp_chunk if chunks > 1 else max(mem, comp_chunk)
@@ -509,7 +521,8 @@ def run_semantic_duplex_simulation():
                          if "decoder_" in L["name"] and "_attn" in L["name"])
 
         place, ltypes, inc, sparsity = semantic_aware_placement(
-            layers, host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, num_blocks)
+            layers, host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, num_blocks,
+            gpu_cap=gpu_hbm_capacity_bytes)
 
         tmon    = DuplexTrafficMonitor()
         cache   = AttentionGuidedCache(cxl_dev_dram_capacity_bytes)
@@ -598,7 +611,7 @@ def run_semantic_duplex_simulation():
                         cache.set_attention_score(fi, score)
 
                 # ── Serve layer from tier ─────────────────────────────────────
-                src       = "Host DRAM" if place[idx] == PL_HOST_DRAM else "CXL DRAM"
+                src       = place[idx]
                 raw_stall = 0
                 if place[idx] == PL_CXL_DEV_NAND and not cache.contains(idx, sz):
                     src         = "CXL NAND (Stall)"
@@ -615,7 +628,7 @@ def run_semantic_duplex_simulation():
                 # ── Compute + memory time ─────────────────────────────────────
                 comp  = compute_time_s(eff_flops, cpu_cores)
                 mem   = transfer_time_s(
-                    sz, HOST_DRAM if place[idx] == PL_HOST_DRAM else CXL_DRAM)
+                    sz, tier_of(place[idx]))
 
                 # Growing-KV: attention layers read all prior K/V from cache.
                 # At decode step `token_step`, total cached positions = PREFILL_TOKENS + token_step.
@@ -650,7 +663,11 @@ def run_semantic_duplex_simulation():
                     tmon.record_write(kv_write_scaled)
                     sched.pending_kv_writebacks += kv_write_scaled
 
-                    if place[idx] == PL_HOST_DRAM:
+                    if place[idx] == PL_GPU_HBM:
+                        # KV write lands in HBM; no CXL link involvement.
+                        pass
+
+                    elif place[idx] == PL_HOST_DRAM:
                         # Host DRAM is not on the CXL link; KV write serialized
                         # through host DDR.
                         kv_write_t = transfer_time_s(kv_write_scaled, CXL_DRAM)

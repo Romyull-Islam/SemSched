@@ -20,6 +20,11 @@ CXL_DEVICE_DRAM = Tier("CXL Device DRAM (CMM-H cache)", 27.0e9, 0.505e-6)
 # NAND Backend: ~5 GB/s (Fig 2) with conservative latency
 CXL_DEVICE_NAND = Tier("CXL Device NAND (CMM-H)", 5.0e9, 1.547e-6)
 
+# Accelerator HBM, when one is attached. A100 80GB HBM2e: 2039 GB/s measured
+# STREAM. Chunk latency is negligible beside the CXL tiers (~0.5-1.5 us) and
+# is charged as zero rather than guessed.
+GPU_HBM = Tier("GPU HBM", 2039e9, 0.0)
+
 # Backward-compat aliases
 CXL_DRAM     = CXL_DEVICE_DRAM
 CXL_SSD_NAND = CXL_DEVICE_NAND
