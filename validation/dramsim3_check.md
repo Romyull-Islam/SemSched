@@ -65,3 +65,53 @@ mixing conventions.
 |---|---|---|
 | Compute term | LLMCompass (ISCA 2024, 4.1% error) | regime reproduced; utilization calibrated; SemSched throughput reproduced to 0.05% |
 | Memory term | DRAMsim3 (cycle-accurate, validated) | DRAM efficiency measured at 70.8%; headline ratios move ≤0.01× when applied |
+
+---
+
+## Accelerator tier (added 2026-08-05)
+
+The tier model gained an accelerator level, initially set from a vendor spec
+sheet with nothing checking it. DRAMsim3 ships GDDR and HBM configurations, so
+the same method used for DDR4 applies directly.
+
+```bash
+./build/dramsim3main configs/GDDR6_8Gb_x16.ini  -c 200000 -s stream -o out
+./build/dramsim3main configs/HBM2_8Gb_x128.ini  -c 200000 -s stream -o out
+```
+
+| Config | Peak | DRAMsim3 achieved | Efficiency | Usable? |
+|---|---|---|---|---|
+| DDR4-2666 (CXL cache) | 21.33 GB/s | 15.10 GB/s | **70.8%** | yes |
+| GDDR6 x16 (accelerator) | 193.9 GB/s | 115.98 GB/s | **59.8%** | yes |
+| HBM2 x128 | 256.0 GB/s | 22.06 GB/s | 8.6% | **no — discarded** |
+
+GDDR6 peak is $(1/0.66\,\text{ns}) \times 8 \times 16$ B: GDDR6 clocks WCK at
+$4\times$ CK and transfers on both edges, so eight transfers per command clock,
+giving 12.1 Gbps/pin — the correct figure for real GDDR6. Computing it as plain
+DDR gives 48.5 GB/s and an impossible 239% efficiency, which is how the error
+was caught.
+
+**The HBM2 number is discarded rather than reported.** That configuration has 8
+independent channels and the `stream` generator drives a single sequential
+address stream, which cannot fill them. Its 8.6% measures the trace, not the
+device. DDR4 and GDDR6 are single-channel configs, so `stream` saturates them
+and their numbers stand.
+
+### Sensitivity
+
+Re-running with the accelerator tier derated by the measured GDDR6 efficiency
+($1792 \times 0.598 = 1072$ GB/s), RTX 5090 at 16H+48C FP16:
+
+| Batch | 1792 GB/s (spec) | 1072 GB/s (achieved) | Δ |
+|---|---|---|---|
+| 8 | 2.05× | 2.06× | +0.01 |
+| 32 | 1.83× | 1.84× | +0.01 |
+| 64 | 1.92× | 1.93× | +0.01 |
+| 128 | 1.64× | 1.65× | +0.01 |
+
+**A 40% cut in accelerator bandwidth moves every ratio by +0.01×.** The
+accelerator is roughly 40–66× faster than the CXL DRAM tier either way, so it is
+never the constraint; the CXL and NAND tiers set the step time. The reported
+accelerator results are therefore insensitive to whether that tier is expressed
+as a spec peak or a measured achieved figure, in the same way and for the same
+reason as the host DRAM tier above.
