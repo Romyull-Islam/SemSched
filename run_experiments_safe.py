@@ -32,7 +32,7 @@ SIMS = [
 MODELS = [("Mistral7BCfg", 7), ("Llama13BCfg", 13),
           ("Qwen3_20BCfg", 20), ("Qwen2_5_72BCfg", 72)]
 QUANTS = ["fp32", "fp16", "int8", "int4"]
-MEMS = [(16, 32), (16, 64), (32, 32), (32, 64)]
+MEMS = [(16, 48), (32, 48), (16, 32), (16, 64), (32, 32), (32, 64)]
 BATCHES = [1, 4, 8, 16, 32, 64, 128, 256]
 
 COLUMNS = ["Experiment", "Model", "Simulator", "Quant", "MemConfig", "BatchSize",
