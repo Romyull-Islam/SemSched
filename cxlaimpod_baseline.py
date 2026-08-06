@@ -161,9 +161,9 @@ total_io = weight_rd + kv_wr
 avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
 
 print(f"Decode throughput: {decode_tps:.6f}")
-print(f"Prefill throughput: {PREFILL_TOKENS / pf_time:.3f}")
+print(f"Prefill throughput: {PREFILL_TOKENS / pf_time:.6f}")
 print(f"Overall throughput: "
-      f"{(PREFILL_TOKENS + TOKENS) / (cold_load + pf_time + total_dec):.3f}")
+      f"{(PREFILL_TOKENS + TOKENS) / (cold_load + pf_time + total_dec):.6f}")
 print(f"Read_Op_Percent: {weight_rd / total_io * 100:.4f}%")
 print(f"Write_Op_Percent: {kv_wr / total_io * 100:.4f}%")
 print(f"Read_Ratio: {weight_rd / total_io * 100:.4f}%")

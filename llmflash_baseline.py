@@ -281,7 +281,7 @@ def simulate_llmflash():
 
     # ── Output in format expected by parse_metrics ─────────────────────────────
     print(f"Decode throughput: {decode_tps:.4f}")
-    print(f"Prefill throughput: {prefill_tps:.1f}")
+    print(f"Prefill throughput: {prefill_tps:.6f}")
     print(f"Overall throughput: "
           f"{(NUM_PREFILL_TOKENS + 16) / (total_prefill_time + avg_decode_t * 16):.3f}")
 

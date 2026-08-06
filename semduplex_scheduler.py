@@ -753,7 +753,7 @@ def run_semantic_duplex_simulation():
         print(f"Decode throughput: {BATCH_SIZE / mean_lat:.6f} t/s")
         # Per-sequence prefill TPS (matches FlexGen/LIA/LLMFlash convention)
         # reporting convention (flexgen_baseline.py:155, lia_baseline.py:149).
-        print(f"Prefill throughput: {PREFILL_TOKENS / pf_time_val:.2f} t/s")
+        print(f"Prefill throughput: {PREFILL_TOKENS / pf_time_val:.6f} t/s")
 
         total_model_size = sum(L["bytes"] for L in layers)
         total_time       = ssd_cold_time_s(total_model_size) + pf_time_val + total_decode_lat
