@@ -164,8 +164,8 @@ print(f"Write_Op_Percent: {(total_kv_wr / total_io_vol) * 100:.4f}%")
 print(f"Read_Ratio: 100.0000%")
 
 print(f"Decode throughput: {decode_tps:.6f}")
-print(f"Prefill throughput: {PREFILL_TOKENS / prefill_latency:.3f}")
-print(f"Overall throughput: {(PREFILL_TOKENS + TOKENS) / (cold_load + pf_time + dec_time):.3f}")
+print(f"Prefill throughput: {PREFILL_TOKENS / prefill_latency:.6f}")
+print(f"Overall throughput: {(PREFILL_TOKENS + TOKENS) / (cold_load + pf_time + dec_time):.6f}")
 
 avg_read_stall_pct  = sum(per_token_read_stall_pcts)  / len(per_token_read_stall_pcts)
 avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
