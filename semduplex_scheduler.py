@@ -405,8 +405,15 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
             bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps
+            # Serial per-chunk latency, NOT divided by the I/O thread pool.
+            # No baseline models concurrent staging I/O, and FlexGen and
+            # LLM-in-a-Flash both describe overlapped I/O in their own papers,
+            # so crediting ourselves alone with it would be a strawman. The
+            # division is inert in any case -- staging completes inside the
+            # prefill slack, so stage_finish never binds and removing it changes
+            # every reported figure by 0.000.
             lat_term = (math.ceil(L["bytes"] / IO_CHUNK_BYTES)
-                        * CXL_SSD_NAND.chunk_latency_s) / IO_THREAD_POOL_SIZE
+                        * CXL_SSD_NAND.chunk_latency_s)
             t_stage += bw_term + lat_term
             stage_finish[i] = t_stage
             cache.add(i, L["bytes"])
