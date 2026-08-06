@@ -432,7 +432,15 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         mem = transfer_time_s(sz, tier_of(place[i]))
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
-        pipe_time  = mem + (chunks - 1) * comp_chunk if chunks > 1 else max(mem, comp_chunk)
+        # Chunked pipelining overlaps a chunk's compute with the next chunk's
+        # transfer, but it can never take less time than the compute itself:
+        # every FLOP is still executed. The unfloored form below charged
+        # (chunks-1) compute chunks, one short of the total, which let prefill
+        # finish ~1/chunks BELOW the 2*P*S*B compute floor -- impossible, and
+        # worth about 10% at the chunk counts we use.
+        full_comp  = comp_chunk * chunks
+        pipe_time  = (max(mem + (chunks - 1) * comp_chunk, full_comp)
+                      if chunks > 1 else max(mem, comp_chunk))
 
         # Wait for this layer's asynchronous staging only if it has not finished.
         start = max(lat, stage_finish.get(i, 0.0))
