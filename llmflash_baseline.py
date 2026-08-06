@@ -226,36 +226,34 @@ def simulate_llmflash():
     prefill_ffn_load = total_ffn_bytes * 1.0   # 100% active during prefill
     prefill_rewrite  = prefill_ffn_load * DRAM_REWRITE_FRAC
 
-    # Prefill makes ONE pass over the parameters for the whole prompt: all
-    # NUM_PREFILL_TOKENS positions are processed together, which is exactly why
-    # prefill is compute-bound rather than memory-bound. The previous loop paid
-    # the full weight load once per prompt token, charging LLM-in-a-Flash 512
-    # model loads where every other simulator here pays one, and understating
-    # its prefill throughput by roughly that factor.
-    weight_t = 0.0
+    total_prefill_time = 0.0
+    for _ in range(NUM_PREFILL_TOKENS):
+        t = 0.0
 
-    # Attention: pinned in DRAM
-    for L in pinned_layers:
-        weight_t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
-        if pinned_dram_frac < 1.0:
-            weight_t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
+        # Attention: pinned in DRAM
+        for L in pinned_layers:
+            t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
+            if pinned_dram_frac < 1.0:
+                t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
-    # FFN: full load from NAND (no sparsity, no window, no delta -- sparsity
-    # collapses during prefill, which is this baseline's own stated assumption)
-    weight_t += nand_bundled(prefill_ffn_load)
-    weight_t += transfer_time_s(prefill_rewrite, DRAM_POOL)
+        # FFN: full load from NAND (no sparsity, no window, no delta)
+        t += nand_bundled(prefill_ffn_load)
 
-    # KV writes DO scale with prompt length: one per position per sequence.
-    weight_t += (NUM_PREFILL_TOKENS * BATCH_SIZE
-                 * transfer_time_s(kv_per_seq_bytes, DRAM_POOL))
+        # DRAM rewrite + KV writes for B sequences
+        t += transfer_time_s(prefill_rewrite, DRAM_POOL)
+        t += BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, DRAM_POOL)
 
-    # Compute over every prompt position across B sequences.
-    prefill_compute = compute_time_s(
-        sum(L["flops"] for L in layers) * BATCH_SIZE * NUM_PREFILL_TOKENS)
+        # Compute for this prefill token across B sequences. Sparsity collapses
+        # during prefill (all neurons fire), so no FFN discount here — matching
+        # this loop's own stated modeling assumption.
+        t = max(t, compute_time_s(sum(L["flops"] for L in layers) * BATCH_SIZE))
 
-    total_prefill_time = max(weight_t, prefill_compute)
-    prefill_tps = (NUM_PREFILL_TOKENS / total_prefill_time
-                   if total_prefill_time > 0 else 0.0)
+        total_prefill_time += t
+
+    avg_prefill_t = total_prefill_time / NUM_PREFILL_TOKENS
+    # A12 FIX: per-sequence convention, matching FlexGen/LIA/SemSched
+    prefill_tps   = (NUM_PREFILL_TOKENS / total_prefill_time
+                     if total_prefill_time > 0 else 0.0)
 
     total_model_bytes = sum(L["bytes"] for L in layers)
     cold_load = ssd_time_s(total_model_bytes)
