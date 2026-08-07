@@ -439,7 +439,15 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         # finish ~1/chunks BELOW the 2*P*S*B compute floor -- impossible, and
         # worth about 10% at the chunk counts we use.
         full_comp  = comp_chunk * chunks
-        pipe_time  = (max(mem + (chunks - 1) * comp_chunk, full_comp)
+        # Chunked pipeline: transfer of chunk k+1 overlaps compute of chunk k,
+        # so the cost is the slower stream plus one chunk of the faster one to
+        # fill the pipe. The previous form, mem + (chunks-1)*comp_chunk, added
+        # the FULL transfer to nearly-full compute and therefore only overlapped
+        # when one term dominated; at mem ~= comp it charged close to their sum
+        # -- 187.5 where 112.5 is correct at chunks=8 -- which produced a
+        # non-monotonic dip to 0.85x exactly in the mixed regime the pipeline
+        # exists to handle.
+        pipe_time  = (max(mem, full_comp) + min(mem, full_comp) / chunks
                       if chunks > 1 else max(mem, comp_chunk))
 
         # Wait for this layer's asynchronous staging only if it has not finished.
