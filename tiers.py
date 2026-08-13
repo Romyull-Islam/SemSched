@@ -20,6 +20,15 @@ CXL_DEVICE_DRAM = Tier("CXL Device DRAM (CMM-H cache)", 27.0e9, 0.505e-6)
 # NAND Backend: ~5 GB/s (Fig 2) with conservative latency
 CXL_DEVICE_NAND = Tier("CXL Device NAND (CMM-H)", 5.0e9, 1.547e-6)
 
+# Hard ceiling on the NAND backend, for every policy without exception.
+# Zeng et al.: "The CMM-H device employs a PCIe Gen 4 x4 NVMe SSD" -> 7.88 GB/s
+# theoretical. The measured 5.0 GB/s above is 63% of it and already reflects
+# streaming access. Any simulator claiming more than the ceiling is asking for
+# bandwidth the bus cannot supply; assert it rather than trust review to notice.
+NAND_LINK_CEILING_BPS = 7.88e9
+assert CXL_DEVICE_NAND.bw_Bps <= NAND_LINK_CEILING_BPS, (
+    "NAND tier exceeds PCIe Gen4 x4 capacity")
+
 # Accelerator memory, when one is attached. Defaults to the RTX 5090's GDDR7,
 # not HBM: 32 GB at 1792 GB/s on a 512-bit bus. Consumer parts do not use HBM,
 # and modeling one at HBM2e's 2039 GB/s overstated it by 14%.

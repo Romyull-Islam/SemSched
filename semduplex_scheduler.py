@@ -555,8 +555,31 @@ def run_semantic_duplex_simulation():
         num_blocks = sum(1 for L in layers
                          if "decoder_" in L["name"] and "_attn" in L["name"])
 
+        # The KV cache is resident in CXL device DRAM for the whole session, so
+        # its bytes are NOT available to hold weights. Placement previously used
+        # the full device capacity, so at 32H+64C it put 63.9 GB of MLP into the
+        # same 64 GB the 20.6 GB KV cache also needs -- 32% over. KV belongs in
+        # the slowest DRAM tier precisely because weights can least afford to
+        # lose it: KV can never spill to NAND (it is written every step), while
+        # weights are read-only and NAND-safe. Reserving it here is what makes
+        # that placement honest.
+        # KV GROWS. Reserving its final size starves the early steps of weight
+        # capacity they could have used, and reserving its initial size
+        # over-commits the device later. The device instead yields weight
+        # capacity progressively as KV expands: at step t the space available
+        # for weights is C - kv(P+t), so the time-averaged budget over the
+        # generation is C - kv(P + T/2). Placement is a one-shot decision, so
+        # the time-average is what it should see; the eviction that realises it
+        # step by step is the runtime's job.
+        _kv_per_tok = sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128)
+                          * BYTES_PER_PARAM
+                          for L in layers
+                          if classify_layer_type(L) == LayerType.ATTENTION) * BATCH_SIZE
+        _kv_mean = int(_kv_per_tok * (PREFILL_TOKENS + TOKENS / 2.0))
+        _dev_for_weights = max(0, cxl_dev_dram_capacity_bytes - _kv_mean)
+
         place, ltypes, inc, sparsity = semantic_aware_placement(
-            layers, host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, num_blocks,
+            layers, host_dram_capacity_bytes, _dev_for_weights, num_blocks,
             gpu_cap=gpu_hbm_capacity_bytes)
 
         tmon    = DuplexTrafficMonitor()
@@ -666,8 +689,15 @@ def run_semantic_duplex_simulation():
                             break
                     if stall_until == 0:
                         stall_until = lat + transfer_time_s(sz, CXL_SSD_NAND)
+                    # DOUBLE-CHARGE REMOVED. stall_until is derived from the
+                    # SAME NAND transfer that `mem` below charges in full, so
+                    # adding (1-sigma) of it billed the transfer at 1.15x while
+                    # every baseline bills it at 1.00x. That asymmetry, not any
+                    # policy difference, was the whole +25% gap against the
+                    # byte-accounting floor. The transfer is charged once, by
+                    # `mem`, and overlapped with compute via max(comp, mem) --
+                    # exactly as the baselines model it.
                     raw_stall = max(0, stall_until - lat)
-                    lat += raw_stall * (1 - SEMANTIC_STREAM_OVERLAP)
 
                 # ── Compute + memory time ─────────────────────────────────────
                 comp  = compute_time_s(eff_flops, cpu_cores)

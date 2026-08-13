@@ -53,14 +53,35 @@ from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
 from sim_cfg import gpu_hbm_capacity_bytes as _g
 _h = host_dram_capacity_bytes
 _c = cxl_dev_dram_capacity_bytes
-_pool_bw  = (_g * GPU_HBM.bw_Bps + _h * HOST_DRAM.bw_Bps + _c * CXL_DRAM.bw_Bps) / (_g + _h + _c)
+# HARMONIC, not arithmetic. Moving B bytes spread over tiers takes
+# sum(bytes_i / bw_i), so the effective bandwidth of a pool is the
+# capacity-weighted HARMONIC mean. The arithmetic mean always overstates it
+# (Jensen), which handed this baseline ~2.8% of free throughput on exactly the
+# bytes every policy has to move. This is an arithmetic correction, not a
+# judgement about their design: their unified-pool POLICY is unchanged.
+_pool_bw  = ((_g + _h + _c) /
+             (_g / GPU_HBM.bw_Bps + _h / HOST_DRAM.bw_Bps + _c / CXL_DRAM.bw_Bps))
 _pool_lat = (_g * GPU_HBM.chunk_latency_s + _h * HOST_DRAM.chunk_latency_s
              + _c * CXL_DRAM.chunk_latency_s) / (_g + _h + _c)
 DRAM_POOL = Tier("Unified Host+CXL DRAM pool", _pool_bw, _pool_lat)
 
 # ── Paper constants (OPT/ReLU baseline, §3.1 and §4.1) ────────────────────────
 WINDOW_SIZE_K             = 5    # Sliding window token count
-BUNDLING_THROUGHPUT_BOOST = 1.8  # Row-col bundling: 1.25→2.25 GB/s (Table 2)
+# Row-column bundling is real -- LLM-in-a-Flash Table 2 measures it lifting
+# THEIR flash from 1.25 to 2.25 GB/s. It does not transplant onto CMM-H.
+#
+# Zeng et al., verbatim: "The CMM-H device employs a PCIe Gen 4 x4 NVMe SSD."
+# Gen4 x4 carries 7.88 GB/s. The prototype's measured stable miss bandwidth is
+# 5.0 GB/s -- 63% of that link, a normal sustained sequential rate for TLC, and
+# already the product of streaming access. Applying 1.8x on top yields 9.0 GB/s,
+# which is 14% ABOVE the theoretical capacity of the bus the data must cross.
+# No access pattern moves bytes faster than the link carries them.
+#
+# So this is not a choice between two conventions. 1.8 asks the hardware for
+# something it cannot do, and it asked it for one policy only -- no other
+# simulator here has any equivalent term. Every policy now reads the NAND
+# backend at the one documented, physically attainable rate.
+BUNDLING_THROUGHPUT_BOOST = 1.0
 DRAM_REWRITE_FRAC         = 0.25 # Neuron swap rewrite overhead (§3.3)
 
 # ── Activation-function-aware DRAM window turnover ────────────────────────────
