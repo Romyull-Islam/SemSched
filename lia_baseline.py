@@ -27,6 +27,7 @@
 
 import math
 import pandas as pd
+from tiers import kv_growth_spill_time_s
 from tiers import (
     GiB, HOST_DRAM, CXL_DRAM, CXL_SSD_NAND,
     transfer_time_s, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S
@@ -177,6 +178,9 @@ for token_step in range(TOKENS):
         ltime        = max(comp_s, weight_mem_time, kv_total_ddr_time)
         step_time_s += ltime
 
+    step_time_s += kv_growth_spill_time_s(
+        sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
+        _kv_resident, HOST_DRAM)
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0

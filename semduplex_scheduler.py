@@ -35,6 +35,7 @@ from enum import Enum
 
 from cxl_link import CXLLink   # two-queue full-duplex bus model
 
+from tiers import kv_growth_spill_time_s
 from tiers import (
     HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM, transfer_time_s,
     Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, IO_CHUNK_BYTES
@@ -896,6 +897,9 @@ def run_semantic_duplex_simulation():
 
             # sample measured Tx-lane utilization from the queue
             queue_uwrite_samples.append(link.write_utilization_pct())
+            lat += kv_growth_spill_time_s(
+                _kv_per_tok * (PREFILL_TOKENS + token_step + 1),
+                _kv_mean, _kv_tiers[max(_kv_split, key=_kv_split.get)])
             total_decode_lat += lat
 
         # ── Post-loop aggregates ───────────────────────────────────────────────
