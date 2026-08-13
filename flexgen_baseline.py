@@ -19,13 +19,15 @@
 
 import math
 import pandas as pd
-from tiers import GiB, HOST_DRAM, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s
+from tiers import GiB, HOST_DRAM, GPU_HBM, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s
 from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
 from sim_cfg import (
+    gpu_hbm_capacity_bytes,
     TOKENS, cpu_freq_hz, cpu_cores, flops_per_cycle_per_core,
     parallel_efficiency, host_dram_capacity_bytes, BATCH_SIZE
 )
 
+PL_GPU_HBM              = "GPU HBM"
 PL_HOST_DRAM            = "Host DRAM"
 PL_HOST_SSD             = "Host SSD (NVMe)"
 PREFILL_TOKENS          = 512
@@ -38,6 +40,10 @@ def compute_time_s(flops):
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core * parallel_efficiency)
 
 def dram_time_s(n): return transfer_time_s(n, HOST_DRAM)
+def gpu_time_s(n):
+    return transfer_time_s(n, GPU_HBM)
+
+
 def ssd_time_s(n):  return transfer_time_s(
     n, Tier("Host SSD", NVME_STREAM_BW, NVME_STREAM_LAT_S))
 
@@ -57,33 +63,66 @@ for L in layers:
 
 
 # ── Placement ─────────────────────────────────────────────────────────────────
+# FlexGen is a GPU system -- its title is "with a Single GPU" and its policy is
+# a placement across GPU -> CPU -> disk. Modelling it without a GPU tier removed
+# the top level of the hierarchy its LP exists to fill, and cost it the fastest
+# memory on the machine. The cascade below is GPU first, then host DRAM, then
+# disk, matching the paper's ordering.
 placement = [PL_HOST_SSD] * len(layers)
+gpu_free   = gpu_hbm_capacity_bytes
 host_free  = host_dram_capacity_bytes
 
 for n in HOT_LAYERS_BY_NAME:
     idx = name_to_idx.get(n)
     if idx is not None:
         sz = layers[idx]["bytes"]
-        if sz <= host_free:
+        if sz <= gpu_free:
+            placement[idx] = PL_GPU_HBM
+            gpu_free -= sz
+        elif sz <= host_free:
             placement[idx] = PL_HOST_DRAM
             host_free -= sz
 
+# FlexGen's LP searches over NINE variables -- (wg, wc, wd) for weights,
+# (cg, cc, cd) for the KV cache and (hg, hc, hd) for activations -- as
+# INDEPENDENT percentages per tier (Sec 4.3, Eq. 1). Bundling a layer's KV into
+# its weight footprint here made every decoder block fail the GPU test on the
+# KV term alone, so the accelerator only ever took lm_head and final_norm and
+# the tier gained 0%. Weights are placed on their own, each tier filled to
+# capacity, matching the LP's structure rather than a per-layer all-or-nothing.
+# FlexGen's LP does NOT place whole layers. Its variables (wg, wc, wd) are
+# PERCENTAGES of the weight tensors on each tier (Sec 4.3, Eq. 1) -- a layer may
+# be split 30/70 across GPU and disk. All-or-nothing placement forfeits that,
+# stranding capacity whenever the next layer does not fit whole. Fractions are
+# tracked per layer and each tier is filled exactly to capacity, which is what
+# the LP's optimum looks like when the only constraint that binds is capacity.
+frac_gpu  = [0.0] * len(layers)
+frac_host = [0.0] * len(layers)
 for i, L in enumerate(layers):
-    if placement[i] == PL_HOST_DRAM:
+    if placement[i] in (PL_GPU_HBM, PL_HOST_DRAM):
+        frac_gpu[i]  = 1.0 if placement[i] == PL_GPU_HBM  else 0.0
+        frac_host[i] = 1.0 if placement[i] == PL_HOST_DRAM else 0.0
         continue
-    sz = L["bytes"] + kv_cache_increment[L["name"]] * PREFILL_TOKENS
-    if sz <= host_free:
-        placement[i] = PL_HOST_DRAM
-        host_free -= sz
-    else:
-        break
+    rem = float(L["bytes"])
+    take = min(rem, gpu_free)
+    if take > 0:
+        frac_gpu[i] = take / L["bytes"]; gpu_free -= take; rem -= take
+    take = min(rem, host_free)
+    if take > 0:
+        frac_host[i] = take / L["bytes"]; host_free -= take; rem -= take
+    placement[i] = (PL_GPU_HBM if frac_gpu[i] >= 0.999 else
+                    PL_HOST_DRAM if frac_host[i] >= 0.999 else PL_HOST_SSD)
+    # FlexGen's LP fills each tier to capacity; the original `break` abandoned
+    # placement at the first layer that did not fit, leaving fast memory unused.
+    # Continue so the tier is actually filled.
 
 
 # ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s   = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
-    mem_time = dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
+    mem_time = gpu_time_s(L["bytes"]) if placement[i] == PL_GPU_HBM \
+               else dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
                else ssd_time_s(L["bytes"])
     prefill_latency += max(comp_s, mem_time)
 
@@ -104,8 +143,12 @@ for token_step in range(TOKENS):
 
     for i, L in enumerate(layers):
         comp_s   = compute_time_s(L["flops"] * BATCH_SIZE)
-        mem_time = dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
-                   else ssd_time_s(L["bytes"])
+        b = L["bytes"]
+        fg, fh = frac_gpu[i], frac_host[i]
+        fd = max(0.0, 1.0 - fg - fh)
+        mem_time = (gpu_time_s(b * fg) if fg > 0 else 0.0) \
+                 + (dram_time_s(b * fh) if fh > 0 else 0.0) \
+                 + (ssd_time_s(b * fd) if fd > 0 else 0.0)
 
         # Growing-KV: attention layers read all prior K/V from cache.
         # KV lives in Host DRAM in FlexGen, so this is a host-DRAM read.

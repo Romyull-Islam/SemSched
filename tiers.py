@@ -25,7 +25,9 @@ CXL_DEVICE_NAND = Tier("CXL Device NAND (CMM-H)", 5.0e9, 1.547e-6)
 # theoretical. The measured 5.0 GB/s above is 63% of it and already reflects
 # streaming access. Any simulator claiming more than the ceiling is asking for
 # bandwidth the bus cannot supply; assert it rather than trust review to notice.
-NAND_LINK_CEILING_BPS = 7.88e9
+NAND_LINK_CEILING_BPS  = 7.88e9    # PCIe Gen4 x4 to the backend SSD
+CXL_HOST_LINK_CEILING  = 31.5e9    # PCIe Gen5 x8, Soltaniyeh's CMM-H host link
+HOST_DRAM_CEILING      = 38.4e9    # DDR5-4800, one channel
 assert CXL_DEVICE_NAND.bw_Bps <= NAND_LINK_CEILING_BPS, (
     "NAND tier exceeds PCIe Gen4 x4 capacity")
 
@@ -66,3 +68,13 @@ def transfer_time_s(bytes_amt: int, tier: Tier, chunk_bytes: int = IO_CHUNK_BYTE
 
 def chunk_us(tier: Tier, chunk_bytes: int = IO_CHUNK_BYTES) -> float:
     return 1e6 * ((chunk_bytes / tier.bw_Bps) + tier.chunk_latency_s)
+
+
+# Every tier must stay inside the interface its bytes physically cross. Five of
+# today's six accounting defects were terms with no such check -- 9 GB/s over a
+# 7.88 GB/s link, 136 GB into a 64 GB part, a transfer billed twice. Assert the
+# physics; a float expression will otherwise return any number you ask it for.
+assert CXL_DEVICE_NAND.bw_Bps <= NAND_LINK_CEILING_BPS,  "NAND exceeds PCIe Gen4 x4"
+assert CXL_DEVICE_DRAM.bw_Bps <= CXL_HOST_LINK_CEILING,  "CXL DRAM exceeds Gen5 x8"
+assert HOST_DRAM.bw_Bps       <= HOST_DRAM_CEILING,      "host DRAM exceeds DDR5-4800"
+assert NVME_STREAM_BW         <= NAND_LINK_CEILING_BPS,  "NVMe exceeds PCIe Gen4 x4"

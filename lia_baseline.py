@@ -33,11 +33,13 @@ from tiers import (
 )
 from model_cfg import build_layers, BYTES_PER_PARAM
 from sim_cfg import (
+    gpu_hbm_capacity_bytes,
     TOKENS, cpu_freq_hz, cpu_cores,
     flops_per_cycle_per_core, parallel_efficiency,
     host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, BATCH_SIZE
 )
 
+PL_GPU_HBM      = "GPU HBM"
 PL_HOST_DRAM    = "Host DRAM"
 PL_CXL_DEV_DRAM = "CXL Device DRAM"
 PL_CXL_DEV_NAND = "CXL Device NAND"
@@ -64,10 +66,16 @@ kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 
 
 # ── LIA Placement: ALL weights → CXL DRAM, spill to NAND only on overflow ────
+# LIA is "A Single-GPU LLM Inference Acceleration" -- Sapphire Rapids with an
+# A100 or H100. CXL is the tier BENEATH the GPU, not a replacement for it.
 placement = []
+gpu_free  = gpu_hbm_capacity_bytes
 cxl_free  = cxl_dev_dram_capacity_bytes
 for L in layers:
-    if L["bytes"] <= cxl_free:
+    if L["bytes"] <= gpu_free:
+        placement.append(PL_GPU_HBM)
+        gpu_free -= L["bytes"]
+    elif L["bytes"] <= cxl_free:
         placement.append(PL_CXL_DEV_DRAM)
         cxl_free -= L["bytes"]
     else:
