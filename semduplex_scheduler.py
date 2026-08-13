@@ -410,7 +410,10 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     # bandwidth-limited NAND channel (threads amortize per-chunk latency only).
     stage_finish = {}
     t_stage      = 0.0
-    _stage_budget = cache.cap        # what placement left free on the device
+    # ENABLE_PREFILL_WARMUP was declared but never read, so every ablation that
+    # set it to False measured the warmup-ON configuration and reported it as
+    # OFF. The flag now gates the staging loop it names.
+    _stage_budget = cache.cap if ENABLE_PREFILL_WARMUP else 0
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
             bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps
