@@ -17,6 +17,7 @@ mutates the repository, so a failed sweep cannot leave the tree configured for
 one experiment.
 """
 import argparse
+import concurrent.futures as cf
 import os
 import re
 import shutil
@@ -45,11 +46,11 @@ QUANTS = ["fp16", "int8"]
 BATCH, DECODE = 128, 16
 
 
-def patch(td, quant, h, c, gpu, warmup=True):
+def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH):
     p = os.path.join(td, "sim_cfg.py")
     s = open(p).read()
     s = re.sub(r"^TOKENS\s*=\s*\d+", f"TOKENS = {DECODE}", s, 1, re.M)
-    s = re.sub(r"^BATCH_SIZE\s*=\s*\d+", f"BATCH_SIZE = {BATCH}", s, 1, re.M)
+    s = re.sub(r"^BATCH_SIZE\s*=\s*\d+", f"BATCH_SIZE = {batch}", s, 1, re.M)
     s = re.sub(r"^host_dram_capacity_bytes\s*=\s*\S+\s*\*\s*GiB",
                f"host_dram_capacity_bytes = {h} * GiB", s, 1, re.M)
     s = re.sub(r"^cxl_dev_dram_capacity_bytes\s*=\s*\S+\s*\*\s*GiB",
@@ -73,12 +74,12 @@ def patch(td, quant, h, c, gpu, warmup=True):
         open(p, "w").write(s)
 
 
-def run(sim, quant, h, c, gpu, warmup=True, diag=False):
+def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH):
     """One simulator, one cell. Returns (decode_tps, prefill_tps, stdout)."""
     with tempfile.TemporaryDirectory() as td:
         for f in DEPS + [s for _, s in SIMS]:
             shutil.copy(os.path.join(REPO, f), td)
-        patch(td, quant, h, c, gpu, warmup)
+        patch(td, quant, h, c, gpu, warmup, batch)
         r = subprocess.run([sys.executable, sim], cwd=td,
                            capture_output=True, text=True, timeout=900)
         out = r.stdout + r.stderr
@@ -139,8 +140,59 @@ def warmup_ablation(gpu=0):
                       f"{on / base:>9.2f}x{off / base:>10.2f}x")
 
 
+BATCHES = [1, 2, 4, 8, 16, 32, 64, 128]
+
+
+def batch_sweep(gpu, quant, c, h=16):
+    """Locate the sparsity-collapse crossover.
+
+    The active fraction of an MLP sub-layer under LLM-in-a-Flash's own model is
+    1 - (1 - p)^B with p = 0.46, which saturates at 1.000 by B = 16. Above that
+    every policy reads every byte once per step and the step time is pinned to
+    sum(bytes(tier) / bw(tier)) -- the byte-accounting floor -- so placement
+    capacity is the only thing left that can differ and all five converge.
+    Below it, semantic placement has something to act on. This sweep measures
+    where that transition actually falls rather than asserting it.
+    """
+    names = [n for n, _ in SIMS]
+    rows = []
+    with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 8) as ex:
+        fut = {ex.submit(run, sim, quant, h, c, gpu, True, False, b): (b, name)
+               for b in BATCHES for name, sim in SIMS}
+        got = {}
+        for f in cf.as_completed(fut):
+            b, name = fut[f]
+            got[(b, name)] = f.result()[0]
+    for b in BATCHES:
+        tps = {n: got[(b, n)] for n in names}
+        ours = tps["SemSched"]
+        best = max(v for k, v in tps.items() if k != "SemSched" and v is not None)
+        rows.append((b, tps, ours / best if best else 0.0))
+    return rows
+
+
+def batch_table(gpu):
+    tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
+    names = [n for n, _ in SIMS]
+    for quant in QUANTS:
+        for c in CXLS:
+            print(f"\n{'=' * 78}\n{tag}   Qwen2.5 72B {quant.upper()}  16H+{c}C"
+                  f"   batch sweep\n{'=' * 78}")
+            print(f"{'B':>4}  " + "".join(f"{n:>10}" for n in names)
+                  + f"{'ratio':>9}   active_frac")
+            print("-" * 78)
+            for b, tps, ratio in batch_sweep(gpu, quant, c):
+                af = 1.0 - (1.0 - 0.46) ** b
+                print(f"{b:>4}  " + "".join(
+                    f"{tps[n]:>10.2f}" if tps[n] is not None else f"{'--':>10}"
+                    for n in names)
+                    + f"{ratio:>8.2f}x{af:>14.3f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--batch-sweep", action="store_true",
+                    help="sweep B to locate the sparsity-collapse crossover")
     ap.add_argument("--cpu-only", action="store_true")
     ap.add_argument("--gpu-only", action="store_true")
     ap.add_argument("--ablation", action="store_true",
@@ -148,6 +200,12 @@ def main():
     ap.add_argument("--diag", action="store_true")
     a = ap.parse_args()
 
+    if a.batch_sweep:
+        if not a.gpu_only:
+            batch_table(0)
+        if not a.cpu_only:
+            batch_table(GPU_GB)
+        return
     if a.ablation:
         warmup_ablation(0)
         return
