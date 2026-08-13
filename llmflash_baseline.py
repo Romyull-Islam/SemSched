@@ -169,7 +169,14 @@ def simulate_llmflash():
     # ReLU: 24% of window (neurons are truly zero — low churn)
     # SiLU: 60% of window (contextual — different inputs activate different neurons)
     dram_turnover_frac = dram_window_frac * turnover_rate
-    ffn_dram_bytes     = total_ffn_bytes * dram_turnover_frac
+    # Turnover governs how much of the WINDOW must be re-fetched from NAND, not
+    # how much of the DRAM-resident FFN is read for compute. Every neuron that
+    # fires must be read from wherever it lives, and at B=128 the active
+    # fraction is 1.000 -- the union across the batch is the whole layer. This
+    # previously charged 0.60 x window of the resident FFN, so LLM-in-a-Flash
+    # paid for ~75% of weights it still had to read, where the other four
+    # simulators pay 100%. The re-fetch path below keeps the turnover term.
+    ffn_dram_bytes     = total_ffn_bytes * dram_window_frac * active_frac_batch
     dram_rewrite_bytes = ffn_dram_bytes * DRAM_REWRITE_FRAC
 
     def nand_bundled(n_bytes):
