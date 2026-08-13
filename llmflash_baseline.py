@@ -106,7 +106,18 @@ def simulate_llmflash():
     import model_cfg as _mcfg
 
     layers     = decomposed_build_layers(DEFAULT_MODEL_CFG())
-    total_dram = host_dram_capacity_bytes + cxl_dev_dram_capacity_bytes
+
+    # ── KV capacity reservation (audit A12) ───────────────────────────────────
+    # The unified DRAM pool holds the KV cache as well as weights, so its bytes
+    # are not available for the working set. This previously pooled host + CXL
+    # in full: at INT8 16H+32C that placed 83.1 GB of state into 76 GB of
+    # memory. Reserved at the generation mean, PREFILL + TOKENS/2, since the
+    # cache grows during decode.
+    _kv_resident = int(sum(L.get("kv_cache_bytes", 0) for L in layers)
+                       / NUM_PREFILL_TOKENS * BATCH_SIZE
+                       * (NUM_PREFILL_TOKENS + NUM_DECODE_TOKENS / 2.0))
+    total_dram = max(0, host_dram_capacity_bytes + cxl_dev_dram_capacity_bytes
+                        - _kv_resident)
 
     # ── Partition layers ───────────────────────────────────────────────────────
     pinned_layers = [L for L in layers if L.get("kind") != "MLP"]
