@@ -46,7 +46,14 @@ CXL_SSD_NAND = CXL_DEVICE_NAND
 
 # Host NVMe SSD (Gen4 x4)
 NVME_STREAM_BW      = 7.6e9     # ~7.6 GB/s
-NVME_STREAM_LAT_S   = 20e-6
+# EQUALISED. 20 us per 256 KiB chunk, charged serially, was used by FlexGen
+# alone and has no counterpart in its paper -- their cost model is pure
+# bandwidth (Sec 4.3: dtoc_g = bytes / disk_to_cpu_bandwidth, no additive
+# per-I/O term). It dropped FlexGen's effective NVMe from 7.6 to 4.81 GB/s and
+# accounted for 93% of its excess over its own byte-accounting floor. Set to
+# the CMM-H NAND chunk latency so every simulator pays the same per-chunk cost
+# on its slow tier.
+NVME_STREAM_LAT_S   = 1.547e-6
 NVME_THRASH_BW      = 300e6
 NVME_THRASH_LAT_S   = 80e-6
 NVME_FAULT_OVERHEAD = 8e-6
