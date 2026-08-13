@@ -78,3 +78,24 @@ assert CXL_DEVICE_NAND.bw_Bps <= NAND_LINK_CEILING_BPS,  "NAND exceeds PCIe Gen4
 assert CXL_DEVICE_DRAM.bw_Bps <= CXL_HOST_LINK_CEILING,  "CXL DRAM exceeds Gen5 x8"
 assert HOST_DRAM.bw_Bps       <= HOST_DRAM_CEILING,      "host DRAM exceeds DDR5-4800"
 assert NVME_STREAM_BW         <= NAND_LINK_CEILING_BPS,  "NVMe exceeds PCIe Gen4 x4"
+
+
+def kv_growth_spill_time_s(kv_now, kv_reserved, kv_tier, nand=CXL_DEVICE_NAND):
+    """Extra time per decode step once the KV cache outgrows what was reserved.
+
+    Placement reserves KV at the generation mean, PREFILL + TOKENS/2, which is
+    exact only at the midpoint: past it the cache is larger than its reservation
+    and the excess has to displace weights out of that tier. The displaced bytes
+    are then read from NAND on every subsequent step, so the cost is not the
+    one-off eviction but the bandwidth difference, charged for the rest of the
+    generation.
+
+    At 16 decode steps this is 0.31 GB at FP16 B=128 and rounds away. At 512 it
+    is 10 GB, and a model that ignores it reports a device holding more than it
+    has -- for every policy, since all five reserve at the mean. Applied
+    uniformly, it is what makes a generation-length sweep mean anything.
+    """
+    over = max(0.0, kv_now - kv_reserved)
+    if over <= 0 or kv_tier.bw_Bps <= 0:
+        return 0.0
+    return over * (1.0 / nand.bw_Bps - 1.0 / kv_tier.bw_Bps)

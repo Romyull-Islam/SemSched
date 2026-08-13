@@ -39,6 +39,7 @@ def compute_time_s(flops):
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
+from tiers import kv_growth_spill_time_s
 from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
 
@@ -249,6 +250,9 @@ def simulate_llmflash():
         comp_ffn  = sum(L["flops"] for L in ffn_layers) * BATCH_SIZE * active_frac_batch
         t = max(t, compute_time_s(comp_attn + comp_ffn))
 
+        t += kv_growth_spill_time_s(
+            kv_per_seq_bytes * BATCH_SIZE * (NUM_PREFILL_TOKENS + token_step + 1),
+            _kv_resident, DRAM_POOL)
         total_decode_time += t
 
         # Write stall as % of this token's total step time
