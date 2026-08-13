@@ -18,6 +18,7 @@
 
 import math
 
+from tiers import kv_growth_spill_time_s
 from tiers import (HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
                    Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S)
 from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
@@ -160,6 +161,9 @@ total_dec, total_read_stall, total_kv_write = 0.0, 0.0, 0.0
 per_token_write_stall_pcts = []
 for t in range(TOKENS):
     step, rs, kw = run_phase(is_prefill=False, token_step=t)
+    step += kv_growth_spill_time_s(
+        kv_inc_per_tok * _n_attn * BATCH_SIZE * (PREFILL_TOKENS + t + 1),
+        _kv_resident, CXL_DRAM)
     total_dec += step
     total_read_stall += rs
     total_kv_write += kw

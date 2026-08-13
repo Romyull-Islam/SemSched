@@ -20,7 +20,8 @@
 import math
 import pandas as pd
 from tiers import (GiB, HOST_DRAM, CXL_DRAM, GPU_HBM, CXL_SSD_NAND, Tier,
-                   NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s)
+                   NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s,
+                   kv_growth_spill_time_s)
 from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
@@ -253,6 +254,10 @@ for token_step in range(TOKENS):
         step_time_s += ltime + kv_stall   # serial: weight→compute→kv_write
 
 
+    # KV past its reservation displaces weights out of the tier holding it.
+    step_time_s += kv_growth_spill_time_s(
+        sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
+        _kv_resident, HOST_DRAM)
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0
