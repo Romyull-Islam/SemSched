@@ -19,16 +19,27 @@
 
 import math
 import pandas as pd
-from tiers import GiB, HOST_DRAM, GPU_HBM, CXL_SSD_NAND, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s
+from tiers import (GiB, HOST_DRAM, CXL_DRAM, GPU_HBM, CXL_SSD_NAND, Tier,
+                   NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s)
 from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
     TOKENS, cpu_freq_hz, cpu_cores, flops_per_cycle_per_core,
-    parallel_efficiency, host_dram_capacity_bytes, BATCH_SIZE
+    parallel_efficiency, host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes,
+    BATCH_SIZE
 )
 
 PL_GPU_HBM              = "GPU HBM"
 PL_HOST_DRAM            = "Host DRAM"
+# FlexGen's middle tier is "CPU memory": byte-addressable memory the CPU can
+# load and store from. On a CMM-H machine the device DRAM is exactly that --
+# CXL.mem exposes it as a NUMA node -- and every other policy here treats it so:
+# LIA places weights in it, CXLAimPod pools it, LLM-in-a-Flash unifies it with
+# host DRAM by name. FlexGen alone was denied it, which left it with 44 GB of
+# byte-addressable memory where the others had 92, and made its throughput
+# invariant to the device cache size -- the tell. It is a slower tier than host
+# DDR (27 vs 38.4 GB/s), so it sits below it in the cascade rather than merging.
+PL_CXL_DEV_DRAM         = "CXL Device DRAM"
 PL_HOST_SSD             = "CXL Device NAND"
 PREFILL_TOKENS          = 512
 PREFILL_FLOP_MULTIPLIER = 15.0
@@ -40,6 +51,7 @@ def compute_time_s(flops):
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core * parallel_efficiency)
 
 def dram_time_s(n): return transfer_time_s(n, HOST_DRAM)
+def cxl_time_s(n):  return transfer_time_s(n, CXL_DRAM)
 def gpu_time_s(n):
     return transfer_time_s(n, GPU_HBM)
 
@@ -101,8 +113,25 @@ placement = [PL_HOST_SSD] * len(layers)
 _kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
 
+# The LP's KV variables are (cg, cc, cd) -- GPU, CPU and DISK percentages -- so
+# a cache that exceeds CPU memory is placed on the slower tiers and charged
+# their bandwidth. It is never discarded. Reserving it from host DRAM and
+# clipping at zero dropped 4.31 GiB at FP16 B=128: FlexGen paid the full
+# capacity penalty and none of the transfer cost for the excess.
+_kv_host = min(_kv_resident, host_dram_capacity_bytes)
+_kv_cxl  = min(_kv_resident - _kv_host, cxl_dev_dram_capacity_bytes)
+_kv_nand = max(0, _kv_resident - _kv_host - _kv_cxl)
+_kv_frac = {"host": _kv_host / _kv_resident if _kv_resident else 1.0,
+            "cxl":  _kv_cxl  / _kv_resident if _kv_resident else 0.0,
+            "nand": _kv_nand / _kv_resident if _kv_resident else 0.0}
+
+def kv_time_s(n):
+    return (dram_time_s(n * _kv_frac["host"]) + cxl_time_s(n * _kv_frac["cxl"])
+            + ssd_time_s(n * _kv_frac["nand"]))
+
 gpu_free   = gpu_hbm_capacity_bytes
-host_free  = max(0, host_dram_capacity_bytes - _kv_resident)
+host_free  = max(0, host_dram_capacity_bytes - _kv_host)
+cxl_free   = max(0, cxl_dev_dram_capacity_bytes - _kv_cxl)
 
 for n in HOT_LAYERS_BY_NAME:
     idx = name_to_idx.get(n)
@@ -114,6 +143,9 @@ for n in HOT_LAYERS_BY_NAME:
         elif sz <= host_free:
             placement[idx] = PL_HOST_DRAM
             host_free -= sz
+        elif sz <= cxl_free:
+            placement[idx] = PL_CXL_DEV_DRAM
+            cxl_free -= sz
 
 # FlexGen's LP searches over NINE variables -- (wg, wc, wd) for weights,
 # (cg, cc, cd) for the KV cache and (hg, hc, hd) for activations -- as
@@ -130,9 +162,11 @@ for n in HOT_LAYERS_BY_NAME:
 # the LP's optimum looks like when the only constraint that binds is capacity.
 frac_gpu  = [0.0] * len(layers)
 frac_host = [0.0] * len(layers)
+frac_cxl  = [0.0] * len(layers)
 for i, L in enumerate(layers):
-    if placement[i] in (PL_GPU_HBM, PL_HOST_DRAM):
+    if placement[i] in (PL_GPU_HBM, PL_HOST_DRAM, PL_CXL_DEV_DRAM):
         frac_gpu[i]  = 1.0 if placement[i] == PL_GPU_HBM  else 0.0
+        frac_cxl[i]  = 1.0 if placement[i] == PL_CXL_DEV_DRAM else 0.0
         frac_host[i] = 1.0 if placement[i] == PL_HOST_DRAM else 0.0
         continue
     rem = float(L["bytes"])
@@ -142,8 +176,12 @@ for i, L in enumerate(layers):
     take = min(rem, host_free)
     if take > 0:
         frac_host[i] = take / L["bytes"]; host_free -= take; rem -= take
+    take = min(rem, cxl_free)
+    if take > 0:
+        frac_cxl[i] = take / L["bytes"]; cxl_free -= take; rem -= take
     placement[i] = (PL_GPU_HBM if frac_gpu[i] >= 0.999 else
-                    PL_HOST_DRAM if frac_host[i] >= 0.999 else PL_HOST_SSD)
+                    PL_HOST_DRAM if frac_host[i] >= 0.999 else
+                    PL_CXL_DEV_DRAM if frac_cxl[i] >= 0.999 else PL_HOST_SSD)
     # FlexGen's LP fills each tier to capacity; the original `break` abandoned
     # placement at the first layer that did not fit, leaving fast memory unused.
     # Continue so the tier is actually filled.
@@ -153,9 +191,11 @@ for i, L in enumerate(layers):
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s   = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
-    mem_time = gpu_time_s(L["bytes"]) if placement[i] == PL_GPU_HBM \
-               else dram_time_s(L["bytes"]) if placement[i] == PL_HOST_DRAM \
-               else ssd_time_s(L["bytes"])
+    b = L["bytes"]
+    fg, fh, fc = frac_gpu[i], frac_host[i], frac_cxl[i]
+    fd = max(0.0, 1.0 - fg - fh - fc)
+    mem_time = (gpu_time_s(b * fg) + dram_time_s(b * fh)
+                + cxl_time_s(b * fc) + ssd_time_s(b * fd))
     prefill_latency += max(comp_s, mem_time)
 
 # =========================================================================
@@ -176,10 +216,11 @@ for token_step in range(TOKENS):
     for i, L in enumerate(layers):
         comp_s   = compute_time_s(L["flops"] * BATCH_SIZE)
         b = L["bytes"]
-        fg, fh = frac_gpu[i], frac_host[i]
-        fd = max(0.0, 1.0 - fg - fh)
+        fg, fh, fc = frac_gpu[i], frac_host[i], frac_cxl[i]
+        fd = max(0.0, 1.0 - fg - fh - fc)
         mem_time = (gpu_time_s(b * fg) if fg > 0 else 0.0) \
                  + (dram_time_s(b * fh) if fh > 0 else 0.0) \
+                 + (cxl_time_s(b * fc) if fc > 0 else 0.0) \
                  + (ssd_time_s(b * fd) if fd > 0 else 0.0)
 
         # Growing-KV: attention layers read all prior K/V from cache.
@@ -188,7 +229,7 @@ for token_step in range(TOKENS):
         if kv_inc_l > 0:
             kv_positions_cached = PREFILL_TOKENS + token_step
             kv_read_bytes = kv_positions_cached * kv_inc_l * BATCH_SIZE
-            mem_time += dram_time_s(kv_read_bytes)
+            mem_time += kv_time_s(kv_read_bytes)
 
         # Read stall: weight + KV fetch in excess of compute
         read_stall = max(0.0, mem_time - comp_s)
@@ -205,7 +246,7 @@ for token_step in range(TOKENS):
         kv_stall = 0.0
         if kv_inc_l > 0:
             kv_write_bytes          = kv_inc_l * BATCH_SIZE
-            kv_stall                = dram_time_s(kv_write_bytes)  # always
+            kv_stall                = kv_time_s(kv_write_bytes)   # always
             total_kv_write_stall_s += kv_stall
             step_write_stall_s     += kv_stall
 
