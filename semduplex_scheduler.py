@@ -300,6 +300,17 @@ def tier_of(p, staged=True):
     return CXL_DRAM
 
 
+def split_time_s(nbytes, fr, staged=True):
+    """Time to move `nbytes` of a layer split across tiers by the map `fr`.
+
+    Placement fills each tier exactly, so a sub-layer may straddle a boundary.
+    Each share is timed at the tier that actually holds it; with a single-tier
+    layer this reduces to transfer_time_s(nbytes, tier_of(...)) exactly.
+    """
+    return sum(transfer_time_s(nbytes * f, tier_of(t, staged))
+               for t, f in fr.items() if f > 0)
+
+
 def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
                              gpu_cap=0):
     place    = [None] * len(layers)
@@ -322,6 +333,35 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         # Attention layers must also hold their growing KV increment.
         return L["bytes"] + (kv_inc[L["name"]] if ltypes[i] == LayerType.ATTENTION else 0)
 
+    # Bytes of each layer not yet assigned to a tier, and the split that results.
+    # Placement used to be all-or-nothing: a sub-layer that did not fit whole was
+    # passed over and the remaining capacity was left empty, so 0.91 GB of fast
+    # memory sat unused at FP16 16H+48C while the bytes that could have occupied
+    # it were read from NAND at 5 GB/s instead. Every tier is now filled exactly,
+    # a layer splitting across the boundary when it straddles one.
+    #
+    # This changes the packing, not the policy. The semantic priority order below
+    # is untouched -- output head, then attention with its KV, then embeddings,
+    # then MLP by descending sparsity -- and what a split layer does is occupy
+    # the tier its priority earned it, up to the capacity that tier has left.
+    rem  = [float(L["bytes"]) for L in layers]
+    frac = [dict() for _ in layers]
+
+    def take(i, tier_label, free, extra=0.0):
+        """Move as much of layer i into `tier_label` as fits. Returns new free."""
+        if free <= 0 or rem[i] <= 0:
+            return free
+        # Attention layers must also hold their growing KV increment; that part
+        # is indivisible, so it is only charged when the whole layer fits.
+        want = rem[i] + (extra if rem[i] == layers[i]["bytes"] else 0.0)
+        got  = min(want, free)
+        if got <= 0:
+            return free
+        moved = min(got, rem[i])
+        frac[i][tier_label] = frac[i].get(tier_label, 0.0) + moved / layers[i]["bytes"]
+        rem[i] -= moved
+        return free - got
+
     def fill(tier_label, cap):
         """Apply the semantic priority order into one tier; return unused bytes.
 
@@ -334,23 +374,23 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         if free <= 0:
             return free
         for i, L in enumerate(layers):                       # 0: output head
-            if place[i] is None and ltypes[i] == LayerType.OUTPUT and size_of(i, L) <= free:
-                place[i] = tier_label; free -= size_of(i, L)
+            if ltypes[i] == LayerType.OUTPUT:
+                free = take(i, tier_label, free)
         for i, L in enumerate(layers):                       # 1: attention + KV
-            if place[i] is None and ltypes[i] == LayerType.ATTENTION and size_of(i, L) <= free:
-                place[i] = tier_label; free -= size_of(i, L)
+            if ltypes[i] == LayerType.ATTENTION:
+                free = take(i, tier_label, free, size_of(i, L) - L["bytes"])
         for i, L in enumerate(layers):                       # 2: embeddings
-            if place[i] is None and ltypes[i] == LayerType.EMBEDDING and L["bytes"] <= free:
-                place[i] = tier_label; free -= L["bytes"]
+            if ltypes[i] == LayerType.EMBEDDING:
+                free = take(i, tier_label, free)
         cands = sorted([(i, L, sparsity[i]) for i, L in enumerate(layers)
-                        if place[i] is None and ltypes[i] == LayerType.MLP],
+                        if ltypes[i] == LayerType.MLP],
                        key=lambda x: x[2], reverse=True)
         for i, L, sp in cands:                               # 3: sparse MLP
-            if sp > 0.60 and L["bytes"] <= free:
-                place[i] = tier_label; free -= L["bytes"]
+            if sp > 0.60:
+                free = take(i, tier_label, free)
         for i, L in enumerate(layers):                        # 3.5: dense MLP
-            if place[i] is None and ltypes[i] == LayerType.MLP and L["bytes"] <= free:
-                place[i] = tier_label; free -= L["bytes"]
+            if ltypes[i] == LayerType.MLP:
+                free = take(i, tier_label, free)
         return free
 
     # The cascade. With an accelerator attached the whole ordering shifts up a
@@ -359,17 +399,20 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
     # gpu_cap = 0 this reduces exactly to the three-tier placement.
     fill(PL_GPU_HBM, gpu_cap)
     fill(PL_HOST_DRAM, host_cap)
+    fill(PL_CXL_DEV_DRAM, cxl_cap)                            # 4: CXL DRAM
 
-    c_free = cxl_cap                                          # 4: CXL DRAM
-    for i, L in enumerate(layers):
-        if place[i] is None and L["bytes"] <= c_free:
-            place[i] = PL_CXL_DEV_DRAM
-            c_free -= L["bytes"]
+    for i, L in enumerate(layers):                            # 5: NAND
+        if rem[i] > 0:
+            frac[i][PL_CXL_DEV_NAND] = (frac[i].get(PL_CXL_DEV_NAND, 0.0)
+                                        + rem[i] / L["bytes"])
+            rem[i] = 0.0
 
-    for i in range(len(layers)):                              # 5: NAND
-        if place[i] is None: place[i] = PL_CXL_DEV_NAND
+    # `place` names the tier holding the largest share. It drives the control
+    # flow -- staging, prefetch, duplex lane selection -- which is per-layer and
+    # cannot be fractional; `frac` carries the split that timing uses.
+    place = [max(f, key=f.get) for f in frac]
 
-    return place, ltypes, kv_inc, sparsity
+    return place, ltypes, kv_inc, sparsity, frac
 
 def compute_time_s(flops, cores):
     if flops <= 0 or cores <= 0: return 0.0
@@ -404,7 +447,7 @@ def combine_sublayer_stats(rows):
 
 
 def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
-                        cache, tmon, sched, threads, seq_len):
+                        cache, tmon, sched, threads, seq_len, frac):
     chunks = math.ceil(seq_len / PREFILL_CHUNK_SIZE)
     lat, nand_link_free_at = 0.0, 0.0
     stats = {"bytes_prefetched": 0, "warmup_time": 0}
@@ -458,7 +501,7 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         # giving SemSched a 15x compute advantage in prefill. Parameters remain
         # dense (no sparsity discount) -- prefill fires all neurons.
         eff_flops = L["flops"] * seq_len * BATCH_SIZE
-        mem = transfer_time_s(sz, tier_of(place[i], i in cache.session_pinned))
+        mem = split_time_s(sz, frac[i], i in cache.session_pinned)
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
         # Chunked pipelining overlaps a chunk's compute with the next chunk's
@@ -624,7 +667,7 @@ def run_semantic_duplex_simulation():
 
         _dev_for_weights = _caps["cxl"]
 
-        place, ltypes, inc, sparsity = semantic_aware_placement(
+        place, ltypes, inc, sparsity, frac = semantic_aware_placement(
             layers, _caps["host"], _dev_for_weights, num_blocks,
             gpu_cap=_caps["gpu"])
 
@@ -657,7 +700,7 @@ def run_semantic_duplex_simulation():
 
         pf_time_val, pf_stats = run_prefill_chunked(
             layers, place, ltypes, sparsity, inc,
-            cache, tmon, sched, threads, seq_len)
+            cache, tmon, sched, threads, seq_len, frac)
 
         # ── Multi-token decode loop with per-token write stall tracking ────────
         total_spar_flops           = 0
@@ -755,8 +798,8 @@ def run_semantic_duplex_simulation():
 
                 # ── Compute + memory time ─────────────────────────────────────
                 comp  = compute_time_s(eff_flops, cpu_cores)
-                mem   = transfer_time_s(
-                    sz, tier_of(place[idx], idx in cache.session_pinned))
+                mem   = split_time_s(
+                    sz, frac[idx], idx in cache.session_pinned)
 
                 # Growing-KV: attention layers read all prior K/V from cache.
                 # At decode step `token_step`, total cached positions = PREFILL_TOKENS + token_step.
