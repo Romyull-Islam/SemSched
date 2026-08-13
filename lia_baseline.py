@@ -70,7 +70,28 @@ kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 # A100 or H100. CXL is the tier BENEATH the GPU, not a replacement for it.
 placement = []
 gpu_free  = gpu_hbm_capacity_bytes
-cxl_free  = cxl_dev_dram_capacity_bytes
+
+# ── KV capacity reservation (audit A12, completed) ───────────────────────────
+# A12 reserved KV capacity in FlexGen, CXLAimPod and LLM-in-a-Flash but skipped
+# LIA, on the grounds that its published policy already keeps host DRAM
+# exclusively for the KV cache. That is true, and sufficient only while the
+# cache FITS in host DRAM. At B=128 it does not: 20.31 GiB of KV against a
+# 16 GiB host at FP16. LIA was storing 127% of a tier in it and paying nothing
+# for the excess -- the same defect A12 corrected everywhere else.
+#
+# The overflow goes where a CXL machine puts it: the device DRAM. That costs
+# LIA twice, and both are real. The bytes occupy device capacity that can no
+# longer hold weights, and they are read at the device's 27 GB/s rather than
+# the host's 38.4 GB/s on every step. Nothing LIA's paper claims is removed --
+# its cascade, its host-resident KV policy and its GPU tier are untouched; the
+# cache is simply required to fit somewhere.
+_kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
+                   * (PREFILL_TOKENS + TOKENS / 2.0))
+_kv_in_host  = min(_kv_resident, host_dram_capacity_bytes)
+_kv_in_cxl   = max(0, _kv_resident - host_dram_capacity_bytes)
+_kv_cxl_frac = (_kv_in_cxl / _kv_resident) if _kv_resident else 0.0
+
+cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_in_cxl)
 for L in layers:
     if L["bytes"] <= gpu_free:
         placement.append(PL_GPU_HBM)
@@ -127,7 +148,10 @@ for token_step in range(TOKENS):
         if kv_scaled > 0:
             kv_positions_cached = PREFILL_TOKENS + token_step
             kv_read_bytes = kv_positions_cached * kv_inc[L["name"]] * BATCH_SIZE
-            kv_read_time  = dram_time_s(kv_read_bytes)
+            # The share that did not fit in host DRAM is read from device DRAM.
+            kv_read_time  = (dram_time_s(kv_read_bytes * (1.0 - _kv_cxl_frac))
+                             + (cxl_time_s(kv_read_bytes * _kv_cxl_frac)
+                                if _kv_cxl_frac > 0 else 0.0))
 
         # ── Read stall: CXL fetch in excess of compute ────────────────────────
         read_stall = max(0.0, weight_mem_time - comp_s)
@@ -141,7 +165,9 @@ for token_step in range(TOKENS):
         # independent hardware. KV read+write share the DDR bus and serialize.
         kv_write_time = 0.0
         if kv_scaled > 0:
-            kv_write_time           = dram_time_s(kv_scaled)
+            kv_write_time           = (dram_time_s(kv_scaled * (1.0 - _kv_cxl_frac))
+                                       + (cxl_time_s(kv_scaled * _kv_cxl_frac)
+                                          if _kv_cxl_frac > 0 else 0.0))
             total_kv_write_stall_s += kv_write_time
             step_write_stall_s     += kv_write_time
             if token_step == 0:
