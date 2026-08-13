@@ -110,22 +110,23 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH):
                 float(p.group(1)) if p else None, out)
 
 
-def comparison(gpu, diag=False):
+def comparison(gpu, diag=False, metric="decode"):
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only (no accelerator)"
     print(f"\n{'=' * 78}\n{tag}   Qwen2.5 72B, B={BATCH}, {DECODE} decode steps"
-          f"\n{'=' * 78}")
+          f"   [{metric} t/s]\n{'=' * 78}")
     names = [n for n, _ in SIMS]
     print(f"{'Quant':<6}{'Memory':<11}" + "".join(f"{n:>10}" for n in names)
           + f"{'ratio':>9}")
     print("-" * 78)
     wins = total = 0
+    idx = 1 if metric == "prefill" else 0   # run() returns (decode, prefill, out)
     for quant in QUANTS:
         for c in CXLS:
             for h in GRID:
                 tps = {}
                 for name, sim in SIMS:
-                    d, _, _ = run(sim, quant, h, c, gpu, diag=diag)
-                    tps[name] = d
+                    r = run(sim, quant, h, c, gpu, diag=diag)
+                    tps[name] = r[idx]
                 ours = tps["SemSched"]
                 best = max(v for k, v in tps.items()
                            if k != "SemSched" and v is not None)
@@ -217,6 +218,8 @@ def main():
     ap.add_argument("--ablation", action="store_true",
                     help="warmup ablation only")
     ap.add_argument("--diag", action="store_true")
+    ap.add_argument("--prefill", action="store_true",
+                    help="report prefill throughput instead of decode")
     a = ap.parse_args()
 
     if a.batch_sweep:
@@ -228,10 +231,11 @@ def main():
     if a.ablation:
         warmup_ablation(0)
         return
+    metric = "prefill" if a.prefill else "decode"
     if not a.gpu_only:
-        comparison(0, a.diag)
+        comparison(0, a.diag, metric)
     if not a.cpu_only:
-        comparison(GPU_GB, a.diag)
+        comparison(GPU_GB, a.diag, metric)
 
 
 if __name__ == "__main__":
