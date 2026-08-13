@@ -55,7 +55,23 @@ head_dim = cfg.emb_dim // cfg.q_heads
 kv_inc_per_tok = 2 * cfg.kv_heads * head_dim * BYTES_PER_PARAM
 
 placement = [None] * len(layers)
-host_free, cxl_free = host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes
+
+# ── KV capacity reservation (audit A12) ──────────────────────────────────────
+# The KV cache is resident for the whole session and occupies the tier it lives
+# in, so those bytes are not available to hold weights. Placement previously
+# ignored it in every baseline: at INT8 16H+32C that put 83.1 GB of state into
+# 76 GB of memory. SemSched reserves it; the baselines did not, which understated
+# their memory pressure and so overstated their throughput.
+#
+# Reserved at the generation mean, PREFILL + TOKENS/2, because the cache grows
+# during decode -- reserving the final size starves the early steps and
+# reserving the initial size over-commits the later ones.
+_n_attn = sum(1 for L in layers if L.get("kv_cache_bytes", 0) > 0)
+_kv_resident = int(kv_inc_per_tok * _n_attn * BATCH_SIZE
+                   * (PREFILL_TOKENS + TOKENS / 2.0))
+
+host_free = host_dram_capacity_bytes
+cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_resident)
 for i, L in enumerate(layers):
     if L["bytes"] <= host_free:
         placement[i] = PL_HOST_DRAM

@@ -87,8 +87,22 @@ for L in layers:
 # memory on the machine. The cascade below is GPU first, then host DRAM, then
 # disk, matching the paper's ordering.
 placement = [PL_HOST_SSD] * len(layers)
+
+# ── KV capacity reservation (audit A12) ──────────────────────────────────────
+# The KV cache is resident for the whole session and occupies the tier it lives
+# in, so those bytes are not available to hold weights. Placement previously
+# ignored it in every baseline: at INT8 16H+32C that put 83.1 GB of state into
+# 76 GB of memory. SemSched reserves it; the baselines did not, which understated
+# their memory pressure and so overstated their throughput.
+#
+# Reserved at the generation mean, PREFILL + TOKENS/2, because the cache grows
+# during decode -- reserving the final size starves the early steps and
+# reserving the initial size over-commits the later ones.
+_kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
+                   * (PREFILL_TOKENS + TOKENS / 2.0))
+
 gpu_free   = gpu_hbm_capacity_bytes
-host_free  = host_dram_capacity_bytes
+host_free  = max(0, host_dram_capacity_bytes - _kv_resident)
 
 for n in HOT_LAYERS_BY_NAME:
     idx = name_to_idx.get(n)
