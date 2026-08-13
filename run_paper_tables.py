@@ -58,7 +58,7 @@ QUANTS = ["fp16", "int8"]
 BATCH, DECODE = 128, 16
 
 
-def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH):
+def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl"):
     p = os.path.join(td, "sim_cfg.py")
     s = open(p).read()
     s = re.sub(r"^TOKENS\s*=\s*\d+", f"TOKENS = {DECODE}", s, 1, re.M)
@@ -85,20 +85,23 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH):
                "DEFAULT_MODEL_CFG = Qwen2_5_72BCfg", s, 1, re.M)
     open(p, "w").write(s)
 
-    if not warmup:
+    if not warmup or kv_tier != "cxl":
         p = os.path.join(td, "semduplex_scheduler.py")
         s = open(p).read()
-        s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
-                   "ENABLE_PREFILL_WARMUP = False", s, 1, re.M)
+        if not warmup:
+            s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
+                       "ENABLE_PREFILL_WARMUP = False", s, 1, re.M)
+        s = re.sub(r'^KV_TIER\s*=\s*"\w+"', f'KV_TIER = "{kv_tier}"', s, 1, re.M)
         open(p, "w").write(s)
 
 
-def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH):
+def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
+        kv_tier="cxl"):
     """One simulator, one cell. Returns (decode_tps, prefill_tps, stdout)."""
     with tempfile.TemporaryDirectory() as td:
         for f in DEPS + [s for _, s in SIMS]:
             shutil.copy(os.path.join(REPO, f), td)
-        patch(td, quant, h, c, gpu, warmup, batch)
+        patch(td, quant, h, c, gpu, warmup, batch, kv_tier)
         r = subprocess.run([sys.executable, sim], cwd=td,
                            capture_output=True, text=True, timeout=900)
         out = r.stdout + r.stderr
@@ -158,6 +161,34 @@ def warmup_ablation(gpu=0):
                 print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}{base:>11.2f}"
                       f"{on:>11.2f}{off:>12.2f}{(on - off) / off * 100:>12.1f}%"
                       f"{on / base:>9.2f}x{off / base:>10.2f}x")
+
+
+def kv_tier_sweep(gpu):
+    """Where should the KV cache live?
+
+    Each tier is charged both ways -- capacity reserved before placement, and
+    every KV access timed at its bandwidth -- so the answer is not simply "the
+    fastest tier". Putting KV in HBM reads it 66x faster than the device but
+    evicts an equal mass of weights down to a slower tier, and the weights are
+    read every step too. The question is which of the two exchanges is cheaper,
+    and it is a measurement, not an argument.
+    """
+    tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
+    tiers = ["cxl", "host"] + (["gpu"] if gpu else [])
+    print(f"\n{'=' * 78}\nKV cache tier — SemSched, {tag}, B={BATCH}\n{'=' * 78}")
+    print(f"{'Quant':<6}{'Memory':<11}" + "".join(f"{'KV in ' + t:>12}" for t in tiers)
+          + f"{'best':>8}")
+    print("-" * 78)
+    for quant in QUANTS:
+        for c in CXLS:
+            for h in GRID:
+                got = {t: run("semduplex_scheduler.py", quant, h, c, gpu,
+                              kv_tier=t)[0] for t in tiers}
+                best = max(got, key=lambda t: got[t] or 0)
+                print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}"
+                      + "".join(f"{got[t]:>12.2f}" if got[t] is not None
+                                else f"{'--':>12}" for t in tiers)
+                      + f"{best:>8}")
 
 
 BATCHES = [1, 2, 4, 8, 16, 32, 64, 128]
@@ -220,8 +251,16 @@ def main():
     ap.add_argument("--diag", action="store_true")
     ap.add_argument("--prefill", action="store_true",
                     help="report prefill throughput instead of decode")
+    ap.add_argument("--kv-tier", action="store_true",
+                    help="sweep which tier holds the KV cache")
     a = ap.parse_args()
 
+    if a.kv_tier:
+        if not a.gpu_only:
+            kv_tier_sweep(0)
+        if not a.cpu_only:
+            kv_tier_sweep(GPU_GB)
+        return
     if a.batch_sweep:
         if not a.gpu_only:
             batch_table(0)

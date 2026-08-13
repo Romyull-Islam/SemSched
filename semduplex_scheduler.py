@@ -64,6 +64,20 @@ PREFILL_FLOP_MULTIPLIER = 15.0
 
 DUPLEX_PENALTY = 1.15
 
+# Which tier holds the KV cache. This is a placement decision, not a constant of
+# the hardware, and the baselines disagree about it: FlexGen and LIA put KV in
+# host DRAM, CXLAimPod in the device, LLM-in-a-Flash in a unified pool. SemSched
+# has always used the device, on the argument that weights are read-only and so
+# NAND-safe while KV is written every step and can never spill -- so the tier
+# weights can least afford to lose is the one KV should occupy.
+#
+# That argument is about *safety*, not speed, and it was never measured. The
+# knob exists so it can be. A tier is charged both ways: capacity is reserved
+# from it before placement, and every KV read and write is timed at its
+# bandwidth. If the cache does not fit, the remainder spills to the next slower
+# tier and is timed there -- the rule now applied to every simulator.
+KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
+
 # Adaptive low-batch threshold. Below this batch size, MLP transfers are scaled
 # by the LLMFlash-style active-fraction formula 1 - (1 - p)^B. At B >= threshold,
 # the active fraction saturates near 1.0 and we fall back to full semantic
@@ -579,11 +593,40 @@ def run_semantic_duplex_simulation():
                           for L in layers
                           if classify_layer_type(L) == LayerType.ATTENTION) * BATCH_SIZE
         _kv_mean = int(_kv_per_tok * (PREFILL_TOKENS + TOKENS / 2.0))
-        _dev_for_weights = max(0, cxl_dev_dram_capacity_bytes - _kv_mean)
+
+        # Charge the KV cache to whichever tier KV_TIER names, spilling down the
+        # hierarchy when it does not fit. `_kv_split` is the fraction of every KV
+        # access served by each tier, and is what the decode loop times against;
+        # the capacities below are what placement is then allowed to use.
+        _caps = {"gpu":  gpu_hbm_capacity_bytes,
+                 "host": host_dram_capacity_bytes,
+                 "cxl":  cxl_dev_dram_capacity_bytes}
+        _order = {"gpu": ["gpu", "host", "cxl"],
+                  "host": ["host", "cxl"],
+                  "cxl": ["cxl"]}[KV_TIER]
+        _kv_split, _rem = {}, _kv_mean
+        for _t in _order:
+            _take = min(_rem, _caps[_t])
+            if _take > 0:
+                _kv_split[_t] = _take / _kv_mean if _kv_mean else 0.0
+                _caps[_t] -= _take
+                _rem -= _take
+        if _rem > 0:      # nowhere left: the tail stays on the slowest KV tier
+            _kv_split[_order[-1]] = _kv_split.get(_order[-1], 0.0) + _rem / _kv_mean
+            _caps[_order[-1]] = 0
+
+        _kv_tiers = {"gpu": GPU_HBM, "host": HOST_DRAM, "cxl": CXL_DRAM}
+
+        def _kv_time(n):
+            """Time to move n KV bytes, split across the tiers that hold them."""
+            return sum(transfer_time_s(n * f, _kv_tiers[t])
+                       for t, f in _kv_split.items() if f > 0)
+
+        _dev_for_weights = _caps["cxl"]
 
         place, ltypes, inc, sparsity = semantic_aware_placement(
-            layers, host_dram_capacity_bytes, _dev_for_weights, num_blocks,
-            gpu_cap=gpu_hbm_capacity_bytes)
+            layers, _caps["host"], _dev_for_weights, num_blocks,
+            gpu_cap=_caps["gpu"])
 
         tmon    = DuplexTrafficMonitor()
         # The CXL device has ONE pool of DRAM. Placement has already consumed
@@ -722,7 +765,7 @@ def run_semantic_duplex_simulation():
                 if has_kv:
                     kv_positions_cached = PREFILL_TOKENS + token_step
                     kv_read_bytes = kv_positions_cached * inc[L["name"]] * BATCH_SIZE
-                    kv_read_time  = transfer_time_s(kv_read_bytes, CXL_DRAM)
+                    kv_read_time  = _kv_time(kv_read_bytes)
                     mem += kv_read_time
 
                 ltime = max(comp, mem)
@@ -755,7 +798,12 @@ def run_semantic_duplex_simulation():
                     elif place[idx] == PL_HOST_DRAM:
                         # Host DRAM is not on the CXL link; KV write serialized
                         # through host DDR.
-                        kv_write_t = transfer_time_s(kv_write_scaled, CXL_DRAM)
+                        # Timed at whatever tier holds the cache, not at a fixed
+                        # CXL rate. The Tx-lane overlap below applies only to the
+                        # device-resident case, which is what the duplex link
+                        # models; writes are 0.017% of a step, so the branch that
+                        # does not overlap costs nothing measurable either way.
+                        kv_write_t = _kv_time(kv_write_scaled)
                         exposed_stall = kv_write_t
                         tmon.write_stall_time_s += exposed_stall
                         tmon.write_stall_count  += 1
