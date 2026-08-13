@@ -589,9 +589,17 @@ def run_semantic_duplex_simulation():
         # it: at 16H+64C placement uses 63.02 GB of 64 GB, then staging asks for
         # a further 73.23 GB -- 213% of the device -- and every NAND-resident
         # layer is then billed at the 27 GB/s hit rate instead of 5 GB/s.
+        # The KV cache is the other resident claim on that same pool, and it is
+        # already subtracted from what placement was allowed to use
+        # (_dev_for_weights). Subtracting only _placed_in_dev here handed Phase 1
+        # the KV cache's own space as staging room: at INT8 16H+32C it staged
+        # 5.13 GB into the 10.16 GB the KV cache occupies, so the one
+        # configuration with any NAND residency read all of it at DRAM speed and
+        # scored identically to 48C and 64C, which have none. Staging may only
+        # use what is left of the WEIGHT budget.
         _placed_in_dev = sum(L["bytes"] for i, L in enumerate(layers)
                              if place[i] == PL_CXL_DEV_DRAM)
-        _cache_cap = max(0, cxl_dev_dram_capacity_bytes - _placed_in_dev)
+        _cache_cap = max(0, _dev_for_weights - _placed_in_dev)
         cache   = AttentionGuidedCache(_cache_cap)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
