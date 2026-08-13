@@ -187,7 +187,13 @@ def simulate_llmflash():
     # previously charged 0.60 x window of the resident FFN, so LLM-in-a-Flash
     # paid for ~75% of weights it still had to read, where the other four
     # simulators pay 100%. The re-fetch path below keeps the turnover term.
-    ffn_dram_bytes     = total_ffn_bytes * dram_window_frac * active_frac_batch
+    # dram_window_frac is already min(active_frac_batch, capacity share), i.e.
+    # the fraction of the FFN that both fires AND lives in DRAM. Multiplying it
+    # by active_frac_batch again discounts the same sparsity twice: with ample
+    # DRAM the window equals the active fraction, so the read was charged
+    # active^2 -- 0.212 of the FFN at B=1 where 0.460 fires. The two paths must
+    # sum to what fires: window + (active - window) = active. They now do.
+    ffn_dram_bytes     = total_ffn_bytes * dram_window_frac
     dram_rewrite_bytes = ffn_dram_bytes * DRAM_REWRITE_FRAC
 
     def nand_bundled(n_bytes):
