@@ -40,6 +40,18 @@ SIMS = [
 # and the runtime's own footprint. 0 = the CPU-only platform, which is what both
 # CMM-H papers actually characterise.
 GPU_GB = 28
+
+# An accelerator is two things, and attaching only one of them is a modelling
+# error that quietly understates every accelerated row: it is HBM capacity AND a
+# compute engine. Setting gpu_hbm_capacity_bytes alone runs GPU memory behind
+# the EPYC's 14.4 TFLOPS, so any layer where compute exceeds transfer is timed
+# on the wrong engine. Both are set together here.
+#   EPYC 9454 x2 : 96 cores, AVX-512 (64 FLOP/cyc), 2.75 GHz, 0.85 ->  14.4 TF
+#   RTX 5090     : 170 SMs, 512 FLOP/cyc/SM, 2.41 GHz, 0.70        -> 146.9 TF
+ENGINES = {
+    0:      (96,  64.0,  2.75e9, 0.85),
+    GPU_GB: (170, 512.0, 2.41e9, 0.70),
+}
 GRID = [16]                       # host DRAM
 CXLS = [32, 48, 64]               # CXL device DRAM
 QUANTS = ["fp16", "int8"]
@@ -57,6 +69,13 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH):
                f"cxl_dev_dram_capacity_bytes = {c} * GiB", s, 1, re.M)
     s = re.sub(r"^gpu_hbm_capacity_bytes\s*=\s*\S+\s*\*\s*GiB",
                f"gpu_hbm_capacity_bytes = {gpu} * GiB", s, 1, re.M)
+    cores, fpc, freq, eff = ENGINES[gpu]
+    s = re.sub(r"^cpu_cores\s*=\s*\d+", f"cpu_cores = {cores}", s, 1, re.M)
+    s = re.sub(r"^flops_per_cycle_per_core\s*=\s*[\d.]+",
+               f"flops_per_cycle_per_core = {fpc}", s, 1, re.M)
+    s = re.sub(r"^cpu_freq_hz\s*=\s*[\d.e+]+", f"cpu_freq_hz = {freq}", s, 1, re.M)
+    s = re.sub(r"^parallel_efficiency\s*=\s*[\d.]+",
+               f"parallel_efficiency = {eff}", s, 1, re.M)
     open(p, "w").write(s)
 
     p = os.path.join(td, "model_cfg.py")
