@@ -1,0 +1,56 @@
+% fig_duplex.tex — the full-duplex CXL link, drawn from the text of Sec IV-C.
+%
+% Replaces figures/Duplex2-crop.pdf, a hand-drawn binary with no source in the
+% repo and no longer referenced by SemSched.tex.
+%
+% Drawn to the measured proportions rather than schematically, because the
+% measurement is the point: at B=128 the Tx lane carries 41.9 MB per decode
+% step (1.63 ms) against a 9.58 s step -- 0.017% occupancy. A figure that drew
+% the two lanes at comparable width would misrepresent the mechanism as a
+% bandwidth win, which the ablation shows it is not (0.0% throughput effect in
+% 18/18 configurations). What it does buy is stall: 0.57 ms per token against
+% 0.96-1.63 ms for policies that serialise the write behind the read.
+%
+% \input{fig_duplex} inside a figure environment.
+
+\begin{tikzpicture}[
+  font=\scriptsize,
+  lane/.style   = {draw, thick, rounded corners=1pt, minimum height=5.5mm},
+  rxb/.style    = {lane, fill=cxlc!30, draw=cxlc},
+  txb/.style    = {lane, fill=hostc!35, draw=hostc},
+  idle/.style   = {lane, fill=black!3, draw=black!25, densely dashed},
+  lbl/.style    = {font=\tiny, inner sep=1pt},
+  ar/.style     = {-{Stealth[length=3pt]}, semithick},
+]
+
+\def\W{7.6}          % one decode step, drawn full width
+
+% ── Rx lane: saturated with weight and KV reads ───────────────────────────
+\node[lbl, anchor=east] at (-0.15,0) {\textbf{Rx}};
+\node[rxb, anchor=west, minimum width=\W cm] (rx) at (0,0) {};
+\node[lbl] at (rx.center) {weight reads $+$ growing-KV reads \quad 93.1\,GiB/step};
+
+% ── Tx lane: essentially idle, KV writes injected into it ─────────────────
+\node[lbl, anchor=east] at (-0.15,-0.85) {\textbf{Tx}};
+\node[idle, anchor=west, minimum width=\W cm] (txi) at (0,-0.85) {};
+\node[lbl, text=black!55] at (txi.center) {idle \quad 99.98\% of the step};
+
+% KV writes, drawn to scale: 0.017% of the step is sub-pixel, so the marks are
+% the smallest legible width and the caption carries the true proportion.
+\foreach \x in {0.55,1.85,3.15,4.45,5.75,7.05}{
+  \node[txb, anchor=west, minimum width=0.9mm] at (\x,-0.85) {};
+}
+\node[lbl, anchor=west, text=hostc] at (\W+0.12,-0.85) {KV writes};
+\node[lbl, anchor=west, text=hostc] at (\W+0.12,-1.12) {41.9\,MB, 1.63\,ms};
+
+% ── The deadline rule ─────────────────────────────────────────────────────
+\draw[ar, hostc] (1.85,-0.62) -- (1.85,-0.18);
+\node[lbl, anchor=west, text=hostc] at (1.95,-0.40)
+  {write completes inside the read window $\Rightarrow$ no stall};
+
+% ── Scale bar ─────────────────────────────────────────────────────────────
+\draw[|-|, black!55] (0,-1.55) -- (\W,-1.55);
+\node[lbl, text=black!60] at (\W/2,-1.78)
+  {one decode step, 9.58\,s \quad (Qwen2.5 72B, FP16, $B{=}128$, 16H+48C)};
+
+\end{tikzpicture}
