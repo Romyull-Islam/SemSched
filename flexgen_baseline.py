@@ -19,7 +19,7 @@
 
 import math
 import pandas as pd
-from tiers import GiB, HOST_DRAM, GPU_HBM, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s
+from tiers import GiB, HOST_DRAM, GPU_HBM, CXL_SSD_NAND, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s
 from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
@@ -29,7 +29,7 @@ from sim_cfg import (
 
 PL_GPU_HBM              = "GPU HBM"
 PL_HOST_DRAM            = "Host DRAM"
-PL_HOST_SSD             = "Host SSD (NVMe)"
+PL_HOST_SSD             = "CXL Device NAND"
 PREFILL_TOKENS          = 512
 PREFILL_FLOP_MULTIPLIER = 15.0
 
@@ -44,8 +44,26 @@ def gpu_time_s(n):
     return transfer_time_s(n, GPU_HBM)
 
 
-def ssd_time_s(n):  return transfer_time_s(
-    n, Tier("Host SSD", NVME_STREAM_BW, NVME_STREAM_LAT_S))
+def ssd_time_s(n):
+    """Backing store. On a CMM-H platform that is the device's own NAND, not a
+    separate host drive.
+
+    CMM-H is byte-addressable extended memory, not a filesystem. Once the model
+    is mapped into the device's address space, a page absent from the 48 GB DRAM
+    cache is served by the device's own NAND -- that is what the hybrid device
+    is. The host NVMe is where the model file was read from once; it is not
+    where steady-state overflow comes from.
+
+    This previously used NVME_STREAM_BW at 7.6 GB/s for the steady-state path,
+    describing a machine that re-reads the model file on every token, while
+    every other simulator took its overflow from CMM-H NAND at 5.0 GB/s. The
+    policy is unchanged -- fractional placement across GPU, host DRAM and the
+    backing store, hot layers pinned first, transfer overlapped with compute.
+    Only the provenance of the bytes is corrected, and that is a property of the
+    platform rather than of the scheduler. Sec IV-B already describes these as
+    CXL-adapted baselines; this makes FlexGen one.
+    """
+    return transfer_time_s(n, CXL_SSD_NAND)
 
 
 # ── Build model ───────────────────────────────────────────────────────────────
