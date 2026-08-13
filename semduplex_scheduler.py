@@ -270,11 +270,19 @@ class IOThread:
         self.current_task = None
 
 
-def tier_of(p):
-    """Map a placement label to its Tier. NAND-resident layers are read at
-    CXL DRAM speed during decode because Phase 1 has staged them there."""
+def tier_of(p, staged=True):
+    """Map a placement label to its Tier.
+
+    A NAND-resident layer is read at CXL DRAM speed ONLY if Phase 1 actually
+    staged it into the device cache. Previously this returned CXL_DRAM
+    unconditionally, so 73 GB of NAND traffic was billed at 27 GB/s instead of
+    5 GB/s every decode step -- a 5.4x under-charge that accounted for the
+    reported speedup on its own.
+    """
     if p == PL_GPU_HBM:   return GPU_HBM
     if p == PL_HOST_DRAM: return HOST_DRAM
+    if p == PL_CXL_DEV_NAND and not staged:
+        return CXL_SSD_NAND
     return CXL_DRAM
 
 
@@ -402,6 +410,7 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     # bandwidth-limited NAND channel (threads amortize per-chunk latency only).
     stage_finish = {}
     t_stage      = 0.0
+    _stage_budget = cache.cap        # what placement left free on the device
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
             bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps
@@ -414,6 +423,9 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
             # every reported figure by 0.000.
             lat_term = (math.ceil(L["bytes"] / IO_CHUNK_BYTES)
                         * CXL_SSD_NAND.chunk_latency_s)
+            if L["bytes"] > _stage_budget:
+                continue          # does not fit: stays NAND-resident for decode
+            _stage_budget -= L["bytes"]
             t_stage += bw_term + lat_term
             stage_finish[i] = t_stage
             cache.add(i, L["bytes"])
@@ -429,7 +441,7 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
         # giving SemSched a 15x compute advantage in prefill. Parameters remain
         # dense (no sparsity discount) -- prefill fires all neurons.
         eff_flops = L["flops"] * seq_len * BATCH_SIZE
-        mem = transfer_time_s(sz, tier_of(place[i]))
+        mem = transfer_time_s(sz, tier_of(place[i], i in cache.session_pinned))
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
         # Chunked pipelining overlaps a chunk's compute with the next chunk's
@@ -548,7 +560,16 @@ def run_semantic_duplex_simulation():
             gpu_cap=gpu_hbm_capacity_bytes)
 
         tmon    = DuplexTrafficMonitor()
-        cache   = AttentionGuidedCache(cxl_dev_dram_capacity_bytes)
+        # The CXL device has ONE pool of DRAM. Placement has already consumed
+        # part of it for PL_CXL_DEV_DRAM layers, so Phase 1 may only stage into
+        # what is left. Handing the cache the full device capacity double-counts
+        # it: at 16H+64C placement uses 63.02 GB of 64 GB, then staging asks for
+        # a further 73.23 GB -- 213% of the device -- and every NAND-resident
+        # layer is then billed at the 27 GB/s hit rate instead of 5 GB/s.
+        _placed_in_dev = sum(L["bytes"] for i, L in enumerate(layers)
+                             if place[i] == PL_CXL_DEV_DRAM)
+        _cache_cap = max(0, cxl_dev_dram_capacity_bytes - _placed_in_dev)
+        cache   = AttentionGuidedCache(_cache_cap)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
 
@@ -651,7 +672,7 @@ def run_semantic_duplex_simulation():
                 # ── Compute + memory time ─────────────────────────────────────
                 comp  = compute_time_s(eff_flops, cpu_cores)
                 mem   = transfer_time_s(
-                    sz, tier_of(place[idx]))
+                    sz, tier_of(place[idx], idx in cache.session_pinned))
 
                 # Growing-KV: attention layers read all prior K/V from cache.
                 # At decode step `token_step`, total cached positions = PREFILL_TOKENS + token_step.
