@@ -36,6 +36,7 @@ from enum import Enum
 from cxl_link import CXLLink   # two-queue full-duplex bus model
 
 from tiers import kv_growth_spill_time_s
+from pipeline import pipelined_time_s
 from tiers import (
     HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM, transfer_time_s,
     Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, IO_CHUNK_BYTES
@@ -78,6 +79,17 @@ DUPLEX_PENALTY = 1.15
 # bandwidth. If the cache does not fit, the remainder spills to the next slower
 # tier and is timed there -- the rule now applied to every simulator.
 KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
+
+# Bandwidth and per-chunk latency of each placement tier, keyed by the label
+# `frac` uses. The pipeline engine needs these to run tiers concurrently.
+TIER_BW  = {PL_GPU_HBM:      GPU_HBM.bw_Bps,
+            PL_HOST_DRAM:    HOST_DRAM.bw_Bps,
+            PL_CXL_DEV_DRAM: CXL_DRAM.bw_Bps,
+            PL_CXL_DEV_NAND: CXL_SSD_NAND.bw_Bps}
+TIER_LAT = {PL_GPU_HBM:      GPU_HBM.chunk_latency_s,
+            PL_HOST_DRAM:    HOST_DRAM.chunk_latency_s,
+            PL_CXL_DEV_DRAM: CXL_DRAM.chunk_latency_s,
+            PL_CXL_DEV_NAND: CXL_SSD_NAND.chunk_latency_s}
 
 # Adaptive low-batch threshold. Below this batch size, MLP transfers are scaled
 # by the LLMFlash-style active-fraction formula 1 - (1 - p)^B. At B >= threshold,
@@ -666,11 +678,69 @@ def run_semantic_duplex_simulation():
             return sum(transfer_time_s(n * f, _kv_tiers[t])
                        for t, f in _kv_split.items() if f > 0)
 
-        _dev_for_weights = _caps["cxl"]
+        # ── Adaptive prefetch reservation ────────────────────────────────────
+        # Every other policy fills each tier to 100%: FlexGen's LP maximises
+        # residency by construction, and LIA, CXLAimPod and LLM-in-a-Flash place
+        # greedily until full. That is optimal only if reads are served on
+        # demand. With a K-deep lookahead it is not, because bytes fetched ahead
+        # of consumption need somewhere to live, and a device filled to the brim
+        # has nowhere -- which is why a K=32 queue over a full device buys 1.00x,
+        # exactly what no prefetch at all buys.
+        #
+        # So hold some device DRAM back. The reserved bytes stop being resident,
+        # which costs NAND traffic, and start being staging room, which lets the
+        # NAND transfers overlap the host and accelerator reads instead of
+        # serialising behind them. Neither effect dominates everywhere: too small
+        # a reserve cannot cover a transfer, too large a one pushes more onto
+        # NAND than overlap can hide. The optimum is interior and moves with the
+        # tier bandwidths, the model size and the capacity, so it is searched per
+        # configuration rather than tuned once.
+        _dev_total = _caps["cxl"]
 
-        place, ltypes, inc, sparsity, frac = semantic_aware_placement(
-            layers, _caps["host"], _dev_for_weights, num_blocks,
-            gpu_cap=_caps["gpu"])
+        _host_total = _caps["host"]
+
+        def _plan(dev_res, host_res):
+            """Place with bytes held back as staging, and time one decode step.
+
+            Staging room need not come from the device. Host DRAM sits idle most
+            of a step -- 0.42 s of 2.85 s at INT8 16H+32C -- and it is off the
+            CXL link entirely, so a buffer there lets device and NAND transfers
+            run ahead without competing for the link they are trying to escape.
+            The weights it displaces do cross that link, so the trade is real in
+            both directions and the balance is what the search resolves.
+            """
+            pl, lt, kvi, sp, fr = semantic_aware_placement(
+                layers, max(0, _host_total - host_res),
+                max(0, _dev_total - dev_res), num_blocks,
+                gpu_cap=_caps["gpu"])
+            # A representative step: mid-generation, so the KV read is the one
+            # placement was sized for.
+            _mid = PREFILL_TOKENS + TOKENS / 2.0
+            us = []
+            for _i, _L in enumerate(layers):
+                _by = {t: _L["bytes"] * f for t, f in fr[_i].items()}
+                if kvi[_L["name"]] > 0:
+                    _kb = _mid * kvi[_L["name"]] * BATCH_SIZE
+                    for _t, _f in _kv_split.items():
+                        _lbl = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM,
+                                "cxl": PL_CXL_DEV_DRAM}[_t]
+                        _by[_lbl] = _by.get(_lbl, 0.0) + _kb * _f
+                us.append((_by, compute_time_s(_L["flops"] * BATCH_SIZE, cpu_cores)))
+            return pipelined_time_s(us, PREFETCH_QUEUE_DEPTH, TIER_BW, TIER_LAT,
+                                    inflight_budget=dev_res + host_res), \
+                   (pl, lt, kvi, sp, fr)
+
+        _fr = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)
+        _best_t, _best, _prefetch_reserve = None, None, 0.0
+        for _df in _fr:
+            for _hf in _fr:
+                _dr, _hr = _dev_total * _df, _host_total * _hf
+                _t, _p = _plan(_dr, _hr)
+                if _best_t is None or _t < _best_t:
+                    _best_t, _best = _t, _p
+                    _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
+        place, ltypes, inc, sparsity, frac = _best
+        _dev_for_weights = max(0, _dev_total - _dev_res)
 
         tmon    = DuplexTrafficMonitor()
         # The CXL device has ONE pool of DRAM. Placement has already consumed
@@ -715,6 +785,7 @@ def run_semantic_duplex_simulation():
 
         for token_step in range(TOKENS):
             lat               = 0.0
+            units             = []      # (bytes_by_tier, compute_s) per sub-layer
             step_stall_s      = 0.0
             step_time_s       = 0.0
             nand_link_free_at = 0.0
@@ -814,6 +885,25 @@ def run_semantic_duplex_simulation():
 
                 ltime = max(comp, mem)
 
+                # Record this sub-layer for the pipeline engine: the bytes it
+                # reads, per tier, and its compute. Weights follow `frac`; a
+                # layer staged into the device cache reads from device DRAM
+                # rather than NAND. The growing KV read is added at whichever
+                # tier holds the cache.
+                _by = {}
+                for _t, _f in frac[idx].items():
+                    _tt = (PL_CXL_DEV_DRAM
+                           if _t == PL_CXL_DEV_NAND and idx in cache.session_pinned
+                           else _t)
+                    _by[_tt] = _by.get(_tt, 0.0) + sz * _f
+                if has_kv:
+                    _kvt = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM,
+                            "cxl": PL_CXL_DEV_DRAM}
+                    for _t, _f in _kv_split.items():
+                        _lbl = _kvt[_t]
+                        _by[_lbl] = _by.get(_lbl, 0.0) + kv_read_bytes * _f
+                units.append((_by, comp))
+
                 tmon.record_read(sz)
 
                 # ── Queue-based duplex write accounting ───────────────────────
@@ -897,6 +987,12 @@ def run_semantic_duplex_simulation():
 
             # sample measured Tx-lane utilization from the queue
             queue_uwrite_samples.append(link.write_utilization_pct())
+            # The step costs what the pipeline actually takes: tiers run
+            # concurrently, and a transfer may be issued PREFETCH_QUEUE_DEPTH
+            # sub-layers before it is needed. `lat` up to here was the serial
+            # sum, which is the same number for any policy moving the same bytes.
+            lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
+                                   TIER_LAT, inflight_budget=_prefetch_reserve)
             lat += kv_growth_spill_time_s(
                 _kv_per_tok * (PREFILL_TOKENS + token_step + 1),
                 _kv_mean, _kv_tiers[max(_kv_split, key=_kv_split.get)])

@@ -26,7 +26,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.abspath(__file__))
-DEPS = ["sim_cfg.py", "tiers.py", "model_cfg.py", "cxl_link.py"]
+DEPS = ["sim_cfg.py", "tiers.py", "model_cfg.py", "cxl_link.py", "pipeline.py"]
 
 SIMS = [
     ("FlexGen",  "flexgen_baseline.py"),
