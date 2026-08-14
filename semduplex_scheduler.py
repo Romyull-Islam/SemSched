@@ -572,10 +572,18 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
 
         # Wait for this layer's asynchronous staging only if it has not finished.
         start = max(lat, stage_finish.get(i, 0.0))
-        if not sched.should_activate_duplex(sparsity[i]):
-            lat = start + pipe_time
-        else:
-            lat = start + pipe_time * DUPLEX_PENALTY
+        # The DUPLEX_PENALTY = 1.15 multiplier that used to be applied here is
+        # gone. The decode path replaced it with the measured queue model
+        # (see the Tx-lane scheduling below, which notes the replacement), but
+        # prefill was never updated, so a blanket 15% survived on every layer
+        # with sparsity > 0.20 -- and only at INT8/INT4, because
+        # should_activate_duplex() gates on the quantization format. A data
+        # format cannot affect link contention, no baseline carries any
+        # equivalent term, and prefill writes one KV entry per sequence. It cost
+        # 64.3 s of a 732.8 s INT8 prefill and nothing at FP16, which is what
+        # made SemSched 11.5% above the compute floor at INT8 while every
+        # baseline sat within 2.9% of it.
+        lat = start + pipe_time
 
         tmon.record_read(sz)
     return lat, stats
