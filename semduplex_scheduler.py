@@ -80,6 +80,16 @@ DUPLEX_PENALTY = 1.15
 # tier and is timed there -- the rule now applied to every simulator.
 KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
 
+# Which order placement considers sub-layers in. "semantic" is the paper's
+# contribution and the default, so the shipped behaviour is unchanged. The
+# alternatives exist so the contribution can be ABLATED: the measured advantage
+# has so far been attributed to the staging reserve and the prefetch depth,
+# neither of which is semantic, and the ordering itself had never been tested
+# against a null. If semantic ties sequential, the paper's headline mechanism is
+# not what produces the result and the framing has to change.
+import os as _os
+PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "semantic")
+
 # Bandwidth and per-chunk latency of each placement tier, keyed by the label
 # `frac` uses. The pipeline engine needs these to run tiers concurrently.
 TIER_BW  = {PL_GPU_HBM:      GPU_HBM.bw_Bps,
@@ -385,6 +395,25 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         """
         free = cap
         if free <= 0:
+            return free
+        if PLACEMENT_ORDER != "semantic":
+            # Null orderings, for the ablation. Same tiers, same capacities, same
+            # bytes -- only the sequence in which sub-layers claim fast memory.
+            if PLACEMENT_ORDER == "sequential":
+                order = list(range(len(layers)))
+            elif PLACEMENT_ORDER == "size-desc":
+                order = sorted(range(len(layers)),
+                               key=lambda i: layers[i]["bytes"], reverse=True)
+            elif PLACEMENT_ORDER == "random":
+                import random as _r
+                order = list(range(len(layers)))
+                _r.Random(20260814).shuffle(order)
+            else:
+                raise SystemExit(f"unknown SEMSCHED_PLACEMENT_ORDER: {PLACEMENT_ORDER}")
+            for i in order:
+                extra = (size_of(i, layers[i]) - layers[i]["bytes"]
+                         if ltypes[i] == LayerType.ATTENTION else 0.0)
+                free = take(i, tier_label, free, extra)
             return free
         for i, L in enumerate(layers):                       # 0: output head
             if ltypes[i] == LayerType.OUTPUT:
