@@ -40,6 +40,7 @@ def compute_time_s(flops):
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
 from tiers import kv_growth_spill_time_s
+from pipeline import pipelined_time_s
 from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
 
@@ -248,6 +249,30 @@ def simulate_llmflash():
         # the strongest baseline.
         comp_attn = sum(L["flops"] for L in pinned_layers) * BATCH_SIZE
         comp_ffn  = sum(L["flops"] for L in ffn_layers) * BATCH_SIZE * active_frac_batch
+
+        # The pooled DRAM and the NAND backend are separate paths, so a window
+        # refill can proceed while resident neurons are read. LLM-in-a-Flash is
+        # a streaming design and its k=5 window is exactly a prefetch depth; the
+        # window itself is the staging room, which is the one policy here that
+        # has any by construction.
+        _units, _nl = [], max(1, len(ffn_layers))
+        for _L in pinned_layers:
+            _units.append(({"pool": _L["bytes"] * pinned_dram_frac,
+                            "CXL Device NAND": _L["bytes"] * (1.0 - pinned_dram_frac)},
+                           compute_time_s(_L["flops"] * BATCH_SIZE)))
+        for _L in ffn_layers:
+            _units.append(({"pool": (ffn_dram_bytes + dram_rewrite_bytes) / _nl,
+                            "CXL Device NAND": ffn_nand_bytes / _nl},
+                           compute_time_s(_L["flops"] * BATCH_SIZE * active_frac_batch)))
+        _units.append(({"pool": kv_read_bytes_total}, 0.0))
+        _window = max(0.0, total_dram - total_pinned_bytes * pinned_dram_frac
+                      - ffn_dram_bytes - dram_rewrite_bytes)
+        t = pipelined_time_s(_units, WINDOW_SIZE_K,
+                             {"pool": DRAM_POOL.bw_Bps,
+                              "CXL Device NAND": CXL_SSD_NAND.bw_Bps * BUNDLING_THROUGHPUT_BOOST},
+                             {"pool": DRAM_POOL.chunk_latency_s,
+                              "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s},
+                             inflight_budget=_window) + step_kv
         t = max(t, compute_time_s(comp_attn + comp_ffn))
 
         t += kv_growth_spill_time_s(

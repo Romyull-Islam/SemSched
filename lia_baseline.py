@@ -33,6 +33,20 @@ from tiers import (
     transfer_time_s, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S
 )
 from model_cfg import build_layers, BYTES_PER_PARAM
+from tiers import GPU_HBM
+from pipeline import pipelined_time_s
+
+# LIA describes no weight prefetch: CXL memory is read on demand as execution
+# reaches each layer. Depth 0 models exactly that. This is their design, not a
+# handicap -- crediting lookahead they do not claim would be inventing a system.
+PREFETCH_DEPTH = 0
+TIER_BW  = {"GPU HBM": GPU_HBM.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
+            "CXL Device DRAM": CXL_DRAM.bw_Bps,
+            "CXL Device NAND": CXL_SSD_NAND.bw_Bps}
+TIER_LAT = {"GPU HBM": GPU_HBM.chunk_latency_s,
+            "Host DRAM": HOST_DRAM.chunk_latency_s,
+            "CXL Device DRAM": CXL_DRAM.chunk_latency_s,
+            "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s}
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
     TOKENS, cpu_freq_hz, cpu_cores,
@@ -126,6 +140,7 @@ per_token_read_stall_pcts  = []
 per_token_write_stall_pcts = []
 
 for token_step in range(TOKENS):
+    units              = []
     step_time_s        = 0.0
     step_read_stall_s  = 0.0
     step_write_stall_s = 0.0
@@ -176,8 +191,16 @@ for token_step in range(TOKENS):
 
         kv_total_ddr_time = kv_read_time + kv_write_time
         ltime        = max(comp_s, weight_mem_time, kv_total_ddr_time)
-        step_time_s += ltime
+        _by = {placement[i]: weight_sz}
+        if kv_scaled > 0:
+            for _t, _f in (("Host DRAM", 1.0 - _kv_cxl_frac),
+                           ("CXL Device DRAM", _kv_cxl_frac)):
+                _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
+        units.append((_by, comp_s))
+        step_time_s += 0.0
 
+    step_time_s += pipelined_time_s(units, PREFETCH_DEPTH, TIER_BW, TIER_LAT,
+                                    inflight_budget=max(0.0, gpu_free + cxl_free))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
         _kv_resident, HOST_DRAM)
