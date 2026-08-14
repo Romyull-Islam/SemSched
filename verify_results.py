@@ -65,6 +65,7 @@ LEDGER = '''
             for _k, _f in frac[_i].items():
                 _t[_k] += _L["bytes"] * _f
         print("LEDGER " + _js.dumps({"tiers": dict(_t), "kv": _kv_mean,
+                                     "kv_split": _kv_split,
                                      "caps": {"gpu": gpu_hbm_capacity_bytes,
                                               "host": host_dram_capacity_bytes,
                                               "cxl": cxl_dev_dram_capacity_bytes}}))
@@ -103,17 +104,22 @@ def check_capacity_and_floor(gpu):
             if led is None:
                 report("cap", False, f"{quant} 16H+{c}C: no ledger"); continue
             tiers, kv, caps = led["tiers"], led["kv"], led["caps"]
-            # capacity: device DRAM must hold its weights AND the KV cache
-            dev = tiers.get("CXL Device DRAM", 0.0) + kv
-            report("cap", dev <= caps["cxl"] * 1.001,
-                   f"{quant} 16H+{c}C device {dev/G:6.2f}G of {caps['cxl']/G:.0f}G "
-                   f"({100*dev/caps['cxl']:5.1f}%)")
-            for lbl, key in (("GPU HBM", "gpu"), ("Host DRAM", "host")):
-                b = tiers.get(lbl, 0.0)
-                if caps[key]:
-                    report("cap", b <= caps[key] * 1.001,
-                           f"{quant} 16H+{c}C {lbl:<16}{b/G:6.2f}G of "
-                           f"{caps[key]/G:.0f}G ({100*b/caps[key]:5.1f}%)")
+            # The KV cache is charged to whichever tier the placement search
+            # picked, which is no longer always the device. Attribute it by the
+            # split the simulator reports rather than assuming, or a policy that
+            # correctly moved its cache to host DRAM reads as a 137% over-commit.
+            split = led.get("kv_split") or {"cxl": 1.0}
+            kv_by = {"gpu": "GPU HBM", "host": "Host DRAM", "cxl": "CXL Device DRAM"}
+            for key, lbl in (("cxl", "CXL Device DRAM"), ("gpu", "GPU HBM"),
+                             ("host", "Host DRAM")):
+                if not caps[key]:
+                    continue
+                used = tiers.get(lbl, 0.0) + kv * split.get(key, 0.0)
+                report("cap", used <= caps[key] * 1.001,
+                       f"{quant} 16H+{c}C {lbl:<16}{used/G:6.2f}G of "
+                       f"{caps[key]/G:3.0f}G ({100*used/caps[key]:5.1f}%)"
+                       + (f"  [KV {100*split.get(key,0.0):.0f}%]"
+                          if split.get(key, 0.0) else ""))
             # floor: with tiers concurrent, a step cannot beat its slowest tier
             floor = max((v / BW[k] for k, v in tiers.items() if k in BW),
                         default=0.0)
