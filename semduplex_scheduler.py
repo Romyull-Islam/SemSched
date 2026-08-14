@@ -1078,6 +1078,10 @@ def run_semantic_duplex_simulation():
         mean_lat = total_decode_lat / TOKENS
         print(f"\nSingle-token decode latency: {mean_lat:.6f}s")
 
+        # Phase-1 staging is a reported mechanism, so report it rather than
+        # leaving it to be inferred from an ablation.
+        print(f"Warmup time: {pf_stats['warmup_time']:.6f}")
+        print(f"Warmup staged bytes: {pf_stats['bytes_prefetched']}")
         print(f"Decode throughput: {BATCH_SIZE / mean_lat:.6f} t/s")
         # Per-sequence prefill TPS (matches FlexGen/LIA/LLMFlash convention)
         # reporting convention (flexgen_baseline.py:155, lia_baseline.py:149).

@@ -113,6 +113,52 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
                 float(p.group(1)) if p else None, out)
 
 
+def _metrics(out):
+    """Everything the simulators report, plus the derived wall-clock terms."""
+    def g(pat, default=None):
+        m = re.search(pat, out)
+        return float(m.group(1)) if m else default
+    dec = g(r"Decode throughput:\s*([\d.]+)")
+    pre = g(r"Prefill throughput:\s*([\d.]+)")
+    m = {
+        "warmup_s":   g(r"Warmup time:\s*([\d.]+)", 0.0),
+        "staged_B":   g(r"Warmup staged bytes:\s*([\d.]+)", 0.0),
+        "prefill_tps": pre,
+        "decode_tps":  dec,
+        "wstall_ms":  (g(r"Write_Stall_Time_s:\s*([\d.]+)", 0.0) or 0.0) * 1e3,
+    }
+    # A run is one prompt then DECODE tokens for each of BATCH sequences.
+    m["prefill_s"] = (512.0 / pre) if pre else None
+    m["step_s"]    = (BATCH / dec) if dec else None
+    m["decode_s"]  = (DECODE * BATCH / dec) if dec else None
+    m["total_s"]   = ((m["prefill_s"] or 0) + (m["decode_s"] or 0)) or None
+    return m
+
+
+def detail(gpu):
+    """Per-policy breakdown: staging, prefill, decode and wall clock."""
+    tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only (no accelerator)"
+    print(f"\n{'=' * 110}\n{tag}   Qwen2.5 72B, B={BATCH}, 512-token prompt, "
+          f"{DECODE} decode steps\n{'=' * 110}")
+    print(f"{'Quant':<5}{'Memory':<9}{'Policy':<10}{'warmup s':>9}{'staged':>8}"
+          f"{'prefill t/s':>12}{'prefill s':>10}{'decode t/s':>11}{'step s':>9}"
+          f"{'decode s':>10}{'total s':>9}{'w-stall ms':>11}")
+    print("-" * 110)
+    for quant in QUANTS:
+        for c in CXLS:
+            for h in GRID:
+                for name, sim in SIMS:
+                    m = _metrics(run(sim, quant, h, c, gpu)[2])
+                    st = (f"{m['staged_B']/1024**3:.1f}G" if m["staged_B"] else "-")
+                    print(f"{quant.upper():<5}{f'{h}H+{c}C':<9}{name:<10}"
+                          f"{m['warmup_s']:>9.3f}{st:>8}"
+                          f"{m['prefill_tps']:>12.3f}{m['prefill_s']:>10.1f}"
+                          f"{m['decode_tps']:>11.2f}{m['step_s']:>9.3f}"
+                          f"{m['decode_s']:>10.1f}{m['total_s']:>9.1f}"
+                          f"{m['wstall_ms']:>11.3f}")
+                print("-" * 110)
+
+
 def comparison(gpu, diag=False, metric="decode"):
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only (no accelerator)"
     print(f"\n{'=' * 78}\n{tag}   Qwen2.5 72B, B={BATCH}, {DECODE} decode steps"
@@ -253,8 +299,16 @@ def main():
                     help="report prefill throughput instead of decode")
     ap.add_argument("--kv-tier", action="store_true",
                     help="sweep which tier holds the KV cache")
+    ap.add_argument("--detail", action="store_true",
+                    help="per-policy warmup / prefill / decode / wall-clock table")
     a = ap.parse_args()
 
+    if a.detail:
+        if not a.gpu_only:
+            detail(0)
+        if not a.cpu_only:
+            detail(GPU_GB)
+        return
     if a.kv_tier:
         if not a.gpu_only:
             kv_tier_sweep(0)
