@@ -23,6 +23,19 @@ from tiers import (GiB, HOST_DRAM, CXL_DRAM, GPU_HBM, CXL_SSD_NAND, Tier,
                    NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s,
                    kv_growth_spill_time_s)
 from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
+from pipeline import pipelined_time_s
+
+# FlexGen's block schedule overlaps "the weights load of the next layer" with
+# the current layer's compute (Algorithm 1, three CUDA streams) -- one layer of
+# lookahead, which is what their paper describes and no more.
+PREFETCH_DEPTH = 1
+TIER_BW  = {"GPU HBM": GPU_HBM.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
+            "CXL Device DRAM": CXL_DRAM.bw_Bps,
+            "CXL Device NAND": CXL_SSD_NAND.bw_Bps}
+TIER_LAT = {"GPU HBM": GPU_HBM.chunk_latency_s,
+            "Host DRAM": HOST_DRAM.chunk_latency_s,
+            "CXL Device DRAM": CXL_DRAM.chunk_latency_s,
+            "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s}
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
     TOKENS, cpu_freq_hz, cpu_cores, flops_per_cycle_per_core,
@@ -210,6 +223,7 @@ per_token_write_stall_pcts = []
 
 # ── Phase 2: DECODE — replace KV stall block entirely ────────────────────────
 for token_step in range(TOKENS):
+    units              = []
     step_time_s        = 0.0
     step_read_stall_s  = 0.0
     step_write_stall_s = 0.0
@@ -251,10 +265,25 @@ for token_step in range(TOKENS):
             total_kv_write_stall_s += kv_stall
             step_write_stall_s     += kv_stall
 
-        step_time_s += ltime + kv_stall   # serial: weight→compute→kv_write
+        _by = {"GPU HBM": b*fg, "Host DRAM": b*fh,
+               "CXL Device DRAM": b*fc, "CXL Device NAND": b*fd}
+        if kv_inc_l > 0:
+            for _t, _f in (("Host DRAM", _kv_frac["host"]),
+                           ("CXL Device DRAM", _kv_frac["cxl"]),
+                           ("CXL Device NAND", _kv_frac["nand"])):
+                _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
+        units.append((_by, comp_s))
+        step_time_s += kv_stall           # KV write, serialized after the read
 
 
     # KV past its reservation displaces weights out of the tier holding it.
+    # Tiers run concurrently; a read may be issued PREFETCH_DEPTH layers early.
+    # FlexGen's LP fills each tier to capacity, so there is no spare memory to
+    # stage into: its one-layer lookahead is bounded by what placement left,
+    # which is nothing. Same rule as every other policy.
+    step_time_s += pipelined_time_s(units, PREFETCH_DEPTH, TIER_BW, TIER_LAT,
+                                    inflight_budget=max(0.0, gpu_free + host_free
+                                                        + cxl_free))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
         _kv_resident, HOST_DRAM)

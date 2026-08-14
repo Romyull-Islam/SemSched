@@ -19,6 +19,8 @@
 import math
 
 from tiers import kv_growth_spill_time_s
+from tiers import GPU_HBM as _GPU
+from pipeline import pipelined_time_s
 from tiers import (HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
                    Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S)
 from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
@@ -112,6 +114,7 @@ class CXLPrefetcher:
 def run_phase(is_prefill, token_step=0):
     """One prefill token or one decode step, across all layers."""
     pf = CXLPrefetcher()
+    units = []
     elapsed = 0.0
     read_stall = 0.0
     kv_write = 0.0
@@ -136,19 +139,35 @@ def run_phase(is_prefill, token_step=0):
             read_stall += wait
             mem = wait + cxl_time_s(L["bytes"])
 
+        _by = {placement[i]: L["bytes"]}
         # Growing KV: attention reads all cached positions so far. CXLAimPod
         # pools device memory, so KV is served from the CXL DRAM tier.
         kv_bytes = L.get("kv_cache_bytes", 0)
+        _kvb = 0.0
         if kv_bytes > 0 and not is_prefill:
             positions = PREFILL_TOKENS + token_step
-            mem += cxl_time_s(positions * kv_inc_per_tok * BATCH_SIZE)
+            _kvb = positions * kv_inc_per_tok * BATCH_SIZE
+            mem += cxl_time_s(_kvb)
             # No duplex scheduling in this baseline: the KV write is serialized.
             w = cxl_time_s(kv_inc_per_tok * BATCH_SIZE)
             kv_write += w
             elapsed += w
 
+        _by["CXL Device DRAM"] = _by.get("CXL Device DRAM", 0.0) + _kvb
+        units.append((_by, comp))
         elapsed += max(comp, mem)
 
+    # CXLAimPod prefetches PREFETCH_WINDOW layers ahead over the CXL link, and
+    # pools the device memory it fills -- so its window is bounded by whatever
+    # placement left free, which its greedy fill makes small.
+    elapsed = pipelined_time_s(
+        units, PREFETCH_WINDOW,
+        {"Host DRAM": HOST_DRAM.bw_Bps, "CXL Device DRAM": CXL_DRAM.bw_Bps,
+         "CXL Device NAND": CXL_SSD_NAND.bw_Bps},
+        {"Host DRAM": HOST_DRAM.chunk_latency_s,
+         "CXL Device DRAM": CXL_DRAM.chunk_latency_s,
+         "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s},
+        inflight_budget=max(0.0, cxl_free + host_free))
     return elapsed, read_stall, kv_write
 
 
