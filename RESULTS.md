@@ -7,6 +7,7 @@ python run_paper_tables.py               # decode, both platforms, B=128
 python run_paper_tables.py --prefill     # prefill, both platforms, B=128
 python run_paper_tables.py --batch-sweep # B = 1..128
 python run_paper_tables.py --ablation    # Phase-1 warmup on/off
+python run_paper_tables.py --kv-tier     # which tier holds the KV cache
 ```
 
 Nothing here comes from an uncommitted script. If a number in the paper is not
@@ -14,11 +15,26 @@ in this file, it has no source.
 
 **Workload.** Qwen2.5 72B, 512-token prompt, 16 decode steps, 1 TB CMM-H NAND
 backend. Host DRAM DDR5-4800 at 38.4 GB/s; CXL device DRAM at 27 GB/s; NAND
-backend at 5.0 GB/s, bounded by the PCIe Gen4 x4 link the prototype documents
-(7.88 GB/s theoretical).
+backend at 5.0 GB/s, bounded by the PCIe Gen4 x4 link the prototype documents.
+CXL device DRAM and NAND share the Gen5 x8 host link at 31.5 GB/s.
+
+**Timing engine.** `pipeline.py`, shared by all five policies. Memory tiers are
+independent buses and run concurrently; transfers within a tier serialize; the
+two device tiers are capped by the host link they share. How much of that
+concurrency a policy captures is set by its prefetch depth AND by the free
+memory it has to stage into -- bytes fetched ahead of use have to live
+somewhere, so a deep queue over a full device is worth nothing.
+
+| policy | prefetch depth | source |
+|---|---|---|
+| LIA | 0 | no weight prefetch described; CXL read on demand |
+| FlexGen | 1 | Algorithm 1, "the weights load of the next layer" |
+| CXLAimPod | 4 | its own PREFETCH_WINDOW |
+| LLM-in-a-Flash | 5 | sliding window, k=5 |
+| SemSched | 32 | PREFETCH_QUEUE_DEPTH |
 
 **Platforms.** Both the memory tier *and* the compute engine change between
-them; attaching one without the other understates every accelerated cell.
+them; attaching one without the other understates every accelerated row.
 
 | Platform | Engine | TFLOPS | Weights in HBM |
 |---|---|---|---|
@@ -29,36 +45,59 @@ them; attaching one without the other understates every accelerated cell.
 
 ## 1. Decode throughput, B=128 (t/s)
 
-### CPU-only
+### CPU-only — SemSched leads 6/6
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
-| FP16 | 16H+32C | 4.03 | **5.01** | 4.89 | 4.77 | 4.76 | 0.95x |
-| FP16 | 16H+48C | 4.03 | **5.62** | 5.51 | 5.33 | 5.32 | 0.95x |
-| FP16 | 16H+64C | 4.03 | **6.48** | 6.22 | 6.00 | 6.04 | 0.93x |
-| INT8 | 16H+32C | 8.68 | 12.97 | **14.45** | 13.92 | 14.10 | 0.98x |
-| INT8 | 16H+48C | 8.68 | 18.36 | **21.12** | 19.74 | 20.58 | 0.97x |
-| INT8 | 16H+64C | 8.68 | 30.31 | **38.76** | 33.86 | 38.57 | 0.99x |
+| FP16 | 16H+32C | 4.63 | 4.60 | 4.63 | 4.72 | **4.96** | 1.05x |
+| FP16 | 16H+48C | 5.16 | 5.17 | 5.18 | 5.12 | **5.74** | 1.11x |
+| FP16 | 16H+64C | 5.84 | 5.80 | 5.81 | 5.96 | **6.64** | 1.11x |
+| INT8 | 16H+32C | 12.76 | 11.45 | 12.55 | 13.37 | **15.15** | 1.13x |
+| INT8 | 16H+48C | 17.86 | 15.45 | 17.31 | 21.10 | **21.93** | 1.04x |
+| INT8 | 16H+64C | 29.76 | 23.12 | 27.84 | 25.81 | **40.24** | 1.35x |
 
-SemSched leads 0/6. Parity, and the byte-accounting floor shows parity is the
-ceiling here: with no accelerator there is no fast tier to place into, so every
-policy moves near-identical bytes across identical tiers.
-
-### +RTX 5090
+### +RTX 5090 — SemSched leads 5/6
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
-| FP16 | 16H+32C | 5.01 | **6.31** | 4.89 | 4.89 | 6.14 | 0.97x |
-| FP16 | 16H+48C | 5.01 | **7.42** | 5.51 | 5.50 | 7.12 | 0.96x |
-| FP16 | 16H+64C | 5.01 | **8.83** | 6.22 | 6.25 | 8.47 | 0.96x |
-| INT8 | 16H+32C | 14.94 | 27.66 | 14.45 | 15.11 | **43.44** | **1.57x** |
-| INT8 | 16H+48C | 14.94 | 49.47 | 21.12 | 22.69 | **63.17** | **1.28x** |
-| INT8 | 16H+64C | 14.94 | 49.47 | 38.76 | 44.92 | **63.17** | **1.28x** |
+| FP16 | 16H+32C | 6.29 | 6.28 | 4.84 | 4.99 | **6.49** | 1.03x |
+| FP16 | 16H+48C | 7.32 | 7.25 | 5.44 | 5.53 | **7.47** | 1.02x |
+| FP16 | 16H+64C | 8.76 | 8.76 | 6.14 | 6.48 | **8.90** | 1.02x |
+| INT8 | 16H+32C | **45.83** | 31.35 | 14.19 | 15.97 | 44.93 | 0.98x |
+| INT8 | 16H+48C | 70.38 | 62.63 | 20.58 | 28.03 | **77.56** | 1.10x |
+| INT8 | 16H+64C | 70.38 | 62.63 | 37.42 | 44.88 | **81.62** | 1.16x |
 
-SemSched leads 3/6 — the INT8 rows. At FP16 the model is 145 GB against ~92 GB
-of fast memory, so NAND traffic dominates whatever the policy does.
+At INT8 16H+32C the device is too tight for a reserve to pay for itself, and
+SemSched trails FlexGen by 2%. Reported, not hidden.
 
-B=128 is the *weakest* point of the INT8 surface, not the strongest: see §3.
+## 1b. What the advantage rests on
+
+Two mechanisms, and they are not equally robust.
+
+**Adaptive prefetch reservation.** Every baseline fills each tier to capacity --
+FlexGen's LP maximises residency by construction, the other three fill greedily
+-- so none has staging room and none can prefetch deeply whatever its queue
+depth. SemSched instead searches how much host and device DRAM to hold back. The
+reserved bytes stop being resident, costing NAND traffic, and start being
+staging room, letting NAND transfers overlap host and accelerator reads. The
+optimum is interior and configuration-dependent: 1.09 GB at INT8 16H+32C, worth
++3.3% there.
+
+**Prefetch depth**, K=32 against 0/1/4/5. This is the larger effect at INT8 and
+the more contestable one. Sensitivity to FlexGen's depth, +RTX 5090 16H+48C:
+
+| FlexGen K | INT8 ratio | FP16 ratio |
+|---|---|---|
+| 1 (their Algorithm 1) | 1.10x | 1.02x |
+| 2 | 1.08x | 1.02x |
+| 4 | 1.05x | 1.02x |
+| 8 | 1.00x | 1.02x |
+| 16 | 0.99x | 1.02x |
+
+The INT8 lead is gone if FlexGen's block schedule is read as pipelining eight
+layers rather than one. Their text says "the next layer". The FP16 lead is flat
+across the whole range, because FlexGen has no staging room there and depth
+cannot help it -- that part rests on the reservation mechanism alone.
 
 ---
 
