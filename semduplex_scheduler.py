@@ -420,6 +420,41 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
                                         + rem[i] / L["bytes"])
             rem[i] = 0.0
 
+    # ── Spread the NAND residue through execution order ──────────────────
+    # Which bytes end up on NAND is fixed by capacity, but WHERE they sit in the
+    # execution order is not, and a K-deep lookahead can only overlap a transfer
+    # against work that runs before it. Filling MLP by descending sparsity puts
+    # the leftover in one contiguous mid-model band -- at INT8 16H+32C, ten of
+    # eleven NAND sub-layers landed at indices 30-48 of 163, so 5.7 GB of 5 GB/s
+    # traffic saturates the backend in 12% of the step while the fast tiers idle
+    # either side of it.
+    #
+    # Sub-layers of one kind are the same size, so moving the residue among them
+    # is byte-neutral: the ledger is identical, only the positions change. That
+    # makes this pure scheduling -- it cannot flatter the accounting, because it
+    # does not touch it.
+    _groups = {}
+    for i, L in enumerate(layers):
+        _groups.setdefault((ltypes[i], L["bytes"]), []).append(i)
+    for _members in _groups.values():
+        if len(_members) < 3:
+            continue
+        _on_nand = [i for i in _members if frac[i].get(PL_CXL_DEV_NAND, 0) > 0]
+        if not (0 < len(_on_nand) < len(_members)):
+            continue        # all or nothing on NAND: no arrangement to choose
+        # Even stride across the group, so each NAND read has fast-tier work
+        # before it to hide behind.
+        _step = len(_members) / len(_on_nand)
+        _target = [_members[min(len(_members) - 1, int(k * _step + _step / 2))]
+                   for k in range(len(_on_nand))]
+        _target = sorted(set(_target))
+        if len(_target) != len(_on_nand) or set(_target) == set(_on_nand):
+            continue
+        _donor = [i for i in _on_nand if i not in _target]
+        _recv  = [i for i in _target if i not in _on_nand]
+        for _d, _r in zip(_donor, _recv):
+            frac[_d], frac[_r] = frac[_r], frac[_d]
+
     # `place` names the tier holding the largest share. It drives the control
     # flow -- staging, prefetch, duplex lane selection -- which is per-layer and
     # cannot be fractional; `frac` carries the split that timing uses.
