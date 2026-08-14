@@ -692,21 +692,40 @@ def run_semantic_duplex_simulation():
         _caps = {"gpu":  gpu_hbm_capacity_bytes,
                  "host": host_dram_capacity_bytes,
                  "cxl":  cxl_dev_dram_capacity_bytes}
-        _order = {"gpu": ["gpu", "host", "cxl"],
-                  "host": ["host", "cxl"],
-                  "cxl": ["cxl"]}[KV_TIER]
-        _kv_split, _rem = {}, _kv_mean
-        for _t in _order:
-            _take = min(_rem, _caps[_t])
-            if _take > 0:
-                _kv_split[_t] = _take / _kv_mean if _kv_mean else 0.0
-                _caps[_t] -= _take
-                _rem -= _take
-        if _rem > 0:      # nowhere left: the tail stays on the slowest KV tier
-            _kv_split[_order[-1]] = _kv_split.get(_order[-1], 0.0) + _rem / _kv_mean
-            _caps[_order[-1]] = 0
-
+        # The pristine capacities. _kv_place is called once per candidate tier by
+        # the search below and must always subtract the cache from the FULL
+        # device, never from a dict a previous call already reduced.
+        _caps0 = dict(_caps)
         _kv_tiers = {"gpu": GPU_HBM, "host": HOST_DRAM, "cxl": CXL_DRAM}
+
+        def _kv_place(tier):
+            """Charge the cache to `tier`, spilling down when it does not fit.
+
+            Returns (split, caps): the fraction of every KV access served by each
+            tier, and what placement may then use. Which tier should hold the
+            cache is not obvious and not constant -- putting it in HBM reads it
+            66x faster but evicts an equal mass of weights, and the weights are
+            read every step too. It is searched alongside the staging reserve
+            rather than fixed, because the answer moves with quantization: at
+            FP16 the device wins, at INT8 the host does.
+            """
+            order = {"gpu": ["gpu", "host", "cxl"],
+                     "host": ["host", "cxl"],
+                     "cxl": ["cxl"]}[tier]
+            caps = dict(_caps0)
+            split, rem = {}, _kv_mean
+            for t in order:
+                take = min(rem, caps[t])
+                if take > 0:
+                    split[t] = take / _kv_mean if _kv_mean else 0.0
+                    caps[t] -= take
+                    rem -= take
+            if rem > 0:   # nowhere left: the tail stays on the slowest KV tier
+                split[order[-1]] = split.get(order[-1], 0.0) + rem / _kv_mean
+                caps[order[-1]] = 0
+            return split, caps
+
+        _kv_split, _caps = _kv_place(KV_TIER)
 
         def _kv_time(n):
             """Time to move n KV bytes, split across the tiers that hold them."""
@@ -765,15 +784,28 @@ def run_semantic_duplex_simulation():
                                     inflight_budget=dev_res + host_res), \
                    (pl, lt, kvi, sp, fr)
 
+        # The search covers both placement decisions together, because they are
+        # not separable: where the cache sits changes which tier is the
+        # bottleneck, which changes how much staging room is worth holding back.
         _fr = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)
+        _kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
         _best_t, _best, _prefetch_reserve = None, None, 0.0
-        for _df in _fr:
-            for _hf in _fr:
-                _dr, _hr = _dev_total * _df, _host_total * _hf
-                _t, _p = _plan(_dr, _hr)
-                if _best_t is None or _t < _best_t:
-                    _best_t, _best = _t, _p
-                    _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
+        _best_kv = KV_TIER
+        for _kvt in _kv_opts:
+            _kv_split, _caps = _kv_place(_kvt)
+            _dev_total, _host_total = _caps["cxl"], _caps["host"]
+            for _df in _fr:
+                for _hf in _fr:
+                    _dr, _hr = _dev_total * _df, _host_total * _hf
+                    _t, _p = _plan(_dr, _hr)
+                    if _best_t is None or _t < _best_t:
+                        _best_t, _best, _best_kv = _t, _p, _kvt
+                        _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
+        # Re-establish the winning cache placement: _kv_split and _caps are read
+        # by _kv_time and by the decode loop, and the loop above left them on
+        # whichever option it tried last.
+        _kv_split, _caps = _kv_place(_best_kv)
+        _dev_total, _host_total = _caps["cxl"], _caps["host"]
         place, ltypes, inc, sparsity, frac = _best
         _dev_for_weights = max(0, _dev_total - _dev_res)
 
