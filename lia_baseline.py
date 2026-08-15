@@ -36,10 +36,26 @@ from model_cfg import build_layers, BYTES_PER_PARAM
 from tiers import GPU_HBM
 from pipeline import pipelined_time_s
 
-# LIA describes no weight prefetch: CXL memory is read on demand as execution
-# reaches each layer. Depth 0 models exactly that. This is their design, not a
-# handicap -- crediting lookahead they do not claim would be inventing a system.
-PREFETCH_DEPTH = 0
+# CORRECTED 2026-08-14. This was PREFETCH_DEPTH = 0, justified as "LIA describes no weight
+# prefetch ... crediting lookahead they do not claim would be inventing a system." The
+# premise is false, and it denied LIA the one mechanism FlexGen is granted for free.
+#
+# LIA's official ISCA'25 artifact (ece-fast-lab/ISCA-2025-LIA, lia/modeling_opt.py)
+# prefetches the NEXT layer into an alternating double buffer on a dedicated stream:
+#     load_weight_stream = torch.cuda.Stream()
+#     if idx < len(self.layers) - 1:
+#         with torch.cuda.stream(load_weight_stream):
+#             load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2,
+#                        self.layers[idx+1], i, overlap=overlap)
+#     overlap = not no_overlap          # ON by default
+# and that sits in the `decoding_policy in [2, 4]` branch -- the branch every CXL run in
+# scripts/cxl_offloading.sh takes. Read directly from the badged artifact source on
+# 2026-08-14; ACM returns 403 for the PDF, so the artifact is the evidence, not the prose.
+#
+# Depth 1 is LIA's own design and is the SAME value FlexGen already receives for the
+# identical single-layer-lookahead mechanism. Granting it to one policy and withholding it
+# from the other was the asymmetry; this is the correction, not a favour.
+PREFETCH_DEPTH = 1
 TIER_BW  = {"GPU HBM": GPU_HBM.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
             "CXL Device DRAM": CXL_DRAM.bw_Bps,
             "CXL Device NAND": CXL_SSD_NAND.bw_Bps}
@@ -116,6 +132,29 @@ for L in layers:
         cxl_free -= L["bytes"]
     else:
         placement.append(PL_CXL_DEV_NAND)
+
+# ── Staging budget for the next-layer prefetch (added 2026-08-14) ─────────────
+# PREFETCH_DEPTH alone cannot do anything: pipeline.py can only walk the issue point
+# back past i-1 if there are in-flight bytes to hold the fetch, and the budget passed
+# below was gpu_free + cxl_free -- both driven to ~0 by a cascade that fills every tier
+# to capacity. So LIA was advertised at depth 1 and silently simulated at depth 0. That
+# is the same structural clamp the audit found on every baseline, and it is why depth
+# and budget have to be corrected together; each is inert alone.
+#
+# SIZE COMES FROM THE ARTIFACT, NOT FROM WHAT IS LYING AROUND. modeling_opt.py allocates
+# exactly two weight buffers (gpu_buff_1, gpu_buff_2) and alternates them by layer
+# parity, so the staging LIA actually holds is 2 x the largest unit -- not "all free
+# memory", which would hand it an unearned advantage of a different kind.
+#
+# WHERE IT LIVES. LIA keeps host DRAM exclusively for the KV cache (see the A12 note
+# above), which is why the weight cascade above never emits PL_HOST_DRAM -- that is
+# faithful, not a bug. But whatever the KV does not occupy is idle, and idle host DRAM is
+# precisely where create_buffer() would put staging. At FP16 B=128 the KV is 20.31 GiB
+# against a 16 GiB host, so this is 0 and nothing changes; at INT8 the cache is smaller
+# and the buffers fit, which is where the correction bites.
+_LIA_HOST_FREE = max(0.0, host_dram_capacity_bytes - _kv_in_host)
+_LIA_DOUBLE_BUF = 2.0 * max(L["bytes"] for L in layers)
+_LIA_STAGING = min(_LIA_DOUBLE_BUF, gpu_free + cxl_free + _LIA_HOST_FREE)
 
 
 # ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
@@ -200,7 +239,7 @@ for token_step in range(TOKENS):
         step_time_s += 0.0
 
     step_time_s += pipelined_time_s(units, PREFETCH_DEPTH, TIER_BW, TIER_LAT,
-                                    inflight_budget=max(0.0, gpu_free + cxl_free))
+                                    inflight_budget=max(0.0, _LIA_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
         _kv_resident, HOST_DRAM)
