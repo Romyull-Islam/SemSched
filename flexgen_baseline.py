@@ -147,6 +147,37 @@ gpu_free   = gpu_hbm_capacity_bytes
 host_free  = max(0, host_dram_capacity_bytes - _kv_host)
 cxl_free   = max(0, cxl_dev_dram_capacity_bytes - _kv_cxl)
 
+# ── FlexGen's working-memory reservation (added 2026-08-14) ───────────────────
+# FlexGen Appendix A makes working memory a HARD LP CONSTRAINT, not leftovers:
+#     gpu_w^p = 2(1-wg)(8h1^2 + 4h1h2) + ...
+# The leading 2 is a double buffer -- the same structure LIA allocates explicitly as
+# gpu_buff_1/gpu_buff_2, and the thing that funds load_weight(i, j+1, k) in Algorithm 1.
+# This simulator had no counterpart to that term: it deducted only the KV reservation,
+# then passed post-placement leftovers as the staging budget. Since the placement below
+# fills every tier to capacity, those leftovers are ~0, so pipeline.py could never walk
+# the issue point back past i-1 and FlexGen's advertised PREFETCH_DEPTH was silently
+# simulated as 0 -- confirmed by a depth 1 -> 0 ablation being bit-identical to five
+# significant figures in all six reported cells.
+#
+# THE TWO HALVES MUST MOVE TOGETHER. Deducting the buffer alone costs FlexGen residency
+# (2-7%); granting a budget alone is impossible because nothing was deducted to grant.
+# Reserving it and handing the pipeline that same reserve is ONE mechanism, and it is
+# exactly the residency-versus-staging trade FlexGen's LP exists to resolve. Splitting it
+# mismodels FlexGen in whichever direction the split is made.
+#
+# SIZE: 2 x the largest unit, mirroring the double buffer, and symmetric with the
+# correction applied to LIA. The KV read term in the App. A expression is omitted because
+# units here already carry their KV read bytes separately; that yields a SMALLER reserve
+# than FlexGen would really hold, which is the conservative direction for a baseline fix.
+#
+# Charged against the fast tiers in the LP's own preference order, GPU before host.
+_FLEXGEN_WS = 2.0 * max(L["bytes"] for L in layers)
+_ws_rem = _FLEXGEN_WS
+_take = min(_ws_rem, gpu_free);  gpu_free  -= _take; _ws_rem -= _take
+_take = min(_ws_rem, host_free); host_free -= _take; _ws_rem -= _take
+_take = min(_ws_rem, cxl_free);  cxl_free  -= _take; _ws_rem -= _take
+_FLEXGEN_STAGING = _FLEXGEN_WS - _ws_rem      # what the machine could actually reserve
+
 for n in HOT_LAYERS_BY_NAME:
     idx = name_to_idx.get(n)
     if idx is not None:
@@ -278,12 +309,17 @@ for token_step in range(TOKENS):
 
     # KV past its reservation displaces weights out of the tier holding it.
     # Tiers run concurrently; a read may be issued PREFETCH_DEPTH layers early.
-    # FlexGen's LP fills each tier to capacity, so there is no spare memory to
-    # stage into: its one-layer lookahead is bounded by what placement left,
-    # which is nothing. Same rule as every other policy.
+    #
+    # CHANGED 2026-08-14. This used to pass post-placement leftovers, with the comment
+    # "FlexGen's LP fills each tier to capacity, so there is no spare memory to stage
+    # into ... Same rule as every other policy." The first half is true and the second is
+    # not: SemSched does not live on leftovers, it searches for a staging reserve and
+    # holds capacity back to get one. Applying "you may only stage into what you failed to
+    # fill" to the baselines and "you may buy staging with capacity" to the proposal is a
+    # single asymmetry that clamps every baseline's prefetch to zero. FlexGen now reserves
+    # the App. A working buffer above and stages into exactly that.
     step_time_s += pipelined_time_s(units, PREFETCH_DEPTH, TIER_BW, TIER_LAT,
-                                    inflight_budget=max(0.0, gpu_free + host_free
-                                                        + cxl_free))
+                                    inflight_budget=max(0.0, _FLEXGEN_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
         _kv_resident, HOST_DRAM)
