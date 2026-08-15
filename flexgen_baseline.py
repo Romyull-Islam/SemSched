@@ -132,18 +132,34 @@ _kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
 # their bandwidth. It is never discarded. Reserving it from host DRAM and
 # clipping at zero dropped 4.31 GiB at FP16 B=128: FlexGen paid the full
 # capacity penalty and none of the transfer cost for the excess.
-_kv_host = min(_kv_resident, host_dram_capacity_bytes)
-_kv_cxl  = min(_kv_resident - _kv_host, cxl_dev_dram_capacity_bytes)
-_kv_nand = max(0, _kv_resident - _kv_host - _kv_cxl)
-_kv_frac = {"host": _kv_host / _kv_resident if _kv_resident else 1.0,
+# The LP's cache variables are (cg, cc, cd): GPU, CPU and disk PERCENTAGES,
+# so the cache cascades through the same hierarchy the weights do, GPU first
+# (Sec 4.3). An earlier version pinned KV to host DRAM unconditionally, which
+# was invisible at 72B, where the cache cannot fit beside the weights in HBM
+# anyway, and wrong by 12x at 7B, where FlexGen's own policy would place the
+# cache in HBM and read it at 1792 GB/s rather than 38.4. The KV share of HBM
+# is whatever the weights leave: weights are placed after this block, so the
+# cascade reserves KV from each tier in order and placement gets the rest.
+_kv_gpu  = min(_kv_resident, max(0, gpu_hbm_capacity_bytes
+                                 - min(sum(L["bytes"] for L in layers),
+                                       gpu_hbm_capacity_bytes)))
+# If weights alone exceed HBM, no KV fits there; otherwise KV takes what the
+# weights leave. This mirrors the LP's joint capacity constraint per device.
+_wtotal  = sum(L["bytes"] for L in layers)
+_kv_gpu  = min(_kv_resident, max(0, gpu_hbm_capacity_bytes - _wtotal))
+_kv_host = min(_kv_resident - _kv_gpu, host_dram_capacity_bytes)
+_kv_cxl  = min(_kv_resident - _kv_gpu - _kv_host, cxl_dev_dram_capacity_bytes)
+_kv_nand = max(0, _kv_resident - _kv_gpu - _kv_host - _kv_cxl)
+_kv_frac = {"gpu":  _kv_gpu  / _kv_resident if _kv_resident else 0.0,
+            "host": _kv_host / _kv_resident if _kv_resident else 1.0,
             "cxl":  _kv_cxl  / _kv_resident if _kv_resident else 0.0,
             "nand": _kv_nand / _kv_resident if _kv_resident else 0.0}
 
 def kv_time_s(n):
-    return (dram_time_s(n * _kv_frac["host"]) + cxl_time_s(n * _kv_frac["cxl"])
-            + ssd_time_s(n * _kv_frac["nand"]))
+    return (gpu_time_s(n * _kv_frac["gpu"]) + dram_time_s(n * _kv_frac["host"])
+            + cxl_time_s(n * _kv_frac["cxl"]) + ssd_time_s(n * _kv_frac["nand"]))
 
-gpu_free   = gpu_hbm_capacity_bytes
+gpu_free   = max(0, gpu_hbm_capacity_bytes - _kv_gpu)
 host_free  = max(0, host_dram_capacity_bytes - _kv_host)
 cxl_free   = max(0, cxl_dev_dram_capacity_bytes - _kv_cxl)
 
@@ -322,7 +338,8 @@ for token_step in range(TOKENS):
                                     inflight_budget=max(0.0, _FLEXGEN_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, HOST_DRAM)
+        _kv_resident,
+        GPU_HBM if _kv_frac["gpu"] >= 0.5 else HOST_DRAM)
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0

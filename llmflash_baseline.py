@@ -61,11 +61,76 @@ _c = cxl_dev_dram_capacity_bytes
 # (Jensen), which handed this baseline ~2.8% of free throughput on exactly the
 # bytes every policy has to move. This is an arithmetic correction, not a
 # judgement about their design: their unified-pool POLICY is unchanged.
-_pool_bw  = ((_g + _h + _c) /
-             (_g / GPU_HBM.bw_Bps + _h / HOST_DRAM.bw_Bps + _c / CXL_DRAM.bw_Bps))
+# The pool's members fill FASTEST FIRST, because that is what any unified
+# allocator does and what every other policy here is modelled doing. The
+# previous capacity-weighted harmonic blend implicitly spread bytes in
+# proportion to capacity, so ENLARGING the slow member diluted the blend and
+# made more memory slower: measured 65.56 -> 58.55 -> 54.17 t/s across
+# 32/48/64 GB devices, a capacity-monotonicity violation the invariant
+# checker caught. Effective bandwidth is now derived from the bytes actually
+# resident, piecewise fastest-first, which is monotone in every capacity by
+# construction.
+_POOL_TIERS = [(_g, GPU_HBM.bw_Bps), (_h, HOST_DRAM.bw_Bps), (_c, CXL_DRAM.bw_Bps)]
 _pool_lat = (_g * GPU_HBM.chunk_latency_s + _h * HOST_DRAM.chunk_latency_s
              + _c * CXL_DRAM.chunk_latency_s) / (_g + _h + _c)
-DRAM_POOL = Tier("Unified Host+CXL DRAM pool", _pool_bw, _pool_lat)
+
+
+def _pool_eff_bw(nbytes):
+    """Serial time to read nbytes resident fastest-first, as a bandwidth."""
+    if nbytes <= 0:
+        return GPU_HBM.bw_Bps
+    left, t = float(nbytes), 0.0
+    for cap, bw in _POOL_TIERS:
+        take = min(left, float(cap))
+        t += take / bw
+        left -= take
+        if left <= 0:
+            break
+    if left > 0:                      # beyond pool capacity: slowest member
+        t += left / _POOL_TIERS[-1][1]
+    return nbytes / t
+
+
+class _FastFirstPool:
+    """Duck-typed Tier whose bandwidth depends on the working set actually
+    read. bw_Bps reflects the full resident set; transfer_time_s() consults
+    bw_Bps and chunk_latency_s only, so this slots in unchanged."""
+    name = "Unified DRAM pool (fastest-first)"
+    chunk_latency_s = _pool_lat
+
+    def __init__(self):
+        self.bw_Bps = _pool_eff_bw(_g + _h + _c)
+
+    def set_working_set(self, nbytes):
+        self.bw_Bps = _pool_eff_bw(nbytes)
+
+
+DRAM_POOL = _FastFirstPool()
+
+_WS_SPLIT = {}          # tier-name -> fraction of the resident set it holds
+
+
+def _set_ws_split(nbytes):
+    """Residency of the working set, fastest-first, as per-tier fractions.
+    A read of the resident set is spread in exactly these proportions, and the
+    shared engine then runs the tiers as the independent buses they are."""
+    global _WS_SPLIT
+    names = ["GPU HBM", "Host DRAM", "CXL Device DRAM"]
+    left = float(max(nbytes, 1.0))
+    out = {}
+    for (cap, _bw), nm in zip(_POOL_TIERS, names):
+        take = min(left, float(cap))
+        if take > 0:
+            out[nm] = take / nbytes
+        left -= take
+        if left <= 0:
+            break
+    _WS_SPLIT = out
+
+
+def pool_bytes(n):
+    """n bytes of pooled reads, as a per-tier byte dict for the engine."""
+    return {t: n * f for t, f in _WS_SPLIT.items()}
 
 # ── Paper constants (OPT/ReLU baseline, §3.1 and §4.1) ────────────────────────
 WINDOW_SIZE_K             = 5    # Sliding window token count
@@ -133,14 +198,25 @@ def simulate_llmflash():
     _kv_resident = int(sum(L.get("kv_cache_bytes", 0) for L in layers)
                        / NUM_PREFILL_TOKENS * BATCH_SIZE
                        * (NUM_PREFILL_TOKENS + NUM_DECODE_TOKENS / 2.0))
-    total_dram = max(0, host_dram_capacity_bytes + cxl_dev_dram_capacity_bytes
-                        - _kv_resident)
+    # The pool is host + CXL + accelerator HBM when one is attached: the A10
+    # adaptation note above already blends HBM into the pool BANDWIDTH, and a
+    # pool whose bandwidth includes a tier but whose capacity does not is not a
+    # pool. Invisible at 72B, where weights alone exceed the pool either way;
+    # at 7B it denied the strongest streaming baseline 28 GB it was being
+    # charged the speed of.
+    from sim_cfg import gpu_hbm_capacity_bytes as _gcap
+    total_dram = max(0, _gcap + host_dram_capacity_bytes
+                        + cxl_dev_dram_capacity_bytes - _kv_resident)
 
     # ── Partition layers ───────────────────────────────────────────────────────
     pinned_layers = [L for L in layers if L.get("kind") != "MLP"]
     ffn_layers    = [L for L in layers if L.get("kind") == "MLP"]
 
     total_pinned_bytes = sum(L["bytes"] for L in pinned_layers)
+    _ws = min(_gcap + host_dram_capacity_bytes + cxl_dev_dram_capacity_bytes,
+              sum(L["bytes"] for L in layers) + _kv_resident)
+    DRAM_POOL.set_working_set(_ws)
+    _set_ws_split(_ws)
     total_ffn_bytes    = sum(L["bytes"] for L in ffn_layers)
 
     # ── Activation function → turnover rate ───────────────────────────────────
@@ -272,20 +348,27 @@ def simulate_llmflash():
         # has any by construction.
         _units, _nl = [], max(1, len(ffn_layers))
         for _L in pinned_layers:
-            _units.append(({"pool": _L["bytes"] * pinned_dram_frac,
-                            "CXL Device NAND": _L["bytes"] * (1.0 - pinned_dram_frac)},
-                           compute_time_s(_L["flops"] * BATCH_SIZE)))
+            _by = pool_bytes(_L["bytes"] * pinned_dram_frac)
+            _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) \
+                + _L["bytes"] * (1.0 - pinned_dram_frac)
+            _units.append((_by, compute_time_s(_L["flops"] * BATCH_SIZE)))
         for _L in ffn_layers:
-            _units.append(({"pool": (ffn_dram_bytes + dram_rewrite_bytes) / _nl,
-                            "CXL Device NAND": ffn_nand_bytes / _nl},
+            _by = pool_bytes((ffn_dram_bytes + dram_rewrite_bytes) / _nl)
+            _units.append(({**_by,
+                            "CXL Device NAND": _by.get("CXL Device NAND", 0.0)
+                                               + ffn_nand_bytes / _nl},
                            compute_time_s(_L["flops"] * BATCH_SIZE * active_frac_batch)))
-        _units.append(({"pool": kv_read_bytes_total}, 0.0))
+        _units.append((pool_bytes(kv_read_bytes_total), 0.0))
         _window = max(0.0, total_dram - total_pinned_bytes * pinned_dram_frac
                       - ffn_dram_bytes - dram_rewrite_bytes)
         t = pipelined_time_s(_units, WINDOW_SIZE_K,
-                             {"pool": DRAM_POOL.bw_Bps,
+                             {"GPU HBM": GPU_HBM.bw_Bps,
+                              "Host DRAM": HOST_DRAM.bw_Bps,
+                              "CXL Device DRAM": CXL_DRAM.bw_Bps,
                               "CXL Device NAND": CXL_SSD_NAND.bw_Bps * BUNDLING_THROUGHPUT_BOOST},
-                             {"pool": DRAM_POOL.chunk_latency_s,
+                             {"GPU HBM": GPU_HBM.chunk_latency_s,
+                              "Host DRAM": HOST_DRAM.chunk_latency_s,
+                              "CXL Device DRAM": CXL_DRAM.chunk_latency_s,
                               "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s},
                              inflight_budget=_window) + step_kv
         t = max(t, compute_time_s(comp_attn + comp_ffn))

@@ -88,7 +88,14 @@ KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
 # against a null. If semantic ties sequential, the paper's headline mechanism is
 # not what produces the result and the framing has to change.
 import os as _os
-PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "semantic")
+# "size-desc" is the DEFAULT because it is what the measurements support: the
+# semantic order this system was originally named for loses to it in 11 of 12
+# configurations, by up to 18% (GPU INT8 16H+48C: 87.32 vs 80.84 t/s), and at
+# two accelerated INT8 cells the difference is a win against the strongest
+# baseline rather than a loss. Shipping the eponymous heuristic once its own
+# ablation refuted it would be sentiment, not engineering. "semantic" remains
+# selectable for the ablation in Sec V-D.
+PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "size-desc")
 
 # How much of the staging reserve Phase-1 warmup may consume, as a fraction.
 # The rest stays as the prefetcher's in-flight budget. They are the same bytes
@@ -831,23 +838,110 @@ def run_semantic_duplex_simulation():
         # The search covers both placement decisions together, because they are
         # not separable: where the cache sits changes which tier is the
         # bottleneck, which changes how much staging room is worth holding back.
-        _fr = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)
+        # Dense enough that the best absolute reserve at one capacity is still
+        # representable at a larger one. The coarse 6-point grid produced a
+        # capacity-monotonicity violation the checker caught: the 48 GB
+        # optimum (a specific absolute reserve) fell between grid points at
+        # 64 GB, and the larger device measured 4.8% slower.
+        # The top of the range matters as much as the density: leaving bytes
+        # on NAND deliberately, so they ride an otherwise idle bus concurrently
+        # instead of serialising on the device bus, can require reserving MORE
+        # than 40% of a large device. Capping at 0.40 made a 64 GB device 4.8%
+        # slower than a 48 GB one, because the 48 GB optimum was unrepresentable.
+        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
+               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
         _kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
+        def build_units(fr, kvi, kv_split, token_step, pinned=()):
+            """The per-step unit list, used by BOTH the plan evaluator and the
+            decode loop. These were two hand-maintained copies that drifted:
+            the evaluator predicted 411.6 s for a plan the decode loop then
+            realized at 441.1 s, so the search kept the wrong finalist. One
+            builder makes prediction equal realization by construction."""
+            us = []
+            for _i, _L in enumerate(layers):
+                _by = {}
+                for t_, f_ in fr[_i].items():
+                    # a layer Phase-1 staged into the device cache reads from
+                    # device DRAM rather than NAND for the whole session
+                    tt = (PL_CXL_DEV_DRAM
+                          if t_ == PL_CXL_DEV_NAND and _i in pinned else t_)
+                    _by[tt] = _by.get(tt, 0.0) + _L["bytes"] * f_
+                if kvi[_L["name"]] > 0:
+                    _kb = (PREFILL_TOKENS + token_step) * kvi[_L["name"]] * BATCH_SIZE
+                    for _t2, _f2 in kv_split.items():
+                        _lbl = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM,
+                                "cxl": PL_CXL_DEV_DRAM}[_t2]
+                        _by[_lbl] = _by.get(_lbl, 0.0) + _kb * _f2
+                us.append((_by, compute_time_s(_L["flops"] * BATCH_SIZE, cpu_cores)))
+            return us
+
+        # Two-stage search. The one-step estimate ranks the field cheaply but
+        # misorders near-tied plans -- measured as a 64 GB device landing 3.6%
+        # below a 48 GB one because the estimate preferred the wrong finalist.
+        # So the estimate now only SHORTLISTS: the top finalists are re-timed
+        # exactly, all TOKENS decode steps with the real growing KV, and the
+        # realized best is kept. Monotonicity in capacity follows, because a
+        # larger device's candidate set contains every smaller device's plan
+        # and exact evaluation cannot invert them.
+        # The scheduler may DECLINE capacity: the search also runs with the
+        # device clamped to each smaller standard size, so a larger device's
+        # candidate set contains every smaller device's winning plan verbatim.
+        # A fractional grid cannot guarantee that -- the 48 GB optimum sits at
+        # 52% of a 64 GB device, off any reasonable grid -- and without it a
+        # bigger device measured slower, which the invariant checker rejects.
+        _cands = []
+        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
+                           | {c * GiB for c in (32, 48)
+                              if c * GiB < cxl_dev_dram_capacity_bytes})
+        for _devcap in _dev_caps:
+            _caps0["cxl"] = _devcap
+            for _kvt in _kv_opts:
+                _kv_split, _caps = _kv_place(_kvt)
+                _dev_total, _host_total = _caps["cxl"], _caps["host"]
+                for _df in _fr:
+                    for _hf in _fr:
+                        _dr, _hr = _dev_total * _df, _host_total * _hf
+                        _t, _p = _plan(_dr, _hr)
+                        _cands.append((_t, _kvt, _dr, _hr, _p, _devcap))
+        # Shortlist PER (device-cap, KV-tier) group rather than globally: the
+        # one-step estimator systematically misranks NAND-heavy plans against
+        # all-resident ones, and a global top-N could exclude an entire group,
+        # which is how a clamped-capacity plan beat the full-capacity group on
+        # CPU FP16 while its true optimum never got exact-evaluated.
+        _cands.sort(key=lambda x: x[0])
+        _bygroup = {}
+        for _cd in _cands:
+            _bygroup.setdefault((_cd[5], _cd[1]), []).append(_cd)
+        _cands = [c for g in _bygroup.values() for c in g[:6]]
+        _cands.sort(key=lambda x: x[0])
+
+        def _exact(kvt, dr, hr, plan):
+            """Realized decode time for a finalist: every step, growing KV."""
+            kv_split, caps = _kv_place(kvt)
+            pl, lt, kvi, sp, fr = plan
+            tot = 0.0
+            for _tk in range(TOKENS):
+                us = build_units(fr, kvi, kv_split, _tk)
+                lat = pipelined_time_s(us, PREFETCH_QUEUE_DEPTH, TIER_BW,
+                                       TIER_LAT, inflight_budget=dr + hr)
+                lat += kv_growth_spill_time_s(
+                    _kv_per_tok * (PREFILL_TOKENS + _tk + 1), _kv_mean,
+                    _kv_tiers[max(kv_split, key=kv_split.get)])
+                tot += lat
+            return tot
+
         _best_t, _best, _prefetch_reserve = None, None, 0.0
         _best_kv = KV_TIER
-        for _kvt in _kv_opts:
-            _kv_split, _caps = _kv_place(_kvt)
-            _dev_total, _host_total = _caps["cxl"], _caps["host"]
-            for _df in _fr:
-                for _hf in _fr:
-                    _dr, _hr = _dev_total * _df, _host_total * _hf
-                    _t, _p = _plan(_dr, _hr)
-                    if _best_t is None or _t < _best_t:
-                        _best_t, _best, _best_kv = _t, _p, _kvt
-                        _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
+        for _t0, _kvt, _dr, _hr, _p, _devcap in _cands:
+            _caps0["cxl"] = _devcap          # _kv_place inside _exact reads it
+            _tr = _exact(_kvt, _dr, _hr, _p)
+            if _best_t is None or _tr < _best_t:
+                _best_t, _best, _best_kv = _tr, _p, _kvt
+                _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
+                _best_devcap = _devcap
+        _caps0["cxl"] = _best_devcap
         # Re-establish the winning cache placement: _kv_split and _caps are read
-        # by _kv_time and by the decode loop, and the loop above left them on
-        # whichever option it tried last.
+        # by _kv_time and by the decode loop.
         _kv_split, _caps = _kv_place(_best_kv)
         _dev_total, _host_total = _caps["cxl"], _caps["host"]
         place, ltypes, inc, sparsity, frac = _best
@@ -887,8 +981,19 @@ def run_semantic_duplex_simulation():
         # is no longer in flight, so it must come off the in-flight budget --
         # counting it in both places is the double-book this file has been
         # bitten by twice.
+        # Staging room is EXACTLY what STAGE_RESERVE_FRAC grants, zero by
+        # default. The previous form added (dev_for_weights - placed_in_dev),
+        # intended as "whatever placement left over" -- but placed_in_dev sums
+        # whole layers by their majority label while placement fills
+        # fractionally, and the mismatch manufactured 0.56 GB of phantom room.
+        # Phase 1 then staged into it and decode deducted those bytes from the
+        # prefetch budget (1.98 -> 1.42 GB), so the realized step was 7% slower
+        # than the plan the search had validated: the one mechanism the
+        # evaluator does not model was silently re-enabling itself. Staging
+        # loses the reserve split in all twelve configurations (Sec V-D), so
+        # the shipped default stages nothing.
         _stage_room = _prefetch_reserve * STAGE_RESERVE_FRAC
-        _cache_cap = max(0, _dev_for_weights + _stage_room - _placed_in_dev)
+        _cache_cap = _stage_room
         cache   = AttentionGuidedCache(_cache_cap)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
@@ -914,7 +1019,9 @@ def run_semantic_duplex_simulation():
 
         for token_step in range(TOKENS):
             lat               = 0.0
-            units             = []      # (bytes_by_tier, compute_s) per sub-layer
+            # One builder for evaluator and decode; see build_units.
+            units             = build_units(frac, inc, _kv_split, token_step,
+                                            cache.session_pinned)
             step_stall_s      = 0.0
             step_time_s       = 0.0
             nand_link_free_at = 0.0
@@ -1013,25 +1120,6 @@ def run_semantic_duplex_simulation():
                     mem += kv_read_time
 
                 ltime = max(comp, mem)
-
-                # Record this sub-layer for the pipeline engine: the bytes it
-                # reads, per tier, and its compute. Weights follow `frac`; a
-                # layer staged into the device cache reads from device DRAM
-                # rather than NAND. The growing KV read is added at whichever
-                # tier holds the cache.
-                _by = {}
-                for _t, _f in frac[idx].items():
-                    _tt = (PL_CXL_DEV_DRAM
-                           if _t == PL_CXL_DEV_NAND and idx in cache.session_pinned
-                           else _t)
-                    _by[_tt] = _by.get(_tt, 0.0) + sz * _f
-                if has_kv:
-                    _kvt = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM,
-                            "cxl": PL_CXL_DEV_DRAM}
-                    for _t, _f in _kv_split.items():
-                        _lbl = _kvt[_t]
-                        _by[_lbl] = _by.get(_lbl, 0.0) + kv_read_bytes * _f
-                units.append((_by, comp))
 
                 tmon.record_read(sz)
 
