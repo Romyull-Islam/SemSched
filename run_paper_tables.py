@@ -113,6 +113,77 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
                 float(p.group(1)) if p else None, out)
 
 
+# ── ShareGPT replay ──────────────────────────────────────────────────────────
+# Real prompt/response lengths rather than a fixed 512/16, which is the one thing
+# a reviewer can check against a workload they know. The distribution is the only
+# thing taken from the corpus: per-layer compute, transfer and KV costs still come
+# from the model geometry, so this strengthens an input without changing how
+# timing is computed.
+def _patch_lengths(td, prefill, decode):
+    for f, pat, rep in (
+            ("semduplex_scheduler.py", r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("flexgen_baseline.py",    r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("lia_baseline.py",        r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("cxlaimpod_baseline.py",  r"^PREFILL_TOKENS = \d+",      f"PREFILL_TOKENS = {prefill}"),
+            ("llmflash_baseline.py",   r"^NUM_PREFILL_TOKENS = \d+",  f"NUM_PREFILL_TOKENS = {prefill}"),
+            ("llmflash_baseline.py",   r"^NUM_DECODE_TOKENS(\s*)= \d+", f"NUM_DECODE_TOKENS\\1= {decode}")):
+        q = os.path.join(td, f)
+        t = open(q).read()
+        open(q, "w").write(re.sub(pat, rep, t, 1, re.M))
+    q = os.path.join(td, "sim_cfg.py")
+    t = open(q).read()
+    open(q, "w").write(re.sub(r"^TOKENS\s*=\s*\d+", f"TOKENS = {decode}", t, 1, re.M))
+
+
+def run_trace(sim, quant, h, c, gpu, prefill, decode):
+    with tempfile.TemporaryDirectory() as td:
+        for f in DEPS + [s for _, s in SIMS]:
+            shutil.copy(os.path.join(REPO, f), td)
+        patch(td, quant, h, c, gpu)
+        _patch_lengths(td, prefill, decode)
+        r = subprocess.run([sys.executable, sim], cwd=td, capture_output=True,
+                           text=True, timeout=900)
+        m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
+        return float(m.group(1)) if m else None
+
+
+def sharegpt(gpu, quant="fp16", c=64, n=50, seed=20260815):
+    import json, random, statistics as st
+    pairs = json.load(open(os.path.join(REPO, "trace_workload/sharegpt_lens.json")))
+    pairs = [(int(a), int(b)) for a, b in pairs if a > 0 and b > 0]
+    random.Random(seed).shuffle(pairs)
+    pairs = pairs[:n]
+    tag = f"+RTX 5090" if gpu else "CPU-only"
+    print(f"\n{'=' * 78}\nShareGPT replay, {n} prompts, {quant.upper()} 16H+{c}C, "
+          f"{tag}, B={BATCH}\n{'=' * 78}")
+    pl = sorted(p for p, _ in pairs)
+    print(f"prefill: median {st.median(pl):.0f}  P90 {pl[int(.9*len(pl))]}  max {max(pl)}")
+    ratios, wins = [], 0
+    with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 8) as ex:
+        fut = {ex.submit(run_trace, sim, quant, 16, c, gpu, p, d): (i, name)
+               for i, (p, d) in enumerate(pairs) for name, sim in SIMS}
+        got = {}
+        for f in cf.as_completed(fut):
+            got[fut[f]] = f.result()
+    for i, (p, d) in enumerate(pairs):
+        v = {n_: got.get((i, n_)) for n_, _ in SIMS}
+        if v.get("SemSched") is None:
+            continue
+        base = max((x for k, x in v.items() if k != "SemSched" and x), default=None)
+        if not base:
+            continue
+        ratios.append(v["SemSched"] / base)
+        wins += v["SemSched"] > base
+    ratios.sort()
+    q = lambda f: ratios[min(len(ratios) - 1, int(f * len(ratios)))]
+    print(f"\n  prompts scored     {len(ratios)}")
+    print(f"  win rate           {wins}/{len(ratios)} ({100*wins/len(ratios):.0f}%)")
+    print(f"  median speedup     {st.median(ratios):.2f}x")
+    print(f"  P10 / P90          {q(.10):.2f}x / {q(.90):.2f}x")
+    print(f"  min / max          {ratios[0]:.2f}x / {ratios[-1]:.2f}x")
+    return ratios
+
+
 def _metrics(out):
     """Everything the simulators report, plus the derived wall-clock terms."""
     def g(pat, default=None):
@@ -299,10 +370,18 @@ def main():
                     help="report prefill throughput instead of decode")
     ap.add_argument("--kv-tier", action="store_true",
                     help="sweep which tier holds the KV cache")
+    ap.add_argument("--sharegpt", action="store_true",
+                    help="replay real ShareGPT prompt/response lengths")
     ap.add_argument("--detail", action="store_true",
                     help="per-policy warmup / prefill / decode / wall-clock table")
     a = ap.parse_args()
 
+    if a.sharegpt:
+        if not a.gpu_only:
+            sharegpt(0)
+        if not a.cpu_only:
+            sharegpt(GPU_GB)
+        return
     if a.detail:
         if not a.gpu_only:
             detail(0)
