@@ -90,6 +90,13 @@ KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
 import os as _os
 PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "semantic")
 
+# How much of the staging reserve Phase-1 warmup may consume, as a fraction.
+# The rest stays as the prefetcher's in-flight budget. They are the same bytes
+# used two ways -- pinned for the session, or cycled to overlap NAND reads
+# against the other tiers -- so the split is a real scheduling choice and is
+# measured rather than assumed. See the sweep in the commit message.
+STAGE_RESERVE_FRAC = float(_os.environ.get("SEMSCHED_STAGE_FRAC", "0.0"))
+
 # Bandwidth and per-chunk latency of each placement tier, keyed by the label
 # `frac` uses. The pipeline engine needs these to run tiers concurrently.
 TIER_BW  = {PL_GPU_HBM:      GPU_HBM.bw_Bps,
@@ -863,7 +870,25 @@ def run_semantic_duplex_simulation():
         # use what is left of the WEIGHT budget.
         _placed_in_dev = sum(L["bytes"] for i, L in enumerate(layers)
                              if place[i] == PL_CXL_DEV_DRAM)
-        _cache_cap = max(0, _dev_for_weights - _placed_in_dev)
+        # Phase-1 staging draws on the SAME reserve the prefetcher stages into.
+        # Until now it could only use what placement left over, which is ~0 by
+        # construction, so it staged 0.00 GB in every configuration while the
+        # reserve sat beside it unused -- a named contribution starved by an
+        # accounting boundary rather than by physics.
+        #
+        # The two uses genuinely compete, and for the bytes that fit, staging
+        # wins outright: a NAND-resident sub-layer of size S staged once costs
+        # S/5 + 16*S/27 = 0.79*S across the generation, against 16*S/5 = 3.2*S
+        # to fetch it every step. Four times cheaper -- but only for what fits,
+        # whereas prefetch overlap applies to everything.
+        #
+        # So staging takes the reserve first and the prefetcher gets what
+        # survives. Whatever Phase 1 pins is resident for the whole session and
+        # is no longer in flight, so it must come off the in-flight budget --
+        # counting it in both places is the double-book this file has been
+        # bitten by twice.
+        _stage_room = _prefetch_reserve * STAGE_RESERVE_FRAC
+        _cache_cap = max(0, _dev_for_weights + _stage_room - _placed_in_dev)
         cache   = AttentionGuidedCache(_cache_cap)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
@@ -1096,7 +1121,9 @@ def run_semantic_duplex_simulation():
             # sub-layers before it is needed. `lat` up to here was the serial
             # sum, which is the same number for any policy moving the same bytes.
             lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
-                                   TIER_LAT, inflight_budget=_prefetch_reserve)
+                                   TIER_LAT,
+                                   inflight_budget=max(0.0, _prefetch_reserve
+                                                       - pf_stats["bytes_prefetched"]))
             lat += kv_growth_spill_time_s(
                 _kv_per_tok * (PREFILL_TOKENS + token_step + 1),
                 _kv_mean, _kv_tiers[max(_kv_split, key=_kv_split.get)])
