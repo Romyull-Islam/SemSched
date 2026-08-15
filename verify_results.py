@@ -156,6 +156,55 @@ def check_capacity_monotonicity(gpu):
                            "-- check its placement has no spill", warn=True)
 
 
+# ── 7. model scale ───────────────────────────────────────────────────────────
+MODELS = ["Mistral7BCfg", "Llama13BCfg", "Qwen3_20BCfg",
+          "Qwen2_5_72BCfg", "Llama3_1_405BCfg"]
+
+
+def _step_bytes(cfg_name, quant):
+    """Bytes a decode step must move for this model at this quant: weights once,
+    plus the KV cache read at the generation midpoint. This, not parameter
+    count, is the quantity throughput is monotone in -- Llama 13B (full MHA,
+    54 GB of KV read per step) legitimately decodes SLOWER than Qwen3 20B
+    (GQA, 11 GB), and the first draft of this check flagged all ten policies
+    for that architectural fact."""
+    import model_cfg as M
+    bpp = {"fp16": 2, "int8": 1}[quant]
+    cfg = getattr(M, cfg_name)
+    layers = M.build_layers(cfg, sequence_length=512)
+    weights = sum(L["bytes"] for L in layers) * bpp / 4.0   # build is fp32 bytes
+    kv = sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128) * bpp
+             for L in layers if L.get("kv_cache_bytes", 0) > 0) * 128 * 520
+    return weights + kv
+
+
+def check_model_scale(gpu):
+    """Determinism per model, and throughput monotone DECREASING in per-step
+    bytes across models. The first run of the model sweep produced 12x and
+    4.2x readings that this file, pinned to 72B, could not see; this check
+    exists so the next such defect fails a run instead of reaching a table."""
+    print("\n7. MODEL SCALE — throughput decreasing in per-step bytes; deterministic")
+    for quant in ("fp16", "int8"):
+        order = sorted(MODELS, key=lambda c: _step_bytes(c, quant))
+        for name, sim in R.SIMS:
+            vals = []
+            for cfg in order:
+                a = R.run(sim, quant, 16, 48, gpu, model=cfg)[0]
+                b = R.run(sim, quant, 16, 48, gpu, model=cfg)[0]
+                if a != b:
+                    report("model-det", False,
+                           f"{name:<9} {quant} {cfg}: {a} vs {b}")
+                vals.append(a)
+            bad = [(order[i], vals[i], order[i+1], vals[i+1])
+                   for i in range(len(vals) - 1)
+                   if vals[i+1] is not None and vals[i] is not None
+                   and vals[i+1] > vals[i] * 1.001]
+            report("model-mono", not bad,
+                   f"{name:<9} {quant}: " + " -> ".join(
+                       f"{v:.2f}" if v else "--" for v in vals)
+                   + ("" if not bad else "  MORE BYTES, FASTER: " + str(bad)))
+
+
 # ── 5. batch monotonicity ────────────────────────────────────────────────────
 def check_batch_monotonicity(gpu):
     """Throughput usually rises with batch, because weight bytes are constant in
@@ -190,6 +239,8 @@ def main():
     ap.add_argument("--quick", action="store_true",
                     help="skip the batch sweep (check 5)")
     a = ap.parse_args()
+    if a.quick:
+        check_model_scale(R.GPU_GB)
     for gpu, tag in ((0, "CPU-only"), (R.GPU_GB, f"+RTX 5090 ({R.GPU_GB} GB)")):
         print("\n" + "=" * 78 + f"\n{tag}\n" + "=" * 78)
         check_determinism(gpu)
@@ -197,6 +248,7 @@ def main():
         check_capacity_monotonicity(gpu)
         if not a.quick:
             check_batch_monotonicity(gpu)
+            check_model_scale(gpu)
     print("\n" + "=" * 78)
     print(f"{len(OK)} passed, {len(WARN)} warnings, {len(FAIL)} FAILED")
     for f in FAIL:

@@ -56,9 +56,25 @@ def measure():
                 shutil.copy(os.path.join(R.REPO, f), td)
             p = os.path.join(td, "semduplex_scheduler.py")
             s = open(p).read()
-            s = s.replace("_fr = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)", f"_fr = ({frac},)", 1)
-            s = s.replace('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
-                          '_kv_opts = ["cxl"]', 1)
+            # Pin the search to ONE plan: the swept reserve fraction, KV on the
+            # device, full device capacity (no declining). Each replace asserts,
+            # because a silent no-op here produced a perfectly flat curve when
+            # the search was rewritten under this script -- every point was the
+            # default search re-run, identical by construction.
+            reps = [
+                ("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
+               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""",
+                 f"        _fr = ({frac},)"),
+                ('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
+                 '_kv_opts = ["cxl"]'),
+                ("""        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
+                           | {c * GiB for c in (32, 48)
+                              if c * GiB < cxl_dev_dram_capacity_bytes})""",
+                 "        _dev_caps = [cxl_dev_dram_capacity_bytes]"),
+            ]
+            for a, b in reps:
+                assert a in s, f"patch anchor drifted: {a[:60]!r}"
+                s = s.replace(a, b, 1)
             open(p, "w").write(s)
             R.patch(td, quant, 16, c, gpu)
             r = subprocess.run([sys.executable, "semduplex_scheduler.py"], cwd=td,
@@ -71,6 +87,8 @@ def measure():
         tps = [one(f, quant, c, gpu) for f in FRACS]
         base = max(R.run(s, quant, 16, c, gpu)[0]
                    for n, s in R.SIMS if n != "SemSched")
+        if max(tps) - min(tps) < 1e-9:
+            raise SystemExit(f"flat curve for {label}: the pin no-oped")
         out[label] = {"frac": FRACS, "tps": tps, "base": base}
         print(f"  {label:<22}{tps[0]:7.2f} -> {max(tps):7.2f} t/s   base {base:6.2f}")
     json.dump(out, open(DATA, "w"), indent=1)
