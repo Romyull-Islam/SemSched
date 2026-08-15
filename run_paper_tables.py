@@ -58,7 +58,8 @@ QUANTS = ["fp16", "int8"]
 BATCH, DECODE = 128, 16
 
 
-def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl"):
+def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
+          model="Qwen2_5_72BCfg"):
     p = os.path.join(td, "sim_cfg.py")
     s = open(p).read()
     s = re.sub(r"^TOKENS\s*=\s*\d+", f"TOKENS = {DECODE}", s, 1, re.M)
@@ -82,7 +83,7 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl"):
     s = open(p).read()
     s = re.sub(r'^QUANT\s*=\s*"\w+"', f'QUANT = "{quant}"', s, 1, re.M)
     s = re.sub(r"^DEFAULT_MODEL_CFG\s*=\s*\w+",
-               "DEFAULT_MODEL_CFG = Qwen2_5_72BCfg", s, 1, re.M)
+               f"DEFAULT_MODEL_CFG = {model}", s, 1, re.M)
     open(p, "w").write(s)
 
     if not warmup or kv_tier != "cxl":
@@ -96,12 +97,12 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl"):
 
 
 def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
-        kv_tier="cxl"):
+        kv_tier="cxl", model="Qwen2_5_72BCfg"):
     """One simulator, one cell. Returns (decode_tps, prefill_tps, stdout)."""
     with tempfile.TemporaryDirectory() as td:
         for f in DEPS + [s for _, s in SIMS]:
             shutil.copy(os.path.join(REPO, f), td)
-        patch(td, quant, h, c, gpu, warmup, batch, kv_tier)
+        patch(td, quant, h, c, gpu, warmup, batch, kv_tier, model)
         r = subprocess.run([sys.executable, sim], cwd=td,
                            capture_output=True, text=True, timeout=900)
         out = r.stdout + r.stderr
@@ -280,6 +281,45 @@ def warmup_ablation(gpu=0):
                       f"{on / base:>9.2f}x{off / base:>10.2f}x")
 
 
+MODELS = [
+    ("Mistral7BCfg",     "Mistral 7B"),
+    ("Llama13BCfg",      "Llama 13B"),
+    ("Qwen3_20BCfg",     "Qwen3 20B"),
+    ("Qwen2_5_72BCfg",   "Qwen2.5 72B"),
+    ("Llama3_1_405BCfg", "Llama 405B"),
+]
+
+
+def model_sweep(gpu):
+    """Model scale, 7B to 405B, at the documented 16H+48C module.
+
+    The paper claims the achievable gain is bounded by the non-dominant share
+    of a step: parity where the model fits entirely in fast memory (nothing to
+    schedule), widest where a second tier is a large share, and narrowing again
+    when NAND dominates everything. A 58x model-size range tests that rule at
+    both ends rather than asserting it from the middle.
+    """
+    tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
+    names = [n for n, _ in SIMS]
+    for quant in QUANTS:
+        print(f"\n{'=' * 78}\nModel scale, {quant.upper()} 16H+48C, {tag}, "
+              f"B={BATCH}\n{'=' * 78}")
+        print(f"{'Model':<13}" + "".join(f"{n:>10}" for n in names) + f"{'ratio':>9}")
+        print("-" * 78)
+        for cfg, label in MODELS:
+            with cf.ThreadPoolExecutor(max_workers=len(SIMS)) as ex:
+                fut = {ex.submit(run, sim, quant, 16, 48, gpu, model=cfg): n
+                       for n, sim in SIMS}
+                tps = {}
+                for f in cf.as_completed(fut):
+                    tps[fut[f]] = f.result()[0]
+            ours = tps.get("SemSched")
+            base = max((v for k, v in tps.items() if k != "SemSched" and v), default=None)
+            print(f"{label:<13}" + "".join(
+                f"{tps[n]:>10.2f}" if tps.get(n) else f"{'--':>10}" for n in names)
+                + (f"{ours/base:>8.2f}x" if ours and base else f"{'--':>9}"))
+
+
 def kv_tier_sweep(gpu):
     """Where should the KV cache live?
 
@@ -370,12 +410,20 @@ def main():
                     help="report prefill throughput instead of decode")
     ap.add_argument("--kv-tier", action="store_true",
                     help="sweep which tier holds the KV cache")
+    ap.add_argument("--models", action="store_true",
+                    help="sweep model scale, 7B to 405B, at 16H+48C")
     ap.add_argument("--sharegpt", action="store_true",
                     help="replay real ShareGPT prompt/response lengths")
     ap.add_argument("--detail", action="store_true",
                     help="per-policy warmup / prefill / decode / wall-clock table")
     a = ap.parse_args()
 
+    if a.models:
+        if not a.gpu_only:
+            model_sweep(0)
+        if not a.cpu_only:
+            model_sweep(GPU_GB)
+        return
     if a.sharegpt:
         if not a.gpu_only:
             sharegpt(0)
