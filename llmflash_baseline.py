@@ -84,7 +84,22 @@ WINDOW_SIZE_K             = 5    # Sliding window token count
 # simulator here has any equivalent term. Every policy now reads the NAND
 # backend at the one documented, physically attainable rate.
 BUNDLING_THROUGHPUT_BOOST = 1.0
-DRAM_REWRITE_FRAC         = 0.25 # Neuron swap rewrite overhead (§3.3)
+# CORRECTED 2026-08-14: was 0.25, charged at the application site below as 25% extra
+# traffic on the dominant tier EVERY decode step, cited as "(§3.3)" as though §3.3
+# specified it. It does not. §3.3 introduces the 25% as the problem the paper then
+# removes, and says so in the same breath:
+#     "This is particularly costly when a substantial portion (approximately 25%) of
+#      the FFNs in DRAM needs to be rewritten. To address this issue, we adopt an
+#      alternative memory management strategy ... preallocation of all necessary memory"
+# So the 25% is the strawman LLM-in-a-Flash exists to eliminate, and we were billing it
+# to them as if it were their design -- against the policy that is the binding competitor
+# in every cell of the paper. Preallocation means the rewrite does not happen, so the
+# faithful value is 0.
+#
+# This is a pure fidelity correction and it moves the numbers AGAINST the proposal:
+# LLMFlash gains roughly +15% at GPU INT8 16H+64C (44.88 -> 51.76 t/s per the audit).
+# It flips no published ratio on its own, but it strengthens the competitor everywhere.
+DRAM_REWRITE_FRAC         = 0.0  # preallocated (§3.3) -- see note above
 
 # ── Activation-function-aware DRAM window turnover ────────────────────────────
 # ReLU/FATReLU (paper §4.1): delta ≈ 2.4% of FFN = 24% of 10% active set

@@ -26,8 +26,10 @@ from tiers import (HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
 from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
 from sim_cfg import (TOKENS, BATCH_SIZE, cpu_freq_hz, cpu_cores,
                      flops_per_cycle_per_core, parallel_efficiency,
-                     host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes)
+                     host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes,
+                     gpu_hbm_capacity_bytes)
 
+PL_GPU_HBM = "GPU HBM"
 PL_HOST_DRAM = "Host DRAM"
 PL_CXL_DEV_DRAM = "CXL Device DRAM"
 PL_CXL_DEV_NAND = "CXL Device NAND"
@@ -73,10 +75,31 @@ _n_attn = sum(1 for L in layers if L.get("kv_cache_bytes", 0) > 0)
 _kv_resident = int(kv_inc_per_tok * _n_attn * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
 
+# ── GPU HBM restored to the cascade (2026-08-14) ─────────────────────────────
+# CXLAimPod was the ONLY policy denied accelerator memory while still being charged the
+# accelerator's compute engine. The file imported GPU_HBM (as _GPU, for its bandwidth)
+# and never placed a byte into it; its tier dicts had no "GPU HBM" key; it never read
+# gpu_hbm_capacity_bytes. Meanwhile run_paper_tables.py grants the +RTX 5090 platform
+# 28 GiB of HBM and swaps in that platform's compute engine for every policy including
+# this one, and the other four policies all place into HBM.
+#
+# The justification on record (sim_cfg.py:39-43, SemSched.tex:272) is that "both CMM-H
+# papers are likewise CPU-only". That does not cover this policy: CXL-AimPod
+# (arXiv 2508.15980) is not a CMM-H paper, and LIA -- also CPU-side CXL tiering -- is
+# given HBM. Taking the accelerator's FLOPs while withholding its memory is not a
+# faithful reading of any of the three; it is a handicap applied to one baseline.
+#
+# On the CPU-only platform gpu_hbm_capacity_bytes is 0, so this branch is inert and those
+# tables are unchanged. It changes the +RTX 5090 column, which the audit measured as
+# wrong by up to 2.9x (INT8 16H+32C 14.19 -> 40.62 t/s).
+gpu_free  = gpu_hbm_capacity_bytes
 host_free = host_dram_capacity_bytes
 cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_resident)
 for i, L in enumerate(layers):
-    if L["bytes"] <= host_free:
+    if L["bytes"] <= gpu_free:
+        placement[i] = PL_GPU_HBM
+        gpu_free -= L["bytes"]
+    elif L["bytes"] <= host_free:
         placement[i] = PL_HOST_DRAM
         host_free -= L["bytes"]
     elif L["bytes"] <= cxl_free:
@@ -160,14 +183,18 @@ def run_phase(is_prefill, token_step=0):
     # CXLAimPod prefetches PREFETCH_WINDOW layers ahead over the CXL link, and
     # pools the device memory it fills -- so its window is bounded by whatever
     # placement left free, which its greedy fill makes small.
+    # GPU HBM added to both maps 2026-08-14 alongside the placement fix above; without
+    # the key a layer placed in HBM would fall through to whatever the caller defaults to.
     elapsed = pipelined_time_s(
         units, PREFETCH_WINDOW,
-        {"Host DRAM": HOST_DRAM.bw_Bps, "CXL Device DRAM": CXL_DRAM.bw_Bps,
+        {"GPU HBM": _GPU.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
+         "CXL Device DRAM": CXL_DRAM.bw_Bps,
          "CXL Device NAND": CXL_SSD_NAND.bw_Bps},
-        {"Host DRAM": HOST_DRAM.chunk_latency_s,
+        {"GPU HBM": _GPU.chunk_latency_s,
+         "Host DRAM": HOST_DRAM.chunk_latency_s,
          "CXL Device DRAM": CXL_DRAM.chunk_latency_s,
          "CXL Device NAND": CXL_SSD_NAND.chunk_latency_s},
-        inflight_budget=max(0.0, cxl_free + host_free))
+        inflight_budget=max(0.0, gpu_free + cxl_free + host_free))
     return elapsed, read_stall, kv_write
 
 
