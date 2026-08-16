@@ -2,111 +2,118 @@
 
 **SemSched: Trading Memory Capacity for Prefetch Bandwidth in LLM Inference on Hybrid CXL Devices**
 
-This repository contains the simulator, baselines, experiment driver, and
-plotting code that produce the figures and tables in the SemSched paper.
+This repository contains the simulator, the four baselines, the experiment
+harness, and the plotting code that produce every number and figure in the
+SemSched paper. One harness produces all of them; nothing is read from a
+saved result unless a command below says so.
 
-SemSched targets **CMM-H** style hybrid CXL devices that pair on-card DRAM
-with NAND flash on a single PCIe card. It splits each Transformer decoder
-block into attention and MLP sub-layers and routes them across Host DRAM,
-CXL device DRAM, and CXL NAND according to sparsity and latency
-sensitivity. A two-queue full-duplex link hides KV-cache writes inside the
-read stream during decode.
+SemSched targets **CMM-H**-style hybrid CXL devices that pair an on-card DRAM
+cache with NAND flash behind a single host link. Fast memory on such a device
+has two uses: holding weights, and staging prefetched bytes before they are
+needed. Every published policy spends all of it on the first. SemSched
+searches the split per configuration — how much host and device DRAM to hold
+back as prefetch staging, jointly with the tier that holds the KV cache and
+with the device capacity itself, which the search may decline so that bytes
+deliberately left on NAND ride an otherwise idle bus. Finalist plans are
+timed exactly on the same engine that runs decode, so the plan validated is
+the plan realized.
+
+## Version
+
+This is **v2.0**, the artifact of the IEEE BigData 2026 submission. It
+contains only the components the revised paper stands on. Mechanisms the
+paper measures and retires — semantic sub-layer placement (0.995x against
+ordering by size), prefill staging, duplex write scheduling as a throughput
+mechanism — ship as the measured nulls inside the harness, not as systems.
+The full pre-revision history, including the retired components, remains in
+the git history of the development repository. In that repository, files not
+listed in the layout below are pre-revision history; the v2.0 artifact
+package contains exactly the layout below and nothing else.
 
 ## Repository layout
 
 ```
 .
-├── semduplex_scheduler.py            # SemSched simulator (the proposed system)
-├── flexgen_baseline.py               # FlexGen-style demand-paging baseline
-├── lia_baseline.py                   # LIA CXL-tiering baseline
-├── llmflash_baseline.py              # LLM-in-a-Flash sparsity-streaming baseline
-├── sim_cfg.py                        # Hardware parameters (bandwidths, latencies, capacities)
-├── model_cfg.py                      # Model definitions (Mistral 7B, Llama 13B, Qwen3 20B, Qwen2.5 72B)
-├── tiers.py                          # Memory-tier abstractions and transfer-time helpers
-├── cxl_link.py                       # Two-queue CXL link model used by SemSched
+├── semduplex_scheduler.py       # SemSched: two-stage placement search + decode engine
+├── flexgen_baseline.py          # FlexGen: linear program over per-tier percentages
+├── lia_baseline.py              # LIA: parameters in device DRAM, host reserved for KV
+├── cxlaimpod_baseline.py        # CXLAimPod: pools device memory in capacity order
+├── llmflash_baseline.py         # LLM-in-a-Flash: sliding window of active neurons
 │
-├── run_experiments.py                # Top-level driver: sweeps simulators × models × quant × mem × batch
-├── final_results_with_coldload.csv   # Canonical result set used by paper figures
+├── sim_cfg.py                   # Hardware parameters (bandwidths, latencies, capacities)
+├── model_cfg.py                 # Model definitions, 7B to 405B, FP16 and INT8
+├── tiers.py                     # Memory tiers and transfer-time helpers
+├── cxl_link.py                  # Two-queue CXL link model
+├── pipeline.py                  # Shared overlap/timing engine used by all five simulators
 │
-├── plot_paper_figures.py             # Generates the main paper figures from the CSV
-├── cache_ablation_study.py           # Generates Fig. 1(b) caching-policy comparison
-├── plot_timeline.py                  # Generates the per-token bus timeline figure
+├── run_paper_tables.py          # The harness: every table and sweep in the paper
+├── verify_results.py            # 122 invariant checks over the full result grid
 │
-├── trace_workload/                   # Real-trace driver (ShareGPT) and per-mechanism ablation
-│   ├── trace_runner.py               #   shared runner: patches sim parameters in a tempdir
-│   ├── download_sharegpt.py          #   extracts (prefill, decode) pairs from ShareGPT V3
-│   ├── ablation.py                   #   per-mechanism ablation (warmup, placement, link, eviction)
-│   ├── matrix_explore.py             #   (mem × quant × batch × prefill) sweep
-│   ├── plot_sharegpt.py              #   Fig. 9: ShareGPT speedup CDF and scatter
-│   └── plot_matrix.py                #   heatmap + win-rate over the sweep
+├── plot_reserve_curve.py        # Motivation figure: the reserve trade, measured
+├── plot_evaluation.py           # Evaluation panels: capacity, write stall, ShareGPT
+├── plot_sweeps.py               # Batch-size and model-scale figures
+├── evaluation_data.json         # Measured data behind the evaluation panels
+├── reserve_curve.json           # Measured data behind the motivation figure
+├── sweep_figs.json              # Measured data behind the sweep figures
 │
-└── figures/                          # Generated PDFs (overwritten by the plotting scripts)
+├── test_cxl_link.py             # Unit tests for the link model (23 checks)
+├── test_bandwidth_conservation.py  # Bandwidth accounting tests (pytest)
+│
+├── trace_workload/
+│   ├── sharegpt_lens.json       # (prefill, decode) length pairs from ShareGPT V3
+│   └── download_sharegpt.py     # regenerates the pairs from the public dataset
+│
+├── SemSched.tex, fig_*.tex, Ref/, figures/   # the paper and its figure sources
+├── REPRODUCE.md                 # command-to-number map for every reported cell
+└── RESULTS.md                   # the measured result set, with the commands that made it
 ```
 
 ## Requirements
 
-- Python 3.10+
-- `pip install numpy pandas matplotlib seaborn tiktoken datasets`
+- Python 3.10+. The simulators use only the standard library.
+- `matplotlib` for the plotting scripts.
+- Optional: `pytest` for `test_bandwidth_conservation.py`;
+  `datasets` and `tiktoken` only to re-download ShareGPT.
 
-A virtual environment is recommended; the included `.gitignore` excludes
-`CXL_venv/`, `.venv/`, `venv/`, and `gem5-py310/`.
+## Regenerating every number
 
-## Reproducing the paper results
-
-### 1. Main result CSV
-
-```bash
-python run_experiments.py
-```
-
-This sweeps all four simulators across the model, quantization, memory,
-and batch grids described in Table II of the paper. It writes
-`final_results_with_coldload.csv`, which is the canonical input for every
-main-paper figure.
-
-### 2. Paper figures
+Each cell runs in a private temporary tree with the configuration rewritten
+for that run, so no sweep can contaminate another or the repository.
 
 ```bash
-python plot_paper_figures.py     # Figs. 4-8 and supporting plots
-python cache_ablation_study.py   # Fig. 1(b) caching-policy comparison
+python run_paper_tables.py               # decode throughput + wall clock, both platforms
+python run_paper_tables.py --prefill     # prefill tables
+python run_paper_tables.py --kv-tier     # KV-tier placement table
+python run_paper_tables.py --ablation    # search-disabled ablation
+python run_paper_tables.py --batch-sweep # B = 1..128 grid behind the batch figure
+python run_paper_tables.py --models      # 7B..405B grid behind the model-scale figure
+python run_paper_tables.py --sharegpt    # 50 real ShareGPT prompts, both platforms
+
+python verify_results.py                 # 122 invariant checks; exits nonzero on failure
 ```
 
-Generated PDFs land in `figures/` and are overwritten on each run.
-
-### 3. Real-workload validation on ShareGPT (Fig. 9)
+## Regenerating the figures
 
 ```bash
-python trace_workload/download_sharegpt.py     # writes sharegpt_lens.json
-python trace_workload/trace_runner.py \
-    --pairs trace_workload/sharegpt_lens.json \
-    --n 50 --batch 128 --quant fp16 --mem 16H+64C \
-    --decode 64 \
-    --out trace_workload/sharegpt_n50.csv
-python trace_workload/plot_sharegpt.py
+python plot_reserve_curve.py --measure   # motivation figure (re-runs the sweep)
+python plot_evaluation.py                # evaluation panels (measures, then plots)
+python plot_sweeps.py                    # batch and model figures from sweep_figs.json
 ```
 
-### 4. Per-mechanism ablation (Table IV)
+Without `--measure`, `plot_reserve_curve.py` and `plot_evaluation.py --cached`
+replot from the checked-in JSON. The paper builds from the repository root:
 
 ```bash
-python trace_workload/ablation.py
+tectonic -X compile SemSched.tex
 ```
 
-This patches the SemSched source in a tempdir to disable one mechanism at
-a time (parallel warmup, semantic placement, two-queue link,
-sparsity-aware eviction), reruns the headline (FP16 16H+64C) and
-tight-memory (INT8 16H+32C) configurations, and writes
-`trace_workload/ablation_results.csv`.
+## Cycle-level validation
 
-## Notes on the simulator
-
-- All four simulators consume the same `sim_cfg.py` and `model_cfg.py`,
-  so the only thing that varies between runs is the scheduling policy.
-- `trace_runner.py` patches simulator parameters by copying the sources
-  into a tempdir before each run, so the originals stay byte-identical.
-- Memory configurations use the `<host>H+<cxl>C` shorthand throughout
-  (e.g. `16H+32C` = 16 GB Host DRAM + 32 GB CXL device DRAM).
-- Hardware parameters in `sim_cfg.py` follow the CMM-H characterization
-  in Soltaniyeh et al., HotStorage 2025.
+The tier bandwidths and the timing engine's bus-independence assumption are
+reproduced at cycle level in gem5 with SimCXL's CXL device models, in the
+companion repository **SemSched-CXLSim**, which shares no code with this
+simulator. Its README documents the calibration and the three validated
+properties.
 
 ## Citation
 
