@@ -1,6 +1,6 @@
 # SemSched
 
-**SemSched: Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference**
+**SemSched: Trading Memory Capacity for Prefetch Bandwidth in LLM Inference on Hybrid CXL Devices**
 
 This repository contains the simulator, baselines, experiment driver, and
 plotting code that produce the figures and tables in the SemSched paper.
@@ -113,6 +113,7 @@ tight-memory (INT8 16H+32C) configurations, and writes
 If you use this code, please cite the paper:
 
 ```
-SemSched: Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference.
-Md Romyull Islam and Kun Suo. MASCOTS 2026 (under submission).
+SemSched: Trading Memory Capacity for Prefetch Bandwidth in LLM Inference
+on Hybrid CXL Devices. Md Romyull Islam, Tu N. Nguyen, Selena He, Yong Shi,
+and Kun Suo. IEEE BigData 2026 (under submission).
 ```
