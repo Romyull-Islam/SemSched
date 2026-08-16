@@ -87,8 +87,9 @@ def plot(d):
     ax.set_xticklabels([f"16H+{c}C" for c in caps])
     ax.set_ylabel("decode throughput (tok/s)")
     ax.set_title("(a) capacity sensitivity, INT8", fontsize=8, pad=4)
-    ax.legend(frameon=False, ncol=2, handlelength=1.1, columnspacing=0.8,
-              borderaxespad=0.2, loc="upper left")
+    ax.legend(frameon=False, ncol=3, handlelength=1.1, columnspacing=0.7,
+              borderaxespad=0.1, loc="lower center", bbox_to_anchor=(0.5, 1.02),
+              fontsize=6.3)
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
 
     # ── (b) write stall ─────────────────────────────────────────────────────
