@@ -94,12 +94,9 @@ ax.set_xlabel("model (16H$+$48C)")
 ax.set_ylabel("speedup vs. best baseline")
 deco(ax)
 ax.set_ylim(0.93, 1.55)
-ax.annotate("fits in\nfast memory", xy=(0, 1.005), xytext=(0.05, 1.18),
-            fontsize=6.4, color="#555555", ha="left",
-            arrowprops=dict(arrowstyle="->", color="#555555", linewidth=0.7))
-ax.annotate("NAND carries\n>80% of step", xy=(4, 1.12), xytext=(3.35, 1.30),
-            fontsize=6.4, color="#555555", ha="left",
-            arrowprops=dict(arrowstyle="->", color="#555555", linewidth=0.7))
+# No in-plot annotations: at this width every clear region is one data
+# revision away from being under a line, and a white box that keeps text
+# legible hides the curve behind it. The caption carries both endpoints.
 ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0),
           ncol=2, handlelength=1.9, borderaxespad=0.1, labelspacing=0.3,
           columnspacing=1.2)
