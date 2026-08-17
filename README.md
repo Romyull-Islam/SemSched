@@ -25,10 +25,9 @@ contains only the components the revised paper stands on. Mechanisms the
 paper measures and retires — semantic sub-layer placement (0.995x against
 ordering by size), prefill staging, duplex write scheduling as a throughput
 mechanism — ship as the measured nulls inside the harness, not as systems.
-The full pre-revision history, including the retired components, remains in
-the git history of the development repository. In that repository, files not
-listed in the layout below are pre-revision history; the v2.0 artifact
-package contains exactly the layout below and nothing else.
+The working tree is exactly the layout below and nothing else. The full
+pre-revision history, including the retired components, remains in this
+repository's git history; tag `mascots2026-submitted` is the v1 state.
 
 ## Repository layout
 
