@@ -62,9 +62,10 @@ repository's git history; tag `mascots2026-submitted` is the v1 state.
 │   ├── sharegpt_lens.json       # (prefill, decode) length pairs from ShareGPT V3
 │   └── download_sharegpt.py     # regenerates the pairs from the public dataset
 │
-├── SemSched.tex, fig_*.tex, Ref/, figures/   # the paper and its figure sources
+├── figures/                     # the generated figures, overwritten by the plot scripts
 ├── REPRODUCE.md                 # command-to-number map for every reported cell
-└── RESULTS.md                   # the measured result set, with the commands that made it
+├── RESULTS.md                   # the measured result set, with the commands that made it
+└── CHANGELOG.md                 # what changed between v1.0 and v2.0
 ```
 
 ## Requirements
@@ -100,11 +101,10 @@ python plot_sweeps.py                    # batch and model figures from sweep_fi
 ```
 
 Without `--measure`, `plot_reserve_curve.py` and `plot_evaluation.py --cached`
-replot from the checked-in JSON. The paper builds from the repository root:
+replot from the checked-in JSON.
 
-```bash
-tectonic -X compile SemSched.tex
-```
+The paper itself is not in this repository. It will be linked here once it is
+published; this repository is the artifact that produces its numbers.
 
 ## Cycle-level validation
 
