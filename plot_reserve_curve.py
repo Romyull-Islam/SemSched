@@ -135,7 +135,9 @@ def plot(data):
     ax.set_xlabel("fast memory held back as prefetch staging (%)")
     ax.set_ylabel("decode throughput\nvs. best baseline")
     ax.set_xlim(-1, 40.5)
-    ax.set_ylim(0.60, 1.55)
+    # Lower limit must sit under the worst measured point (0.53 at 32C, 40%),
+    # or clip_on=False draws that curve outside the axes frame.
+    ax.set_ylim(0.50, 1.55)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.2f}$\\times$"))
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
     ax.set_axisbelow(True)
