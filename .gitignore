@@ -10,3 +10,10 @@ refs_pdf/
 .venv/
 venv/
 # Virtual envs
+
+# The manuscript: kept on disk, never published here until the paper is accepted
+SemSched.tex
+SemSched.pdf
+fig_architecture.tex
+fig_scheduler.tex
+Ref/
