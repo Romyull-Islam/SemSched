@@ -87,9 +87,12 @@ def plot(d):
     ax.set_xticklabels([f"16H+{c}C" for c in caps])
     ax.set_ylabel("decode throughput (tok/s)")
     ax.set_title("(a) capacity sensitivity, INT8", fontsize=8, pad=4)
-    ax.legend(frameon=False, ncol=3, handlelength=1.1, columnspacing=0.7,
-              borderaxespad=0.1, loc="lower center", bbox_to_anchor=(0.5, 1.02),
-              fontsize=6.3)
+    # One legend for the whole figure, above all three panels: panels (a) and
+    # (b) share the policy colours, and an in-panel legend either sits on the
+    # bars or collides with the panel title.
+    fig.legend(*ax.get_legend_handles_labels(), frameon=False, ncol=5,
+               loc="upper center", bbox_to_anchor=(0.5, 1.035),
+               handlelength=1.1, columnspacing=1.3, fontsize=7)
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
 
     # ── (b) write stall ─────────────────────────────────────────────────────
@@ -130,8 +133,8 @@ def plot(d):
             a.spines[side].set_visible(False)
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    fig.tight_layout(pad=0.4, w_pad=1.4)
-    fig.savefig(OUT, bbox_inches="tight", pad_inches=0.015)
+    fig.tight_layout(pad=0.4, w_pad=1.4, rect=[0, 0, 1, 0.94])
+    fig.savefig(OUT, bbox_inches="tight", pad_inches=0.02)
     print(f"wrote {OUT}")
 
 
