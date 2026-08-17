@@ -11,7 +11,7 @@ SemSched targets **CMM-H**-style hybrid CXL devices that pair an on-card DRAM
 cache with NAND flash behind a single host link. Fast memory on such a device
 has two uses: holding weights, and staging prefetched bytes before they are
 needed. Every published policy spends all of it on the first. SemSched
-searches the split per configuration — how much host and device DRAM to hold
+searches the split per configuration, how much host and device DRAM to hold
 back as prefetch staging, jointly with the tier that holds the KV cache and
 with the device capacity itself, which the search may decline so that bytes
 deliberately left on NAND ride an otherwise idle bus. Finalist plans are
@@ -22,9 +22,9 @@ the plan realized.
 
 This is **v2.0**, the artifact of the IEEE BigData 2026 submission. It
 contains only the components the revised paper stands on. Mechanisms the
-paper measures and retires — semantic sub-layer placement (0.995x against
+paper measures and retires: semantic sub-layer placement (0.995x against
 ordering by size), prefill staging, duplex write scheduling as a throughput
-mechanism — ship as the measured nulls inside the harness, not as systems.
+mechanism, ship as the measured nulls inside the harness, not as systems.
 The working tree is exactly the layout below and nothing else. The full
 pre-revision history, including the retired components, remains in this
 repository's git history; tag `mascots2026-submitted` is the v1 state.
