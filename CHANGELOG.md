@@ -7,7 +7,7 @@ Prefetch Bandwidth in LLM Inference on Hybrid CXL Devices*.
 
 **What the system claims changed.** v1 claimed that decomposing decoder blocks
 into attention and MLP sub-layers and ordering them semantically was the
-mechanism. v2 measures that claim at 0.995x against ordering the same
+mechanism. v2 measures that claim at 0.96x against ordering the same
 sub-layers by size and retires it. The mechanism v2 defends instead: fast
 memory has two uses, holding weights and staging prefetched bytes, and the
 split between them is searched per configuration, jointly with the tier that
@@ -26,7 +26,7 @@ decline so that bytes deliberately left on NAND ride an otherwise idle bus.
 - Model-scale coverage from 7B to 405B parameters.
 
 **Retired, and reported as measured nulls**
-- Semantic sub-layer ordering: 0.995x against ordering by size.
+- Semantic sub-layer ordering: 0.96x against ordering by size, losing in all twelve.
 - Prefill staging: loses to overlap in all twelve configurations.
 - Duplex write scheduling: moves latency, not throughput.
 
