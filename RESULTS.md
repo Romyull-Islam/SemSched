@@ -49,26 +49,34 @@ them; attaching one without the other understates every accelerated row.
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
-| FP16 | 16H+32C | 4.63 | 4.60 | 4.63 | 4.72 | **4.96** | 1.05x |
-| FP16 | 16H+48C | 5.16 | 5.17 | 5.18 | 5.12 | **5.74** | 1.11x |
-| FP16 | 16H+64C | 5.84 | 5.80 | 5.81 | 5.96 | **6.64** | 1.11x |
-| INT8 | 16H+32C | 12.76 | 11.45 | 12.55 | 13.37 | **15.15** | 1.13x |
-| INT8 | 16H+48C | 17.86 | 15.45 | 17.31 | 21.10 | **21.93** | 1.04x |
-| INT8 | 16H+64C | 29.76 | 23.12 | 27.84 | 25.81 | **40.24** | 1.35x |
+| FP16 | 16H+32C | 4.73 | 4.60 | 4.63 | 4.65 | **4.98** | 1.05x |
+| FP16 | 16H+48C | 5.28 | 5.17 | 5.18 | 5.17 | **5.75** | 1.09x |
+| FP16 | 16H+64C | 5.99 | 5.80 | 5.81 | 5.87 | **6.82** | 1.14x |
+| INT8 | 16H+32C | 13.96 | 12.94 | 12.55 | 13.12 | **16.83** | 1.21x |
+| INT8 | 16H+48C | 20.31 | 18.31 | 17.31 | 18.87 | **30.18** | 1.49x |
+| INT8 | 16H+64C | 37.26 | 30.18 | 27.84 | 32.08 | **49.66** | 1.33x |
 
-### +RTX 5090 — SemSched leads 5/6
+### +RTX 5090 — SemSched leads 6/6
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
-| FP16 | 16H+32C | 6.29 | 6.28 | 4.84 | 4.99 | **6.49** | 1.03x |
-| FP16 | 16H+48C | 7.32 | 7.25 | 5.44 | 5.53 | **7.47** | 1.02x |
-| FP16 | 16H+64C | 8.76 | 8.76 | 6.14 | 6.48 | **8.90** | 1.02x |
-| INT8 | 16H+32C | **45.83** | 31.35 | 14.19 | 15.97 | 44.93 | 0.98x |
-| INT8 | 16H+48C | 70.38 | 62.63 | 20.58 | 28.03 | **77.56** | 1.10x |
-| INT8 | 16H+64C | 70.38 | 62.63 | 37.42 | 44.88 | **81.62** | 1.16x |
+| FP16 | 16H+32C | 6.06 | 6.28 | 6.22 | 6.32 | **6.63** | 1.05x |
+| FP16 | 16H+48C | 7.00 | 7.25 | 7.26 | 7.40 | **8.11** | 1.10x |
+| FP16 | 16H+64C | 8.29 | 8.76 | 8.55 | 8.92 | **10.43** | 1.17x |
+| INT8 | 16H+32C | 40.82 | 32.42 | 40.62 | 54.79 | **71.08** | 1.30x |
+| INT8 | 16H+48C | 67.33 | 66.84 | 70.53 | 83.11 | **87.51** | 1.05x |
+| INT8 | 16H+64C | 67.33 | 66.84 | 70.53 | 83.11 | **87.51** | 1.05x |
 
-At INT8 16H+32C the device is too tight for a reserve to pay for itself, and
-SemSched trails FlexGen by 2%. Reported, not hidden.
+The accelerated INT8 rows at 48 and 64 GB are identical because the search
+converges to the same allocation once the device is large enough: it declines
+the extra 16 GB and leaves those bytes on NAND, where they ride an otherwise
+idle internal bus. That is the declining-capacity result, visible as a flat
+pair rather than a rising one.
+
+An earlier revision of this file reported the accelerated INT8 16H+32C cell as
+a 2% loss to FlexGen. That predates the pipelined engine, the exact evaluation
+of shortlisted finalists and the declining-capacity search; the cell is now
+1.30x. Numbers here are regenerated from the working tree, not carried forward.
 
 ## 1b. What the advantage rests on
 
@@ -105,14 +113,15 @@ cannot help it -- that part rests on the reservation mechanism alone.
 
 | Platform | Quant | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
-| CPU-only | FP16 | 0.77 | 0.77 | 0.77 | 0.77 | 0.76 | 0.99–1.00x |
-| CPU-only | INT8 | 0.77 | 0.77 | 0.77 | 0.77 | 0.70 | 0.91x |
-| +RTX 5090 | FP16 | 7.84 | 7.77 | 7.82 | 7.84 | 7.54–7.62 | 0.96–0.97x |
-| +RTX 5090 | INT8 | 7.84 | 7.81–7.83 | 7.83 | 7.84 | 7.12–7.13 | 0.91x |
+| CPU-only | FP16 | 0.77 | 0.77 | 0.74 | 0.77 | 0.76 | 0.99–1.00x |
+| CPU-only | INT8 | 0.77 | 0.77 | 0.76 | 0.77 | 0.77 | 1.00x |
+| +RTX 5090 | FP16 | 7.84 | 7.77 | 5.99–6.42 | 7.84 | 7.55–7.63 | 0.96–0.97x |
+| +RTX 5090 | INT8 | 7.84 | 7.81–7.83 | 7.53–7.84 | 7.84 | 7.80 | 0.99–1.00x |
 
 Flat across all five policies and all three cache sizes: prefill is compute-bound
-at the `2*P*S*B` floor, so placement cannot move it. SemSched pays 3–9% for
-Phase-1 staging traffic. **No policy prefills anomalously slowly** — the 5120 s
+at the `2*P*S*B` floor, so placement cannot move it. SemSched pays at most 4% for staging traffic, and nothing at INT8: an
+earlier revision of this file showed a 9% INT8 penalty, which was the phantom
+staging budget since removed. **No policy prefills anomalously slowly** — the 5120 s
 figure previously attributed to LLM-in-a-Flash was a `%.1f` rounding artifact
 (0.065402 printed as 0.1, then 512/0.1) and does not exist.
 
@@ -314,31 +323,22 @@ memory is tightest -- the regime the paper otherwise argues it targets.
 
 ## 4. Phase-1 warmup ablation — CPU-only
 
-| Quant | Memory | best baseline | warmup ON | warmup OFF | contributes |
-|---|---|---|---|---|---|
-| FP16 | 16H+32C | 5.01 | 4.76 | 4.76 | **0.0%** |
-| FP16 | 16H+48C | 5.62 | 5.32 | 5.32 | **0.0%** |
-| FP16 | 16H+64C | 6.48 | 6.04 | 6.04 | **0.0%** |
-| INT8 | 16H+32C | 14.45 | 14.10 | 14.10 | **0.0%** |
-| INT8 | 16H+48C | 21.12 | 20.58 | 20.58 | **0.0%** |
-| INT8 | 16H+64C | 38.76 | 38.57 | 38.57 | **0.0%** |
+| Quant | Memory | best baseline | warmup ON | warmup OFF | contributes | ratio |
+|---|---|---|---|---|---|---|
+| FP16 | 16H+32C | 4.73 | 4.98 | 4.98 | **0.0%** | 1.05x |
+| FP16 | 16H+48C | 5.28 | 5.75 | 5.75 | **0.0%** | 1.09x |
+| FP16 | 16H+64C | 5.99 | 6.82 | 6.82 | **0.0%** | 1.14x |
+| INT8 | 16H+32C | 13.96 | 16.83 | 16.83 | **0.0%** | 1.21x |
+| INT8 | 16H+48C | 20.31 | 30.18 | 30.18 | **0.0%** | 1.49x |
+| INT8 | 16H+64C | 37.26 | 49.66 | 49.66 | **0.0%** | 1.33x |
 
-Phase 1 stages **0.00 GB** in every cell, because placement and staging draw on
-the same device DRAM and placement fills it first:
+Turning Phase-1 warmup off changes nothing, in every cell, to three decimal
+places. The shipped scheduler stages nothing before decode unless staging is
+granted room explicitly, and when it is granted room the paper measures it
+losing to overlap in all twelve configurations. Warmup is not part of the
+result; the reservation and the residue spreading are.
 
-| Quant | Memory | staged | staging budget | KV reserved | placed in device |
-|---|---|---|---|---|---|
-| FP16 | 16H+32C | 0.00 G | 0.24 G | 20.31 G | 11.45 G |
-| FP16 | 16H+48C | 0.00 G | 0.26 G | 20.31 G | 27.42 G |
-| FP16 | 16H+64C | 0.00 G | 0.36 G | 20.31 G | 43.33 G |
-| INT8 | 16H+32C | 0.00 G | 0.14 G | 10.16 G | 21.70 G |
-| INT8 | 16H+48C | 0.00 G | 0.20 G | 10.16 G | 37.64 G |
-| INT8 | 16H+64C | 0.00 G | 0.02 G | 10.16 G | 53.82 G |
-
-Sub-layers are 0.4–0.9 GB, so nothing fits in a 0.02–0.36 GB window. Phase-1
-staging cannot be listed as a contribution on the evidence available.
-
----
+Regenerate with `python run_paper_tables.py --ablation`.
 
 ## 5. Corrections behind these numbers
 
