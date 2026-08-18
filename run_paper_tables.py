@@ -93,6 +93,14 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
             s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
                        "ENABLE_PREFILL_WARMUP = False", s, 1, re.M)
         s = re.sub(r'^KV_TIER\s*=\s*"\w+"', f'KV_TIER = "{kv_tier}"', s, 1, re.M)
+        # The KV_TIER constant alone no longer forces anything: the joint search
+        # iterates _kv_opts and overwrites _best_kv, so patching the constant
+        # returned the same number for every tier. Pin the search itself, the
+        # way plot_reserve_curve.py pins the reserve grid.
+        anchor = ('_kv_opts = ["cxl", "host"] + (["gpu"] '
+                  'if gpu_hbm_capacity_bytes else [])')
+        assert anchor in s, "kv-tier pin anchor drifted; --kv-tier would no-op"
+        s = s.replace(anchor, f'_kv_opts = ["{kv_tier}"]', 1)
         open(p, "w").write(s)
 
 
