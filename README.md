@@ -22,7 +22,7 @@ the plan realized.
 
 This is **v2.0**, the artifact of the IEEE BigData 2026 submission. It
 contains only the components the revised paper stands on. Mechanisms the
-paper measures and retires: semantic sub-layer placement (0.995x against
+paper measures and retires: semantic sub-layer placement (0.96x against
 ordering by size), prefill staging, duplex write scheduling as a throughput
 mechanism, ship as the measured nulls inside the harness, not as systems.
 The working tree is exactly the layout below and nothing else. The full
@@ -65,7 +65,8 @@ repository's git history; tag `mascots2026-submitted` is the v1 state.
 ├── figures/                     # the generated figures, overwritten by the plot scripts
 ├── REPRODUCE.md                 # command-to-number map for every reported cell
 ├── RESULTS.md                   # the measured result set, with the commands that made it
-└── CHANGELOG.md                 # what changed between v1.0 and v2.0
+├── CHANGELOG.md                 # what changed between v1.0 and v2.0
+└── LICENSE                      # MIT
 ```
 
 ## Requirements

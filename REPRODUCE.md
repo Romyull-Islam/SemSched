@@ -40,8 +40,12 @@ SEMSCHED_PLACEMENT_ORDER=sequential python run_paper_tables.py   # model order
 SEMSCHED_PLACEMENT_ORDER=random     python run_paper_tables.py   # seeded shuffle
 ```
 
-Measured: semantic vs sequential is 0.983x-1.108x (median 0.995x), and
-`size-desc` beats `semantic` in 11 of 12 cells, which is why `size-desc` ships.
+Measured over the twelve reported configurations: `size-desc` beats `semantic`
+in all twelve, median 0.96x, worst 0.86x (accelerated INT8 16H+32C). Against
+`sequential` the semantic order is near-neutral, median 0.997x over the same
+grid. `size-desc` ships because it is the only ordering that stays above every
+baseline in all twelve cells; `semantic` and `sequential` each fall below the
+strongest baseline in two accelerated cells.
 
 The joint capacity search is what actually produces the result. There is no
 flag for it -- it is the search in `semduplex_scheduler.py` -- so ablate it by
