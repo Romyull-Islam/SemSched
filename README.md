@@ -55,6 +55,7 @@ repository's git history; tag `mascots2026-submitted` is the v1 state.
 ├── reserve_curve.json           # Measured data behind the motivation figure
 ├── sweep_figs.json              # Measured data behind the sweep figures
 │
+├── test_pipeline_differential.py # Timing engine vs an independent model + bounds
 ├── test_cxl_link.py             # Unit tests for the link model (23 checks)
 ├── test_bandwidth_conservation.py  # Bandwidth accounting tests (pytest)
 │
