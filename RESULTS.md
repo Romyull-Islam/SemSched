@@ -27,7 +27,7 @@ somewhere, so a deep queue over a full device is worth nothing.
 
 | policy | prefetch depth | source |
 |---|---|---|
-| LIA | 0 | no weight prefetch described; CXL read on demand |
+| LIA | 1 | its artifact double-buffers the next layer on a separate stream, the same single-layer lookahead FlexGen gets |
 | FlexGen | 1 | Algorithm 1, "the weights load of the next layer" |
 | CXLAimPod | 4 | its own PREFETCH_WINDOW |
 | LLM-in-a-Flash | 5 | sliding window, k=5 |
