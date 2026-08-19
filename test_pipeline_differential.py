@@ -10,6 +10,16 @@ check.
 
 Two attacks, both randomized over thousands of configurations:
 
+What the first run found, and why it mattered more than it first appeared: the
+in-flight budget walk-back never clamped at unit 0. Instrumenting the unfixed
+engine on a real run shows the negative path executing 55,916 times out of
+316,546 walks, so it was not a corner case. It changed no reported number
+because the walk's only output is `issue_at`, and every negative index maps to
+the same 0.0 there. Its reachable effect was the crash: the walk can travel at
+most prefetch_depth+1 below zero, so any step with fewer than 33 units runs off
+the front of the list. The 72B step has 163 units and the 7B step 67, so the
+smallest reported model sat about 2x from an IndexError in a reviewer's hands.
+
   1. DIFFERENTIAL. `reference_time_s` below is written from the engine's
      documented semantics, not from its code, and is structured differently:
      it materialises an explicit transfer list and walks per-resource
@@ -172,7 +182,44 @@ def bounds(units, depth, bw, lat, budget, got):
     return problems
 
 
+def regression_short_unit_lists():
+    """The exact condition that crashed the engine, pinned as a named case.
+
+    The budget walk-back can travel at most prefetch_depth+1 units below zero,
+    because j = i - depth - 1 bounds it. So a unit list SHORTER than depth+1
+    lets the walk run off the front of the list. Unclamped it read units[] from
+    the end and then raised IndexError. Measured on the shipped configurations,
+    the 72B step has 163 units against a depth of 32 and the 7B step has 67, so
+    the smallest model reported came within about 2x of this. Anything with
+    fewer than 33 units per step -- a smaller model, or coarser units -- lands
+    on it. Kept as a named test because a fuzzer that stopped generating short
+    lists would silently stop covering it.
+    """
+    bw = {"CXL Device NAND": 5e9, "Host DRAM": 38.4e9}
+    lat = {"CXL Device NAND": 1547e-9, "Host DRAM": 200e-9}
+    problems = []
+    for n in range(1, 40):
+        units = [({"CXL Device NAND": 4e6, "Host DRAM": 1e6}, 1e-4)] * n
+        for depth in (32, 64):
+            for budget in (1e12, 4e9, 0.0):
+                try:
+                    got = pipelined_time_s(units, depth, bw, lat, inflight_budget=budget)
+                except Exception as e:
+                    problems.append(f"n={n} depth={depth} budget={budget}: {type(e).__name__}: {e}")
+                    continue
+                ref = reference_time_s(units, depth, bw, lat, budget)
+                if abs(got - ref) > 1e-12 * max(1.0, abs(ref)):
+                    problems.append(f"n={n} depth={depth} budget={budget}: {got} vs {ref}")
+    return problems
+
+
 def main(n_cases):
+    reg = regression_short_unit_lists()
+    for r in reg[:5]:
+        print(f"  REGRESSION (unit list shorter than depth): {r}")
+    print(f"  regression, unit lists 1..39 against depths 32 and 64: "
+          f"{'PASS' if not reg else str(len(reg)) + ' FAILURES'}")
+
     rng = random.Random(20260818)
     diffs = bad = 0
     worst = 0.0
@@ -199,7 +246,7 @@ def main(n_cases):
     print(f"  differential vs independent reference: "
           f"{n_cases - diffs} agree, {diffs} differ (worst rel {worst:.3g})")
     print(f"  hardware-model bounds: {bad} violations")
-    ok = diffs == 0 and bad == 0
+    ok = diffs == 0 and bad == 0 and not reg
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 
