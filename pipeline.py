@@ -81,7 +81,13 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
             # while the accumulated bytes still fit.
             m = i - 1
             acc = sum(units[i][0].values())
-            while m > j:
+            # m >= 0 is load-bearing, not defensive: without it a negative m
+            # indexes units[] from the END of the list, so the walk accumulated
+            # some other unit's bytes and stopped in the wrong place, and once
+            # m passed -len(units) it raised IndexError outright. Reaching
+            # m < 0 means everything back to unit 0 fits, which is exactly the
+            # case the issue_at guard below already reads as "issue at t=0".
+            while m > j and m >= 0:
                 nxt = sum(units[m][0].values())
                 if acc + nxt > inflight_budget:
                     break
