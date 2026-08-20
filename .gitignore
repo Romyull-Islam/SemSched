@@ -17,3 +17,8 @@ SemSched.pdf
 fig_architecture.tex
 fig_scheduler.tex
 Ref/
+
+# Standalone exports of the paper's TikZ figures (Figs. 2 and 3): kept here
+# for convenience, never published while the paper is under review
+figures/fig_architecture.pdf
+figures/fig_scheduler.pdf
