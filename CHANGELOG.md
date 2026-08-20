@@ -21,7 +21,7 @@ decline so that bytes deliberately left on NAND ride an otherwise idle bus.
   plan validated is the plan realized.
 - `verify_results.py`: 122 invariant checks over the full result grid.
 - Cycle-level validation of tier bandwidths and the bus-independence assumption
-  in gem5 with SimCXL, in the companion repository SemSched-CXLSim.
+  in gem5 with SimCXL; configuration and driver under validation/.
 - ShareGPT trace evaluation on 50 real prompt/response length pairs.
 - Model-scale coverage from 7B to 405B parameters.
 
