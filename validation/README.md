@@ -10,10 +10,10 @@ The main artifact is our own trace-driven simulator. Its compute term is
 calibrated against LLMCompass (ISCA 2024) and its DRAM bandwidths against
 DRAMsim3, but three things remain unvalidated by anything external:
 
-1. **The full-duplex CXL link model** — that KV writes injected on the idle Tx
+1. **The full-duplex CXL link model**: that KV writes injected on the idle Tx
    lane are absorbed under concurrent Rx reads rather than adding to latency.
    This is the paper's core mechanism and nothing checks it.
-2. **The DRAM-cache-over-NAND hybrid** — CMM-H's device-side caching, which we
+2. **The DRAM-cache-over-NAND hybrid**: CMM-H's device-side caching, which we
    model as a hit/miss bandwidth step (27 GB/s → 5 GB/s) rather than as a cache.
 3. **The placement policy under a real memory controller**, with queueing,
    row-buffer conflicts, and refresh, none of which our tier model has.
@@ -37,13 +37,13 @@ Every command below assumes that layout, with `SimCXL/build/X86/gem5.opt` built.
 
 ## Tool
 
-[SimCXL](https://github.com/TianheMICALab/SimCXL) — gem5-based, full-system,
+[SimCXL](https://github.com/TianheMICALab/SimCXL): gem5-based, full-system,
 cycle-level, modelling CXL.io/.cache/.mem and Type 1/2/3 devices. Backed by
 CXL-DMSim (TCAD 2025, silicon-validated) and Cohet (HPCA 2026).
 
 Chosen over [CXLMemSim](https://github.com/SlugLab/CXLMemSim), which samples a
 real running binary via PMU counters and injects emulated CXL latency. That
-answers "how would my existing app behave on CXL" — we have no such binary, and
+answers "how would my existing app behave on CXL"; we have no such binary, and
 it does not model link contention.
 
 The property that makes SimCXL usable here: `src/mem/cxl_bridge.hh` defines
@@ -60,9 +60,9 @@ duplex model asserts, so the claim can be tested rather than assumed.
 | 3 | Extend Type 3 into a **CMM-H hybrid**: DDR cache tier + 1 TB NAND tier | done (SimpleMemory tiers) |
 | 4 | Calibrate: measured 27.05 / 5.00 / 38.47 GB/s vs targets 27 / 5 / 38.4 | **done, <0.2% each** |
 | 5 | Configure our hierarchy: 16 GB host DDR5, 48 GB CXL DRAM cache, 1 TB NAND | done |
-| 6 | **Bus-independence test** (`--mode concurrent`): cxl + host driven simultaneously hold 27.02 and 38.47 GB/s, each within 0.2% of solo | **done — validates the paper's core timing assumption** |
-| 7 | **Within-tier duplex** (`--mode duplex`): 50/50 read-write on device DRAM sums to the tier ceiling; reads yield to writes | done — matches the engine's within-tier serialization |
-| 8 | Link-level Rx/Tx duplexity via SimCXL's `cxl_bridge` | open — the one modelled-not-validated claim, stated in the paper |
+| 6 | **Bus-independence test** (`--mode concurrent`): cxl + host driven simultaneously hold 27.02 and 38.47 GB/s, each within 0.2% of solo | **done; validates the paper's core timing assumption** |
+| 7 | **Within-tier duplex** (`--mode duplex`): 50/50 read-write on device DRAM sums to the tier ceiling; reads yield to writes | done; matches the engine's within-tier serialization |
+| 8 | Link-level Rx/Tx duplexity via SimCXL's `cxl_bridge` | open; the one modelled-not-validated claim, stated in the paper |
 
 Repro, from the SimCXL tree with this repository's files copied in:
 `build/X86/gem5.opt --outdir=out configs/cmmh_hybrid.py --mode {stream,concurrent,duplex} --target {host,cxl,nand} --duration 2e6`
@@ -96,7 +96,7 @@ The default cell, matching the main artifact's headline:
 | CXL device DRAM cache | 48 GB DDR4-2666 | 27 GB/s | 505 ns |
 | CXL NAND backend | 1 TB | 5 GB/s | 1547 ns |
 
-Model: Qwen2.5 72B FP16, 145 GB — so 81 GB is NAND-resident and must be staged.
+Model: Qwen2.5 72B FP16, 145 GB, so 81 GB is NAND-resident and must be staged.
 
 ## What this can and cannot settle
 
