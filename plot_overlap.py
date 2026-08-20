@@ -158,7 +158,7 @@ def panel(ax, d, i0, i1, label, step_s):
     ax.set_yticklabels(ROWS, fontsize=6.6)
     ax.set_ylim(-0.55, 3.55)
     ax.tick_params(axis="x", labelsize=6.6)
-    ax.set_title(f"{label} — full step {step_s:.2f} s",
+    ax.set_title(f"{label} (full step {step_s:.2f} s)",
                  fontsize=7.4, pad=3, loc="left")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
