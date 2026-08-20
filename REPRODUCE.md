@@ -32,7 +32,7 @@ configured for one experiment. Runtimes are for the whole command.
 
 Placement order was this project's original hypothesis, and it is retired:
 `size-desc` is the default and the shipped behaviour. The orders below are
-nulls with the same tiers, the same capacities and the same bytes — only the
+nulls with the same tiers, the same capacities and the same bytes; only the
 sequence in which sub-layers claim fast memory changes.
 
 ```bash
@@ -50,7 +50,7 @@ baseline in all twelve cells; `semantic` and `sequential` each fall below the
 strongest baseline in two accelerated cells.
 
 The joint capacity search is what actually produces the result. There is no
-flag for it -- it is the search in `semduplex_scheduler.py` -- so ablate it by
+flag for it, because it is the search in `semduplex_scheduler.py` itself, so ablate it by
 pinning the grid to a single point (reserve nothing, KV on the device, full
 device capacity):
 
@@ -69,7 +69,7 @@ time, and asserts each patch anchor still matches the file.
 | File | |
 |---|---|
 | `run_paper_tables.py` | the only sanctioned way to produce a number for the paper |
-| `verify_results.py` | checks invariants, not a previous run -- every defect this project hit reproduced perfectly |
+| `verify_results.py` | checks invariants, not a previous run: every defect this project hit reproduced perfectly |
 | `pipeline.py` | the timing engine, shared by all five policies |
 | `semduplex_scheduler.py` | SemSched |
 | `{flexgen,lia,cxlaimpod,llmflash}_baseline.py` | one per baseline, each implementing its own paper |
@@ -83,7 +83,7 @@ device: host DDR5-4800 at 38.4 GB/s, CXL device DRAM at 27 GB/s, CXL NAND at
 5.0 GB/s behind PCIe Gen4 x4, the two device tiers sharing a Gen5 x8 host link
 at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
 +RTX 5090 (146.9 TFLOPS, 28 GB for weights). Change any of these in
-`run_paper_tables.py` -- `GRID`, `CXLS`, `QUANTS`, `BATCH`, `DECODE`, `ENGINES`.
+`run_paper_tables.py`: `GRID`, `CXLS`, `QUANTS`, `BATCH`, `DECODE`, `ENGINES`.
 
 ## What this simulator does not model
 

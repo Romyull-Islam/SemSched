@@ -1,4 +1,4 @@
-# SemSched — measured results
+# SemSched: measured results
 
 All figures regenerated from this working tree with
 
@@ -22,7 +22,7 @@ CXL device DRAM and NAND share the Gen5 x8 host link at 31.5 GB/s.
 independent buses and run concurrently; transfers within a tier serialize; the
 two device tiers are capped by the host link they share. How much of that
 concurrency a policy captures is set by its prefetch depth AND by the free
-memory it has to stage into -- bytes fetched ahead of use have to live
+memory it has to stage into, because bytes fetched ahead of use have to live
 somewhere, so a deep queue over a full device is worth nothing.
 
 | policy | prefetch depth | source |
@@ -38,14 +38,14 @@ them; attaching one without the other understates every accelerated row.
 
 | Platform | Engine | TFLOPS | Weights in HBM |
 |---|---|---|---|
-| CPU-only | 2x EPYC 9454, AVX-512, 96c @ 2.75 GHz, 0.85 | 14.4 | — |
+| CPU-only | 2x EPYC 9454, AVX-512, 96c @ 2.75 GHz, 0.85 | 14.4 | none |
 | +RTX 5090 | 170 SMs, 512 FLOP/cyc, 2.41 GHz, 0.70 | 146.9 | 28 GB |
 
 ---
 
 ## 1. Decode throughput, B=128 (t/s)
 
-### CPU-only — SemSched leads 6/6
+### CPU-only: SemSched leads 6/6
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
@@ -56,7 +56,7 @@ them; attaching one without the other understates every accelerated row.
 | INT8 | 16H+48C | 20.31 | 18.31 | 17.31 | 18.87 | **30.18** | 1.49x |
 | INT8 | 16H+64C | 37.26 | 30.18 | 27.84 | 32.08 | **49.66** | 1.33x |
 
-### +RTX 5090 — SemSched leads 6/6
+### +RTX 5090: SemSched leads 6/6
 
 | Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
 |---|---|---|---|---|---|---|---|
@@ -80,7 +80,7 @@ of shortlisted finalists and the declining-capacity search; the cell is now
 
 ## 1b. What the advantage rests on
 
-Two mechanisms, and they are not equally robust.
+Two mechanisms, and they do not hold equally well.
 
 **Adaptive prefetch reservation.** Every baseline fills each tier to capacity --
 FlexGen's LP maximises residency by construction, the other three fill greedily
@@ -105,7 +105,7 @@ the more contestable one. Sensitivity to FlexGen's depth, +RTX 5090 16H+48C:
 The INT8 lead is gone if FlexGen's block schedule is read as pipelining eight
 layers rather than one. Their text says "the next layer". The FP16 lead is flat
 across the whole range, because FlexGen has no staging room there and depth
-cannot help it -- that part rests on the reservation mechanism alone.
+cannot help it; that part rests on the reservation mechanism alone.
 
 ---
 
@@ -121,13 +121,13 @@ cannot help it -- that part rests on the reservation mechanism alone.
 Flat across all five policies and all three cache sizes: prefill is compute-bound
 at the `2*P*S*B` floor, so placement cannot move it. SemSched pays at most 4% for staging traffic, and nothing at INT8: an
 earlier revision of this file showed a 9% INT8 penalty, which was the phantom
-staging budget since removed. **No policy prefills anomalously slowly** — the 5120 s
+staging budget since removed. **No policy prefills anomalously slowly**: the 5120 s
 figure previously attributed to LLM-in-a-Flash was a `%.1f` rounding artifact
 (0.065402 printed as 0.1, then 512/0.1) and does not exist.
 
 ---
 
-## 3. Batch sweep — every configuration, B = 1..128
+## 3. Batch sweep: every configuration, B = 1..128
 
 `active_frac = 1 - (1 - 0.46)^B` is LLM-in-a-Flash's own model of how much of an
 MLP sub-layer fires; it saturates at 1.000 by B=16. Regenerate with
@@ -305,7 +305,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
  128       67.33     66.84     70.53     83.11     87.51    1.05x         1.000
 ```
 
-## 4. Phase-1 warmup ablation — CPU-only
+## 4. Phase-1 warmup ablation, CPU-only
 
 | Quant | Memory | best baseline | warmup ON | warmup OFF | contributes | ratio |
 |---|---|---|---|---|---|---|
@@ -331,7 +331,7 @@ are in the simulator or a baseline; one was in the measurement harness.
 
 | # | Defect | Direction | Effect |
 |---|---|---|---|
-| 1 | Staging cache did not reserve KV capacity, though placement did — the same budget applied at one of two sites | favoured SemSched | SemSched over-reported in 4 of 6 accelerated cells and all 6 CPU-only cells |
+| 1 | Staging cache did not reserve KV capacity, though placement did; the same budget applied at one of two sites | favoured SemSched | SemSched over-reported in 4 of 6 accelerated cells and all 6 CPU-only cells |
 | 2 | `ENABLE_PREFILL_WARMUP` declared but never read | neither | every warmup ablation compared a run to itself |
 | 3 | LLM-in-a-Flash charged `dram_window_frac * active_frac` for resident FFN, discounting the same sparsity twice | favoured LLM-in-a-Flash | 0.212 of the FFN read at B=1 where 0.460 fires; inert at B=128 |
 | 4 | Harness set `gpu_hbm_capacity_bytes` but left the compute engine at the EPYC's 14.4 TFLOPS | against SemSched | understated every accelerated cell |

@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.0-bigdata2026 — 2026-08-17
+## v2.0-bigdata2026 (2026-08-17)
 
 Artifact of the IEEE BigData 2026 submission, *Trading Memory Capacity for
 Prefetch Bandwidth in LLM Inference on Hybrid CXL Devices*.
@@ -36,7 +36,7 @@ decline so that bytes deliberately left on NAND ride an otherwise idle bus.
 - Every figure regenerates from measured JSON produced by the same harness that
   produces the tables, so a figure cannot drift from a table.
 
-## v1.0 — tag `mascots2026-submitted`, 2026-06-03
+## v1.0 (tag `mascots2026-submitted`, 2026-06-03)
 
 *Semantic Sub-Layer-Aware Scheduling for Hybrid CXL-Based LLM Inference*, the
 MASCOTS 2026 submission. 82 tracked files. Rejected; superseded by v2.0.
