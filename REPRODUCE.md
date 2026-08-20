@@ -23,6 +23,7 @@ configured for one experiment. Runtimes are for the whole command.
 | Phase-1 warmup ablation | `python run_paper_tables.py --ablation` | 1 min |
 | Model scale, 7B to 405B | `python run_paper_tables.py --models` | 6 min |
 | 50 real ShareGPT prompts | `python run_paper_tables.py --sharegpt` | 8 min |
+| Decode-step timeline, filled vs reserved | `python plot_overlap.py` | 2 min |
 | **Timing engine vs an independent model** | `python test_pipeline_differential.py` | 20 s |
 | **All correctness invariants** | `python verify_results.py` | 25 min |
 | Invariants without the batch sweep | `python verify_results.py --quick` | 6 min |
