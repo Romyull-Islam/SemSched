@@ -65,6 +65,10 @@ repository's git history; tag `mascots2026-submitted` is the v1 state.
 │   ├── sharegpt_lens.json       # (prefill, decode) length pairs from ShareGPT V3
 │   └── download_sharegpt.py     # regenerates the pairs from the public dataset
 │
+├── validation/                  # cycle-level check of the timing model on gem5/SimCXL
+│   ├── configs/cmmh_hybrid.py   #   the CMM-H hybrid device configuration
+│   └── sweep.py                 #   drives the same (host, device) grid
+│
 ├── figures/                     # the generated figures, overwritten by the plot scripts
 ├── REPRODUCE.md                 # command-to-number map for every reported cell
 ├── RESULTS.md                   # the measured result set, with the commands that made it
@@ -113,10 +117,10 @@ published; this repository is the artifact that produces its numbers.
 ## Cycle-level validation
 
 The tier bandwidths and the timing engine's bus-independence assumption are
-reproduced at cycle level in gem5 with SimCXL's CXL device models, in the
-companion repository **SemSched-CXLSim**, which shares no code with this
-simulator. Its README documents the calibration and the three validated
-properties.
+reproduced at cycle level in gem5 with SimCXL's CXL device models. The
+configuration and sweep driver live in `validation/` and share no code with
+the simulators here; `validation/README.md` documents the calibration, the
+three validated properties, and how to obtain and build the upstream tools.
 
 ## Citation
 
