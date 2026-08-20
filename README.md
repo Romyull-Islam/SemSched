@@ -51,9 +51,11 @@ repository's git history; tag `mascots2026-submitted` is the v1 state.
 ├── plot_reserve_curve.py        # Motivation figure: the reserve trade, measured
 ├── plot_evaluation.py           # Evaluation panels: capacity, write stall, ShareGPT
 ├── plot_sweeps.py               # Batch-size and model-scale figures
+├── plot_overlap.py              # One decode step in time: filled vs reserved
 ├── evaluation_data.json         # Measured data behind the evaluation panels
 ├── reserve_curve.json           # Measured data behind the motivation figure
 ├── sweep_figs.json              # Measured data behind the sweep figures
+├── overlap_data.json            # Measured schedules behind the timeline figure
 │
 ├── test_pipeline_differential.py # Timing engine vs an independent model + bounds
 ├── test_cxl_link.py             # Unit tests for the link model (23 checks)

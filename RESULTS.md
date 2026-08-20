@@ -133,7 +133,7 @@ figure previously attributed to LLM-in-a-Flash was a `%.1f` rounding artifact
 MLP sub-layer fires; it saturates at 1.000 by B=16. Regenerate with
 `python run_paper_tables.py --batch-sweep`. SemSched wins every cell at B >= 8
 and loses every cell at B <= 4, all of them to LLM-in-a-Flash's sparsity
-discount; Fig. 4 in the paper plots the medians and the min-max band.
+discount; the paper's batch-size figure plots the medians and the min-max band.
 
 ```
 ==============================================================================
