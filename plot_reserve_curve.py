@@ -126,8 +126,11 @@ def plot(data):
 
     # Every published policy fills its tiers; that is x = 0.
     ax.axvline(0, color="#B00020", linewidth=0.8, zorder=2)
-    ax.annotate("every published\npolicy sits here",
-                xy=(0, 0.70), xytext=(6.5, 0.635),
+    # Target the zero-reserve line BELOW every data point: aimed at y=0.70 the
+    # tip sat beside one curve's x=0 marker (0.72x) and read as that policy's
+    # throughput, when the claim is about x, where the policies operate, not y.
+    ax.annotate("every published policy\nfills its tiers (zero reserve)",
+                xy=(0, 0.585), xytext=(6.5, 0.56),
                 fontsize=6.8, color="#B00020", ha="left", va="center",
                 arrowprops=dict(arrowstyle="->", color="#B00020",
                                 linewidth=0.7, shrinkA=0, shrinkB=2))
