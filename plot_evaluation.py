@@ -32,8 +32,14 @@ sys.path.insert(0, REPO)
 
 POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "SemSched"]
 # Okabe-Ito; SemSched is the only saturated colour, the baselines are muted.
-COL = {"FlexGen": "#8C9BA5", "LIA": "#A9B4BC", "AimPod": "#C2CBD1",
-       "LLMFlash": "#7E8B94", "SemSched": "#0072B2"}
+# Muted baselines, one saturated contribution. The four greys form a MONOTONIC
+# light-to-dark ramp in legend order, so a reader maps legend to bar by position
+# without re-checking: the previous set put LLMFlash darker than FlexGen, which
+# broke that mapping, and its adjacent contrast was 1.22:1, indistinguishable in
+# greyscale print. This ramp runs 1.35-1.51:1 between neighbours, and SemSched
+# stays Okabe-Ito blue, the only hue on the panel.
+COL = {"FlexGen": "#D5DBE0", "LIA": "#B4BEC6", "AimPod": "#93A0AA",
+       "LLMFlash": "#72808D", "SemSched": "#0072B2"}
 HATCH = {"SemSched": ""}
 
 
