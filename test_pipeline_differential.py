@@ -1,37 +1,21 @@
 """
-test_pipeline_differential.py -- the timing engine against an independent model.
+Test the timing engine, pipelined_time_s, against an independent model.
 
-The 122 invariants in verify_results.py constrain the engine's OUTPUTS across
-the reported grid. The 23 checks in test_cxl_link.py constrain the link model.
-Neither constrains pipelined_time_s itself: whether it overlaps transfers with
-compute correctly under bus and link contention. That is the arithmetic every
-number in the paper rests on, and it was the last part with no independent
-check.
+verify_results.py checks the engine's outputs across the reported grid and
+test_cxl_link.py checks the link model; this file checks that the engine
+overlaps transfers with compute correctly under bus and link contention. Both
+checks are randomized over thousands of configurations:
 
-Two attacks, both randomized over thousands of configurations:
+  1. Differential. reference_time_s below is written from the engine's
+     documented semantics, not its code, and is structured differently: it
+     materialises an explicit transfer list and per-resource timelines, where
+     the engine folds both into one pass. A disagreement is a bug in one of
+     them or a gap between the documentation and the code.
 
-What the first run found, and why it mattered more than it first appeared: the
-in-flight budget walk-back never clamped at unit 0. Instrumenting the unfixed
-engine on a real run shows the negative path executing 55,916 times out of
-316,546 walks, so it was not a corner case. It changed no reported number
-because the walk's only output is `issue_at`, and every negative index maps to
-the same 0.0 there. Its reachable effect was the crash: the walk can travel at
-most prefetch_depth+1 below zero, so any step with fewer than 33 units runs off
-the front of the list. The 72B step has 163 units and the 7B step 67, so the
-smallest reported model sat about 2x from an IndexError in a reviewer's hands.
-
-  1. DIFFERENTIAL. `reference_time_s` below is written from the engine's
-     documented semantics, not from its code, and is structured differently:
-     it materialises an explicit transfer list and walks per-resource
-     timelines, where the engine folds both into one pass. Any disagreement is
-     either a bug in one of them or a place where the documentation does not
-     say what the code does. Both are findings.
-
-  2. BOUNDS. Six properties that hold for ANY correct implementation,
-     independent of scheduling policy: a serial compute engine, serial buses,
-     a serial shared link, and monotonicity in lookahead, staging budget and
-     bandwidth. These cannot be satisfied by transcribing the engine's own
-     mistakes, because they are derived from the hardware model, not the code.
+  2. Bounds. Six properties any correct implementation satisfies, derived
+     from the hardware model rather than the code: a serial compute engine,
+     serial buses, a serial shared link, and monotonicity in lookahead,
+     staging budget and bandwidth.
 
     python test_pipeline_differential.py            # 4000 random cases
     python test_pipeline_differential.py 20000      # more
@@ -115,11 +99,10 @@ def reference_time_s(units, depth, bw, lat, budget=None):
 def random_case(rng):
     n = rng.randint(1, 12)
     live = rng.sample(TIERS, rng.randint(1, len(TIERS)))
-    # Bandwidths stay inside the physical envelope each tier actually has. A
-    # device tier faster than the link it sits behind is not a configuration
-    # the hardware can be in -- tiers.py asserts it -- and it breaks the link
-    # bound below for a reason that says nothing about the engine: the link is
-    # then held longer than the transfer it carries.
+    # Bandwidths stay inside each tier's physical envelope. A device tier faster
+    # than its host link is impossible (tiers.py asserts this) and would break
+    # bound 3 for reasons unrelated to the engine: the link would be held longer
+    # than the transfer it carries.
     PLAUSIBLE = {"GPU HBM": [896e9, 1792e9], "Host DRAM": [25.6e9, 38.4e9],
                  "CXL Device DRAM": [16e9, 27e9, 31.5e9],
                  "CXL Device NAND": [3e9, 5e9, 8e9]}
@@ -183,17 +166,13 @@ def bounds(units, depth, bw, lat, budget, got):
 
 
 def regression_short_unit_lists():
-    """The exact condition that crashed the engine, pinned as a named case.
+    """Unit lists shorter than depth+1, where the budget walk-back must clamp.
 
-    The budget walk-back can travel at most prefetch_depth+1 units below zero,
-    because j = i - depth - 1 bounds it. So a unit list SHORTER than depth+1
-    lets the walk run off the front of the list. Unclamped it read units[] from
-    the end and then raised IndexError. Measured on the shipped configurations,
-    the 72B step has 163 units against a depth of 32 and the 7B step has 67, so
-    the smallest model reported came within about 2x of this. Anything with
-    fewer than 33 units per step -- a smaller model, or coarser units -- lands
-    on it. Kept as a named test because a fuzzer that stopped generating short
-    lists would silently stop covering it.
+    j = i - depth - 1 bounds the walk, so it can reach up to depth+1 units below
+    zero; without a clamp at unit 0 it indexes units[] from the end and then
+    raises IndexError. With a depth of 32, any step under 33 units hits this
+    path (the shipped 72B step has 163 units, the 7B step 67). Kept as a named
+    case so coverage does not depend on the fuzzer generating short lists.
     """
     bw = {"CXL Device NAND": 5e9, "Host DRAM": 38.4e9}
     lat = {"CXL Device NAND": 1547e-9, "Host DRAM": 200e-9}

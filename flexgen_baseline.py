@@ -1,21 +1,14 @@
-# flexgen_baseline.py
-# ─────────────────────────────────────────────────────────────────────────────
-# SIMULATOR: FlexGen — High-Throughput Generative Inference
+# FlexGen baseline (Sheng et al., ICML 2023), adapted to a CMM-H machine.
 #
-# Decode-phase includes growing-KV reads: at decode step t the attention layer
-# reads (PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from host DRAM
-# (FlexGen's KV residence tier).
+# Weights and KV cache are placed as per-tier fractions over GPU, host DRAM,
+# CXL device DRAM and device NAND, in that order. At decode step t attention
+# reads (PREFILL_TOKENS + t) x per-token KV bytes x BATCH_SIZE from the tiers
+# holding the cache.
 #
-# Reference: Sheng et al., ICML 2023.
-#
-# Stall accounting (separated):
-#   Read  stall : max(0, mem_time - comp_s)  — weight fetch blocks compute
-#   Write stall : dram_time_s(kv_bytes)      — KV write serialized AFTER weight
-#
-# KV stall rule (§4 bus model):
-#   Weight @ DRAM + KV @ DRAM → SAME bus  → KV write fully serialized
-#   Weight @ SSD  + KV @ DRAM → DIFF bus  → KV write concurrent (no stall)
-# ─────────────────────────────────────────────────────────────────────────────
+# Stalls are reported separately:
+#   read stall:  max(0, mem_time - comp_s), weight and KV fetch beyond compute
+#   write stall: kv_time_s(kv_bytes), the KV write, serialized after the weight
+#                read on any bus because FlexGen has no duplex path
 
 import math
 import pandas as pd
@@ -26,8 +19,8 @@ from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
 from pipeline import pipelined_time_s
 
 # FlexGen's block schedule overlaps "the weights load of the next layer" with
-# the current layer's compute (Algorithm 1, three CUDA streams) -- one layer of
-# lookahead, which is what their paper describes and no more.
+# the current layer's compute (Algorithm 1, three CUDA streams): one layer of
+# lookahead.
 PREFETCH_DEPTH = 1
 TIER_BW  = {"GPU HBM": GPU_HBM.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
             "CXL Device DRAM": CXL_DRAM.bw_Bps,
@@ -45,21 +38,16 @@ from sim_cfg import (
 
 PL_GPU_HBM              = "GPU HBM"
 PL_HOST_DRAM            = "Host DRAM"
-# FlexGen's middle tier is "CPU memory": byte-addressable memory the CPU can
-# load and store from. On a CMM-H machine the device DRAM is exactly that --
-# CXL.mem exposes it as a NUMA node -- and every other policy here treats it so:
-# LIA places weights in it, CXLAimPod pools it, LLM-in-a-Flash unifies it with
-# host DRAM by name. FlexGen alone was denied it, which left it with 44 GB of
-# byte-addressable memory where the others had 92, and made its throughput
-# invariant to the device cache size -- the tell. It is a slower tier than host
-# DDR (27 vs 38.4 GB/s), so it sits below it in the cascade rather than merging.
+# FlexGen's middle tier is "CPU memory", byte-addressable memory the CPU can
+# load and store. CXL.mem exposes the CMM-H device DRAM as a NUMA node, so it
+# qualifies, as it does for every other policy here. It is slower than host DDR
+# (27 vs 38.4 GB/s), so it sits below host DRAM in the cascade.
 PL_CXL_DEV_DRAM         = "CXL Device DRAM"
 PL_HOST_SSD             = "CXL Device NAND"
 PREFILL_TOKENS          = 512
 PREFILL_FLOP_MULTIPLIER = 15.0
 
 
-# ── Timing helpers ────────────────────────────────────────────────────────────
 def compute_time_s(flops):
     if flops <= 0: return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core * parallel_efficiency)
@@ -71,31 +59,20 @@ def gpu_time_s(n):
 
 
 def ssd_time_s(n):
-    """Backing store. On a CMM-H platform that is the device's own NAND, not a
-    separate host drive.
+    """Backing store: on CMM-H this is the device's own NAND, not a host drive.
 
-    CMM-H is byte-addressable extended memory, not a filesystem. Once the model
-    is mapped into the device's address space, a page absent from the 48 GB DRAM
-    cache is served by the device's own NAND -- that is what the hybrid device
-    is. The host NVMe is where the model file was read from once; it is not
-    where steady-state overflow comes from.
-
-    This previously used NVME_STREAM_BW at 7.6 GB/s for the steady-state path,
-    describing a machine that re-reads the model file on every token, while
-    every other simulator took its overflow from CMM-H NAND at 5.0 GB/s. The
-    policy is unchanged -- fractional placement across GPU, host DRAM and the
-    backing store, hot layers pinned first, transfer overlapped with compute.
-    Only the provenance of the bytes is corrected, and that is a property of the
-    platform rather than of the scheduler. Sec IV-B already describes these as
-    CXL-adapted baselines; this makes FlexGen one.
+    CMM-H is byte-addressable memory, not a filesystem. Once the model is mapped
+    into the device's address space, a page that misses the device DRAM cache is
+    served from its NAND. The host NVMe is read once to load the model file and
+    is not on the steady-state path.
     """
     return transfer_time_s(n, CXL_SSD_NAND)
 
 
-# ── Build model ───────────────────────────────────────────────────────────────
 layers      = build_layers(sequence_length=PREFILL_TOKENS)
 name_to_idx = {L["name"]: i for i, L in enumerate(layers)}
 
+# KV bytes (K and V) that one token adds to each decoder block.
 kv_cache_increment = {}
 for L in layers:
     if L["kind"] == "DecoderBlock":
@@ -106,40 +83,23 @@ for L in layers:
         kv_cache_increment[L["name"]] = 0
 
 
-# ── Placement ─────────────────────────────────────────────────────────────────
-# FlexGen is a GPU system -- its title is "with a Single GPU" and its policy is
-# a placement across GPU -> CPU -> disk. Modelling it without a GPU tier removed
-# the top level of the hierarchy its LP exists to fill, and cost it the fastest
-# memory on the machine. The cascade below is GPU first, then host DRAM, then
-# disk, matching the paper's ordering.
+# Placement. FlexGen is a GPU system ("with a Single GPU") that places data
+# across GPU, CPU and disk; here the cascade is GPU, host DRAM, CXL device DRAM,
+# then device NAND.
 placement = [PL_HOST_SSD] * len(layers)
 
-# ── KV capacity reservation (audit A12) ──────────────────────────────────────
-# The KV cache is resident for the whole session and occupies the tier it lives
-# in, so those bytes are not available to hold weights. Placement previously
-# ignored it in every baseline: at INT8 16H+32C that put 83.1 GB of state into
-# 76 GB of memory. SemSched reserves it; the baselines did not, which understated
-# their memory pressure and so overstated their throughput.
-#
-# Reserved at the generation mean, PREFILL + TOKENS/2, because the cache grows
-# during decode -- reserving the final size starves the early steps and
-# reserving the initial size over-commits the later ones.
+# KV capacity reservation. The KV cache is resident for the whole session, so
+# the bytes it occupies cannot hold weights. It is reserved at the generation
+# mean, PREFILL + TOKENS/2: the cache grows during decode, so reserving the final
+# size starves the early steps and the initial size over-commits the later ones.
 _kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
 
-# The LP's KV variables are (cg, cc, cd) -- GPU, CPU and DISK percentages -- so
-# a cache that exceeds CPU memory is placed on the slower tiers and charged
-# their bandwidth. It is never discarded. Reserving it from host DRAM and
-# clipping at zero dropped 4.31 GiB at FP16 B=128: FlexGen paid the full
-# capacity penalty and none of the transfer cost for the excess.
-# The LP's cache variables are (cg, cc, cd): GPU, CPU and disk PERCENTAGES,
-# so the cache cascades through the same hierarchy the weights do, GPU first
-# (Sec 4.3). An earlier version pinned KV to host DRAM unconditionally, which
-# was invisible at 72B, where the cache cannot fit beside the weights in HBM
-# anyway, and wrong by 12x at 7B, where FlexGen's own policy would place the
-# cache in HBM and read it at 1792 GB/s rather than 38.4. The KV share of HBM
-# is whatever the weights leave: weights are placed after this block, so the
-# cascade reserves KV from each tier in order and placement gets the rest.
+# The LP's cache variables (cg, cc, cd) are GPU, CPU and disk percentages, so
+# the cache cascades through the same hierarchy as the weights, GPU first
+# (Sec 4.3). What does not fit in one tier goes to the next and is charged that
+# tier's bandwidth; none of it is dropped. Weights are placed after this block
+# and get what the KV reservation leaves in each tier.
 _kv_gpu  = min(_kv_resident, max(0, gpu_hbm_capacity_bytes
                                  - min(sum(L["bytes"] for L in layers),
                                        gpu_hbm_capacity_bytes)))
@@ -163,37 +123,22 @@ gpu_free   = max(0, gpu_hbm_capacity_bytes - _kv_gpu)
 host_free  = max(0, host_dram_capacity_bytes - _kv_host)
 cxl_free   = max(0, cxl_dev_dram_capacity_bytes - _kv_cxl)
 
-# ── FlexGen's working-memory reservation (added 2026-08-14) ───────────────────
-# FlexGen Appendix A makes working memory a HARD LP CONSTRAINT, not leftovers:
-#     gpu_w^p = 2(1-wg)(8h1^2 + 4h1h2) + ...
-# The leading 2 is a double buffer -- the same structure LIA allocates explicitly as
-# gpu_buff_1/gpu_buff_2, and the thing that funds load_weight(i, j+1, k) in Algorithm 1.
-# This simulator had no counterpart to that term: it deducted only the KV reservation,
-# then passed post-placement leftovers as the staging budget. Since the placement below
-# fills every tier to capacity, those leftovers are ~0, so pipeline.py could never walk
-# the issue point back past i-1 and FlexGen's advertised PREFETCH_DEPTH was silently
-# simulated as 0 -- confirmed by a depth 1 -> 0 ablation being bit-identical to five
-# significant figures in all six reported cells.
-#
-# THE TWO HALVES MUST MOVE TOGETHER. Deducting the buffer alone costs FlexGen residency
-# (2-7%); granting a budget alone is impossible because nothing was deducted to grant.
-# Reserving it and handing the pipeline that same reserve is ONE mechanism, and it is
-# exactly the residency-versus-staging trade FlexGen's LP exists to resolve. Splitting it
-# mismodels FlexGen in whichever direction the split is made.
-#
-# SIZE: 2 x the largest unit, mirroring the double buffer, and symmetric with the
-# correction applied to LIA. The KV read term in the App. A expression is omitted because
-# units here already carry their KV read bytes separately; that yields a SMALLER reserve
-# than FlexGen would really hold, which is the conservative direction for a baseline fix.
-#
-# Charged against the fast tiers in the LP's own preference order, GPU before host.
+# Working-memory reservation. FlexGen App. A makes working memory an LP
+# constraint, gpu_w^p = 2(1-wg)(8h1^2 + 4h1h2) + ..., where the leading 2 is
+# the double buffer that funds load_weight(i, j+1, k) in Algorithm 1 (LIA's
+# gpu_buff_1/gpu_buff_2). We reserve 2x the largest unit and the decode pipeline
+# stages into this same reserve: residency given up and staging gained are one
+# trade, so they must use the same bytes. The App. A KV read term is omitted
+# since units carry their KV reads separately, which makes the reserve smaller
+# than FlexGen's. Taken from the fast tiers in the LP's order: GPU, host, CXL.
 _FLEXGEN_WS = 2.0 * max(L["bytes"] for L in layers)
 _ws_rem = _FLEXGEN_WS
 _take = min(_ws_rem, gpu_free);  gpu_free  -= _take; _ws_rem -= _take
 _take = min(_ws_rem, host_free); host_free -= _take; _ws_rem -= _take
 _take = min(_ws_rem, cxl_free);  cxl_free  -= _take; _ws_rem -= _take
-_FLEXGEN_STAGING = _FLEXGEN_WS - _ws_rem      # what the machine could actually reserve
+_FLEXGEN_STAGING = _FLEXGEN_WS - _ws_rem      # what the tiers could hold
 
+# Hot layers are pinned whole, fastest tier first.
 for n in HOT_LAYERS_BY_NAME:
     idx = name_to_idx.get(n)
     if idx is not None:
@@ -208,19 +153,11 @@ for n in HOT_LAYERS_BY_NAME:
             placement[idx] = PL_CXL_DEV_DRAM
             cxl_free -= sz
 
-# FlexGen's LP searches over NINE variables -- (wg, wc, wd) for weights,
-# (cg, cc, cd) for the KV cache and (hg, hc, hd) for activations -- as
-# INDEPENDENT percentages per tier (Sec 4.3, Eq. 1). Bundling a layer's KV into
-# its weight footprint here made every decoder block fail the GPU test on the
-# KV term alone, so the accelerator only ever took lm_head and final_norm and
-# the tier gained 0%. Weights are placed on their own, each tier filled to
-# capacity, matching the LP's structure rather than a per-layer all-or-nothing.
-# FlexGen's LP does NOT place whole layers. Its variables (wg, wc, wd) are
-# PERCENTAGES of the weight tensors on each tier (Sec 4.3, Eq. 1) -- a layer may
-# be split 30/70 across GPU and disk. All-or-nothing placement forfeits that,
-# stranding capacity whenever the next layer does not fit whole. Fractions are
-# tracked per layer and each tier is filled exactly to capacity, which is what
-# the LP's optimum looks like when the only constraint that binds is capacity.
+# The rest of the weights are placed as per-tier fractions. FlexGen's LP has
+# independent percentages for weights (wg, wc, wd), cache (cg, cc, cd) and
+# activations (hg, hc, hd) (Sec 4.3, Eq. 1), so a layer may be split across
+# tiers. Each tier is filled to capacity in order, which is the LP optimum when
+# capacity is the only binding constraint.
 frac_gpu  = [0.0] * len(layers)
 frac_host = [0.0] * len(layers)
 frac_cxl  = [0.0] * len(layers)
@@ -243,12 +180,9 @@ for i, L in enumerate(layers):
     placement[i] = (PL_GPU_HBM if frac_gpu[i] >= 0.999 else
                     PL_HOST_DRAM if frac_host[i] >= 0.999 else
                     PL_CXL_DEV_DRAM if frac_cxl[i] >= 0.999 else PL_HOST_SSD)
-    # FlexGen's LP fills each tier to capacity; the original `break` abandoned
-    # placement at the first layer that did not fit, leaving fast memory unused.
-    # Continue so the tier is actually filled.
 
 
-# ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
+# Prefill: one pass over the weights for the whole prompt.
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s   = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
@@ -259,16 +193,14 @@ for i, L in enumerate(layers):
                 + cxl_time_s(b * fc) + ssd_time_s(b * fd))
     prefill_latency += max(comp_s, mem_time)
 
-# =========================================================================
-# ADD THESE 5 LINES RIGHT HERE
-# =========================================================================
+# Decode accumulators.
 total_read_stall_s         = 0.0
 total_kv_write_stall_s     = 0.0
 per_token_latency          = 0.0
 per_token_read_stall_pcts  = []
 per_token_write_stall_pcts = []
 
-# ── Phase 2: DECODE — replace KV stall block entirely ────────────────────────
+# Decode.
 for token_step in range(TOKENS):
     units              = []
     step_time_s        = 0.0
@@ -285,8 +217,8 @@ for token_step in range(TOKENS):
                  + (cxl_time_s(b * fc) if fc > 0 else 0.0) \
                  + (ssd_time_s(b * fd) if fd > 0 else 0.0)
 
-        # Growing-KV: attention layers read all prior K/V from cache.
-        # KV lives in Host DRAM in FlexGen, so this is a host-DRAM read.
+        # Growing KV: attention reads every cached position from the tiers
+        # holding the cache (see _kv_frac).
         kv_inc_l = kv_cache_increment[L["name"]]
         if kv_inc_l > 0:
             kv_positions_cached = PREFILL_TOKENS + token_step
@@ -300,11 +232,9 @@ for token_step in range(TOKENS):
 
         ltime = max(comp_s, mem_time)
 
-        # ── KV write stall ────────────────────────────────────────────────────
-        # FlexGen §4: KV cache ALWAYS lives in Host DRAM.
-        # Write is ALWAYS serialized after weight read — FlexGen has no
-        # duplex capability. Bus separation (SSD vs DRAM) does NOT help
-        # because FlexGen issues ops sequentially, not concurrently.
+        # KV write stall. FlexGen issues its transfers in sequence and has no
+        # duplex path, so the write is serialized after the weight read even
+        # when the two use different buses.
         kv_stall = 0.0
         if kv_inc_l > 0:
             kv_write_bytes          = kv_inc_l * BATCH_SIZE
@@ -323,17 +253,9 @@ for token_step in range(TOKENS):
         step_time_s += kv_stall           # KV write, serialized after the read
 
 
-    # KV past its reservation displaces weights out of the tier holding it.
-    # Tiers run concurrently; a read may be issued PREFETCH_DEPTH layers early.
-    #
-    # CHANGED 2026-08-14. This used to pass post-placement leftovers, with the comment
-    # "FlexGen's LP fills each tier to capacity, so there is no spare memory to stage
-    # into ... Same rule as every other policy." The first half is true and the second is
-    # not: SemSched does not live on leftovers, it searches for a staging reserve and
-    # holds capacity back to get one. Applying "you may only stage into what you failed to
-    # fill" to the baselines and "you may buy staging with capacity" to the proposal is a
-    # single asymmetry that clamps every baseline's prefetch to zero. FlexGen now reserves
-    # the App. A working buffer above and stages into exactly that.
+    # Tiers run concurrently and a read may be issued PREFETCH_DEPTH layers
+    # early, staged into the App. A working buffer reserved above. KV past its
+    # reservation then displaces weights out of the tier holding it.
     step_time_s += pipelined_time_s(units, PREFETCH_DEPTH, TIER_BW, TIER_LAT,
                                     inflight_budget=max(0.0, _FLEXGEN_STAGING))
     step_time_s += kv_growth_spill_time_s(
@@ -350,14 +272,14 @@ for token_step in range(TOKENS):
 decode_tps = BATCH_SIZE / (per_token_latency / TOKENS)
 
 
-# ── Overall throughput ────────────────────────────────────────────────────────
+# Overall throughput includes a cold load of the model from device NAND.
 total_model_bytes = sum(L["bytes"] for L in layers)
 cold_load         = ssd_time_s(total_model_bytes)
 pf_time           = prefill_latency
 dec_time          = per_token_latency
 
 
-# ── Reporting ─────────────────────────────────────────────────────────────────
+# Op split of one decode step: every weight is read, one token of KV written.
 total_weight_rd = sum(L["bytes"] for L in layers)
 total_kv_wr     = sum(L.get("kv_cache_bytes", 0) for L in layers) / PREFILL_TOKENS
 total_io_vol    = total_weight_rd + total_kv_wr

@@ -1,26 +1,23 @@
 """
-llmflash_baseline.py
+CXL-adapted LLM-in-a-Flash baseline (Alizadeh et al., ACL 2024).
 
-CXL-adapted LLM-in-a-Flash Baseline (Alizadeh et al., ACL 2024).
+At decode step t attention reads (NUM_PREFILL_TOKENS + t) x per-token KV bytes
+x BATCH_SIZE from the unified DRAM pool.
 
-Decode-phase includes growing-KV reads: at decode step t the attention reads
-(NUM_PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from the pooled
-(CXL) DRAM tier.
-
-Mechanisms implemented (paper-faithful):
-  1. Selective Persistence  — attention + embeddings PINNED in CXL DRAM always
-  2. Low-rank Sparsity      — active_frac derived from actual model layer sparsity
-                              FIX: sparsity propagated from decomposed_build_layers
-  3. Sliding Window (k=5)   — incremental delta loading per token
-  4. Row-Column Bundling    — ~1.8× NAND throughput (Table 2)
-  5. Pre-allocated DRAM mgmt — neuron swap rewrite cost modeled
-  6. DRAM window overflow    — overflow-aware NAND load computation
-  7. Prefill full-load       — sparsity collapses during prefill
-  8. BATCH MODEL             — active_frac(B)=1-(1-p)^B; TPS=B/step_time
-  9. Activation-aware turnover:
-       ReLU/FATReLU (paper): ~24% of active set changes per token (§4.1)
-       SiLU/SwiGLU (Qwen/Llama): ~60% turnover — contextual, input-dependent
- 10. KV per-seq FIX          — per-token increment only, not full 512-token cache
+Mechanisms modeled:
+  1. Selective persistence: non-FFN layers (attention, embeddings) stay in the
+     DRAM pool; only what does not fit is read from NAND.
+  2. Sparsity: active fraction from the per-layer sparsity that
+     decomposed_build_layers sets.
+  3. Sliding window (k=5), used as the prefetch depth of the decode pipeline.
+  4. Row-column bundling: factor 1.0 on CMM-H, see BUNDLING_THROUGHPUT_BOOST.
+  5. Preallocated DRAM: no neuron rewrite cost, see DRAM_REWRITE_FRAC.
+  6. DRAM window overflow: active neurons beyond the window come from NAND.
+  7. Prefill: sparsity collapses, so the full FFN is loaded once.
+  8. Batching: active_frac(B) = 1-(1-p)^B, TPS = B / step_time.
+  9. Window turnover by activation (reported, not charged): ~24% per token for
+     ReLU/FATReLU (Sec 4.1), ~60% for SiLU/SwiGLU.
+ 10. KV writes: one token's increment per sequence per step, not the full cache.
 """
 
 from model_cfg import decomposed_build_layers, DEFAULT_MODEL_CFG, BYTES_PER_PARAM
@@ -33,8 +30,8 @@ from sim_cfg import (
 
 
 def compute_time_s(flops):
-    """Identical compute model to FlexGen/LIA/SemSched — compute is a property of
-    the simulated hardware, not of any baseline's scheduling policy."""
+    """Same compute model as FlexGen, LIA and SemSched: compute is a property of
+    the simulated hardware, not of the scheduling policy."""
     if flops <= 0:
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
@@ -44,32 +41,16 @@ from pipeline import pipelined_time_s
 from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
 
-# A10 FIX (BigData 2026): LLM-in-a-Flash pools Host and CXL DRAM into a single
-# unified tier [1] -- as our own section IV-B states. Previously every transfer
-# was charged at CXL_DRAM speed, so the host-resident share of the pool was
-# under-modeled and the strongest baseline was unfairly penalised. The pool is
-# now a capacity-weighted blend of the two DRAM tiers.
-# When an accelerator is attached its HBM joins the pool, which is faithful to
-# LLM-in-a-Flash: its policy is a single unified fast tier, so it benefits from
-# accelerator memory on exactly the same terms we do.
+# LLM-in-a-Flash treats DRAM as one unified tier [1], so host DRAM and CXL
+# device DRAM form a single pool. Accelerator memory joins the pool when one is
+# attached, which gives this policy the same accelerator SemSched gets.
 from sim_cfg import gpu_hbm_capacity_bytes as _g
 _h = host_dram_capacity_bytes
 _c = cxl_dev_dram_capacity_bytes
-# HARMONIC, not arithmetic. Moving B bytes spread over tiers takes
-# sum(bytes_i / bw_i), so the effective bandwidth of a pool is the
-# capacity-weighted HARMONIC mean. The arithmetic mean always overstates it
-# (Jensen), which handed this baseline ~2.8% of free throughput on exactly the
-# bytes every policy has to move. This is an arithmetic correction, not a
-# judgement about their design: their unified-pool POLICY is unchanged.
-# The pool's members fill FASTEST FIRST, because that is what any unified
-# allocator does and what every other policy here is modelled doing. The
-# previous capacity-weighted harmonic blend implicitly spread bytes in
-# proportion to capacity, so ENLARGING the slow member diluted the blend and
-# made more memory slower: measured 65.56 -> 58.55 -> 54.17 t/s across
-# 32/48/64 GB devices, a capacity-monotonicity violation the invariant
-# checker caught. Effective bandwidth is now derived from the bytes actually
-# resident, piecewise fastest-first, which is monotone in every capacity by
-# construction.
+# The pool fills fastest first, as any unified allocator would. Reading bytes
+# spread over tiers takes sum(bytes_i / bw_i), so the pool's bandwidth is derived
+# from the bytes resident in each member (a harmonic mean, not an arithmetic
+# one). This keeps it monotone in every member's capacity.
 _POOL_TIERS = [(_g, GPU_HBM.bw_Bps), (_h, HOST_DRAM.bw_Bps), (_c, CXL_DRAM.bw_Bps)]
 _pool_lat = (_g * GPU_HBM.chunk_latency_s + _h * HOST_DRAM.chunk_latency_s
              + _c * CXL_DRAM.chunk_latency_s) / (_g + _h + _c)
@@ -112,8 +93,8 @@ _WS_SPLIT = {}          # tier-name -> fraction of the resident set it holds
 
 def _set_ws_split(nbytes):
     """Residency of the working set, fastest-first, as per-tier fractions.
-    A read of the resident set is spread in exactly these proportions, and the
-    shared engine then runs the tiers as the independent buses they are."""
+    A read of the resident set is spread in these proportions, and the shared
+    engine runs each tier as an independent bus."""
     global _WS_SPLIT
     names = ["GPU HBM", "Host DRAM", "CXL Device DRAM"]
     left = float(max(nbytes, 1.0))
@@ -132,48 +113,26 @@ def pool_bytes(n):
     """n bytes of pooled reads, as a per-tier byte dict for the engine."""
     return {t: n * f for t, f in _WS_SPLIT.items()}
 
-# ── Paper constants (OPT/ReLU baseline, §3.1 and §4.1) ────────────────────────
+# Paper constants (OPT/ReLU, Sec 3.1 and 4.1).
 WINDOW_SIZE_K             = 5    # Sliding window token count
-# Row-column bundling is real -- LLM-in-a-Flash Table 2 measures it lifting
-# THEIR flash from 1.25 to 2.25 GB/s. It does not transplant onto CMM-H.
-#
-# Zeng et al., verbatim: "The CMM-H device employs a PCIe Gen 4 x4 NVMe SSD."
-# Gen4 x4 carries 7.88 GB/s. The prototype's measured stable miss bandwidth is
-# 5.0 GB/s -- 63% of that link, a normal sustained sequential rate for TLC, and
-# already the product of streaming access. Applying 1.8x on top yields 9.0 GB/s,
-# which is 14% ABOVE the theoretical capacity of the bus the data must cross.
-# No access pattern moves bytes faster than the link carries them.
-#
-# So this is not a choice between two conventions. 1.8 asks the hardware for
-# something it cannot do, and it asked it for one policy only -- no other
-# simulator here has any equivalent term. Every policy now reads the NAND
-# backend at the one documented, physically attainable rate.
+# Row-column bundling lifts the paper's flash from 1.25 to 2.25 GB/s (Table 2),
+# but does not carry over to CMM-H. Zeng et al.: "The CMM-H device employs a PCIe
+# Gen 4 x4 NVMe SSD", a 7.88 GB/s link, and the measured 5.0 GB/s miss bandwidth
+# already reflects streaming access. A 1.8x boost would give 9.0 GB/s, above the
+# link, so every policy reads NAND at the measured rate.
 BUNDLING_THROUGHPUT_BOOST = 1.0
-# CORRECTED 2026-08-14: was 0.25, charged at the application site below as 25% extra
-# traffic on the dominant tier EVERY decode step, cited as "(§3.3)" as though §3.3
-# specified it. It does not. §3.3 introduces the 25% as the problem the paper then
-# removes, and says so in the same breath:
-#     "This is particularly costly when a substantial portion (approximately 25%) of
-#      the FFNs in DRAM needs to be rewritten. To address this issue, we adopt an
-#      alternative memory management strategy ... preallocation of all necessary memory"
-# So the 25% is the strawman LLM-in-a-Flash exists to eliminate, and we were billing it
-# to them as if it were their design -- against the policy that is the binding competitor
-# in every cell of the paper. Preallocation means the rewrite does not happen, so the
-# faithful value is 0.
-#
-# This is a pure fidelity correction and it moves the numbers AGAINST the proposal:
-# LLMFlash gains roughly +15% at GPU INT8 16H+64C (44.88 -> 51.76 t/s per the audit).
-# It flips no published ratio on its own, but it strengthens the competitor everywhere.
-DRAM_REWRITE_FRAC         = 0.0  # preallocated (§3.3) -- see note above
+# Sec 3.3 presents rewriting ~25% of the FFNs in DRAM as the cost that
+# LLM-in-a-Flash avoids by "preallocation of all necessary memory", so no rewrite
+# is charged.
+DRAM_REWRITE_FRAC         = 0.0  # preallocated, Sec 3.3
 
-# ── Activation-function-aware DRAM window turnover ────────────────────────────
-# ReLU/FATReLU (paper §4.1): delta ≈ 2.4% of FFN = 24% of 10% active set
-#   → 24% of window-resident neurons cycle per token
-# SiLU/SwiGLU (Qwen2.5, Llama, Mistral): contextual sparsity is input-dependent
-#   → different tokens activate different neurons → ~60% turnover per token
-#   → empirically: sagg(k+1) - sagg(k) is large because no structural zeros exist
-DRAM_TURNOVER_RELU = 0.24   # OPT/ReLU — paper-faithful
-DRAM_TURNOVER_SILU = 0.60   # SiLU/SwiGLU — contextual, input-dependent
+# DRAM window turnover per token, by activation function.
+# ReLU/FATReLU (Sec 4.1): the delta is ~2.4% of the FFN, i.e. 24% of a 10%
+# active set. SiLU/SwiGLU (Qwen2.5, Llama, Mistral) has no structural zeros, so
+# different tokens activate different neurons and sagg(k+1) - sagg(k) stays
+# large: ~60% of the window changes per token.
+DRAM_TURNOVER_RELU = 0.24   # OPT/ReLU, Sec 4.1
+DRAM_TURNOVER_SILU = 0.60   # SiLU/SwiGLU, input dependent
 
 NUM_DECODE_TOKENS  = 16
 NUM_PREFILL_TOKENS = 512
@@ -189,26 +148,19 @@ def simulate_llmflash():
 
     layers     = decomposed_build_layers(DEFAULT_MODEL_CFG())
 
-    # ── KV capacity reservation (audit A12) ───────────────────────────────────
-    # The unified DRAM pool holds the KV cache as well as weights, so its bytes
-    # are not available for the working set. This previously pooled host + CXL
-    # in full: at INT8 16H+32C that placed 83.1 GB of state into 76 GB of
-    # memory. Reserved at the generation mean, PREFILL + TOKENS/2, since the
-    # cache grows during decode.
+    # KV capacity reservation: the pool holds the KV cache as well as weights.
+    # Reserved at the generation mean, PREFILL + TOKENS/2, since the cache grows
+    # during decode.
     _kv_resident = int(sum(L.get("kv_cache_bytes", 0) for L in layers)
                        / NUM_PREFILL_TOKENS * BATCH_SIZE
                        * (NUM_PREFILL_TOKENS + NUM_DECODE_TOKENS / 2.0))
-    # The pool is host + CXL + accelerator HBM when one is attached: the A10
-    # adaptation note above already blends HBM into the pool BANDWIDTH, and a
-    # pool whose bandwidth includes a tier but whose capacity does not is not a
-    # pool. Invisible at 72B, where weights alone exceed the pool either way;
-    # at 7B it denied the strongest streaming baseline 28 GB it was being
-    # charged the speed of.
+    # Pool capacity includes accelerator memory when attached, matching the pool
+    # bandwidth above.
     from sim_cfg import gpu_hbm_capacity_bytes as _gcap
     total_dram = max(0, _gcap + host_dram_capacity_bytes
                         + cxl_dev_dram_capacity_bytes - _kv_resident)
 
-    # ── Partition layers ───────────────────────────────────────────────────────
+    # Selective persistence: everything except the FFNs is pinned in the pool.
     pinned_layers = [L for L in layers if L.get("kind") != "MLP"]
     ffn_layers    = [L for L in layers if L.get("kind") == "MLP"]
 
@@ -219,46 +171,38 @@ def simulate_llmflash():
     _set_ws_split(_ws)
     total_ffn_bytes    = sum(L["bytes"] for L in ffn_layers)
 
-    # ── Activation function → turnover rate ───────────────────────────────────
-    # Read ACTIVATION_FN from model_cfg if present; default to "silu"
+    # Turnover rate from model_cfg.ACTIVATION_FN, default "silu".
     activation_fn  = getattr(_mcfg, "ACTIVATION_FN", "silu").lower()
     turnover_rate  = DRAM_TURNOVER_RELU if activation_fn == "relu" \
                      else DRAM_TURNOVER_SILU
     activation_label = f"{activation_fn.upper()} → turnover={turnover_rate:.0%}"
 
-    # ── KV per-seq: per-token increment only ──────────────────────────────────
-    # FIX: kv_cache_bytes is the FULL 512-token KV budget stored in layer config.
-    # We only write ONE new token's worth of KV per decode step per sequence.
-    # Wrong:  sum(kv_cache_bytes)        → charges ~80MB per seq per step
-    # Correct: sum(kv_cache_bytes) // 512 → charges ~156KB per seq per step
+    # kv_cache_bytes is the full 512-token KV budget from the layer config; a
+    # decode step writes one token's worth per sequence.
     kv_per_seq_bytes = sum(L.get("kv_cache_bytes", 0)
                            for L in pinned_layers) // NUM_PREFILL_TOKENS
 
-    # ── Single-request active fraction from layer sparsity ────────────────────
-    # Sparsity field correctly populated by decomposed_build_layers (semduplex fix)
+    # Single-sequence active fraction from the per-layer sparsity.
     avg_sparsity       = (sum(L.get("sparsity", 0.54) for L in ffn_layers)
                           / max(len(ffn_layers), 1))
     active_frac_single = 1.0 - avg_sparsity
 
-    # ── BATCH: union of active neuron sets across B sequences ─────────────────
-    # active_frac(B) = 1-(1-p)^B
-    # ReLU B=1: p=0.10  → 10% loaded      (full paper benefit)
-    # SiLU B=1: p=0.46  → 46% loaded      (genuine but smaller benefit)
-    # SiLU B=4: p=0.915 → 91.5% loaded    (mostly collapsed)
-    # SiLU B=8: p=0.993 → 99.3% loaded    (fully collapsed)
+    # Union of active neuron sets across B sequences, active_frac(B) = 1-(1-p)^B:
+    #   ReLU, B=1: 0.10  (full paper benefit)
+    #   SiLU, B=1: 0.46
+    #   SiLU, B=4: 0.915 (mostly collapsed)
+    #   SiLU, B=8: 0.993 (fully collapsed)
     active_frac_batch = min(1.0, 1.0 - (1.0 - active_frac_single) ** BATCH_SIZE)
 
-    # ── DRAM capacity check ────────────────────────────────────────────────────
+    # Share of the pinned layers that fits in the pool; the rest comes from NAND.
     pinned_dram_frac = min(1.0, total_dram / total_pinned_bytes) \
                        if total_pinned_bytes > 0 else 1.0
     dram_remaining   = max(0.0, total_dram - total_pinned_bytes)
 
-    # ── Overflow-aware FFN load decomposition ─────────────────────────────────
-    # dram_window_frac: how much of the batch-active FFN fits in DRAM window
-    #   Large DRAM (32H+64C=96GB, 72B INT8): dram_remaining=72GB > 22GB needed
-    #     → dram_window_frac=0.46, nand_load=0 (LLMFlash never hits NAND at B=1)
-    #   Tight DRAM (16H+32C=48GB, 72B INT8): dram_remaining=24GB
-    #     → at B=4: active=0.915, dram_window=0.50, nand_load=0.415 (20GB NAND)
+    # dram_window_frac: share of the FFN that is active in the batch and fits in
+    # the pool beside the pinned layers. With ample DRAM it equals the active
+    # fraction and nothing is read from NAND; in a tight pool the excess active
+    # neurons overflow to NAND.
     dram_window_frac = min(
         active_frac_batch,
         dram_remaining / total_ffn_bytes if total_ffn_bytes > 0
@@ -269,33 +213,23 @@ def simulate_llmflash():
     nand_load_frac = max(0.0, active_frac_batch - dram_window_frac)
     ffn_nand_bytes = total_ffn_bytes * nand_load_frac
 
-    # DRAM turnover: activation-aware fraction of window that cycles per token
-    # ReLU: 24% of window (neurons are truly zero — low churn)
-    # SiLU: 60% of window (contextual — different inputs activate different neurons)
+    # Share of the window that turns over per token (24% ReLU, 60% SiLU). It is
+    # reported but not charged: turnover sets what is refetched, not what is read.
     dram_turnover_frac = dram_window_frac * turnover_rate
-    # Turnover governs how much of the WINDOW must be re-fetched from NAND, not
-    # how much of the DRAM-resident FFN is read for compute. Every neuron that
-    # fires must be read from wherever it lives, and at B=128 the active
-    # fraction is 1.000 -- the union across the batch is the whole layer. This
-    # previously charged 0.60 x window of the resident FFN, so LLM-in-a-Flash
-    # paid for ~75% of weights it still had to read, where the other four
-    # simulators pay 100%. The re-fetch path below keeps the turnover term.
-    # dram_window_frac is already min(active_frac_batch, capacity share), i.e.
-    # the fraction of the FFN that both fires AND lives in DRAM. Multiplying it
-    # by active_frac_batch again discounts the same sparsity twice: with ample
-    # DRAM the window equals the active fraction, so the read was charged
-    # active^2 -- 0.212 of the FFN at B=1 where 0.460 fires. The two paths must
-    # sum to what fires: window + (active - window) = active. They now do.
+    # Every neuron that fires is read from where it lives, so the DRAM read is the
+    # whole window and window + NAND overflow = active fraction. dram_window_frac
+    # already includes sparsity; multiplying by active_frac_batch would count it
+    # twice.
     ffn_dram_bytes     = total_ffn_bytes * dram_window_frac
     dram_rewrite_bytes = ffn_dram_bytes * DRAM_REWRITE_FRAC
 
     def nand_bundled(n_bytes):
-        """Transfer from CXL NAND with row-column bundling boost."""
+        """Transfer from CXL NAND, divided by the bundling factor (1.0 here)."""
         return transfer_time_s(n_bytes, CXL_SSD_NAND) / BUNDLING_THROUGHPUT_BOOST
 
 
 
-        # ── Decode loop with per-token write stall tracking ───────────────────────
+    # Decode loop with per-token write stall tracking.
     total_kv_write_stall_s  = 0.0
     total_decode_time       = 0.0
     per_token_write_stall_pcts = []
@@ -304,48 +238,46 @@ def simulate_llmflash():
         t        = 0.0
         step_kv  = 0.0
 
-        # Attention weights: pinned in CXL DRAM
+        # Serial cost of the step. The pipelined model below replaces t; only
+        # step_kv and kv_read_bytes_total are carried over from this part.
+
+        # Pinned layers from the pool, any overflow from NAND
         for L in pinned_layers:
             t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
-        # Growing-KV: attention layers read all prior K/V from the pooled CXL DRAM tier.
-        # LLMFlash treats host+CXL DRAM as unified; we use CXL_DRAM as the KV tier.
+        # Growing KV: attention reads every cached position from the pool.
         kv_positions_cached = NUM_PREFILL_TOKENS + token_step
         kv_read_bytes_total = BATCH_SIZE * kv_per_seq_bytes * kv_positions_cached
         t += transfer_time_s(kv_read_bytes_total, DRAM_POOL)
 
-        # FFN DRAM turnover
+        # Active FFN neurons resident in DRAM
         t += transfer_time_s(ffn_dram_bytes, DRAM_POOL)
 
         # FFN NAND overflow
         if ffn_nand_bytes > 0:
             t += nand_bundled(ffn_nand_bytes)
 
-        # DRAM neuron swap overhead
+        # Neuron rewrite, zero with preallocation
         t += transfer_time_s(dram_rewrite_bytes, DRAM_POOL)
 
-        # KV write: fully serialized (simplex) — this is the write stall
+        # KV write, serialized after the reads (simplex); this is the write stall
         step_kv = BATCH_SIZE * transfer_time_s(kv_per_seq_bytes, DRAM_POOL)
         total_kv_write_stall_s += step_kv
         t += step_kv
 
-        # FIX (BigData 2026): LLMFlash previously had NO compute term at all.
-        # Sparsity-driven compute skipping is this paper's own mechanism [1], so
-        # it legitimately receives the FLOP discount that FlexGen/LIA/SemSched do
-        # not: attention runs dense, FFN runs only the active neuron fraction.
-        # We take max(memory, compute) over the whole step, which credits
-        # LLMFlash with perfect load/compute overlap — deliberately generous to
-        # the strongest baseline.
+        # Skipping inactive neurons is this paper's own mechanism [1], so it gets
+        # a FLOP discount that FlexGen, LIA and SemSched do not: attention runs
+        # dense, the FFN runs only its active fraction. max(memory, compute) over
+        # the step assumes perfect load/compute overlap, which favors this baseline.
         comp_attn = sum(L["flops"] for L in pinned_layers) * BATCH_SIZE
         comp_ffn  = sum(L["flops"] for L in ffn_layers) * BATCH_SIZE * active_frac_batch
 
-        # The pooled DRAM and the NAND backend are separate paths, so a window
-        # refill can proceed while resident neurons are read. LLM-in-a-Flash is
-        # a streaming design and its k=5 window is exactly a prefetch depth; the
-        # window itself is the staging room, which is the one policy here that
-        # has any by construction.
+        # The pool and the NAND backend are separate paths, so a window refill
+        # can proceed while resident neurons are read. The k=5 window serves as
+        # the prefetch depth, and pool space left after the resident set is the
+        # staging room.
         _units, _nl = [], max(1, len(ffn_layers))
         for _L in pinned_layers:
             _by = pool_bytes(_L["bytes"] * pinned_dram_frac)
@@ -388,43 +320,31 @@ def simulate_llmflash():
 
 
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # PREFILL PHASE
-    # Sparsity collapses during prefill: ALL neurons must fire to process
-    # the full input context. No window benefit, no delta loading.
-    # Paper Fig 4a: sagg(k) flattening only occurs in decode (steady-state).
-    # SiLU turnover also collapses: prefill must load full FFN every token.
-    # ══════════════════════════════════════════════════════════════════════════
+    # Prefill. Sparsity collapses: every neuron fires over the full prompt, so
+    # there is no window or delta loading (sagg(k) flattens only in decode,
+    # paper Fig 4a).
     prefill_ffn_load = total_ffn_bytes * 1.0   # 100% active during prefill
     prefill_rewrite  = prefill_ffn_load * DRAM_REWRITE_FRAC
 
-    # LLM-in-a-Flash does not model prompt processing. Its Limitations section
-    # states the study is 'limited to single-batch inference' and lists 'more
-    # complex scenarios like prompt processing' as future work. Any prefill
-    # behaviour attributed to it is OUR construction, so we give it the same
-    # standard treatment as every other baseline rather than a pessimistic
-    # extrapolation it never claimed.
-    #
-    # Prefill makes ONE pass over the parameters for the whole prompt: all
-    # NUM_PREFILL_TOKENS positions are processed together, which is exactly why
-    # prefill is compute-bound rather than memory-bound. The previous loop paid
-    # the full weight load once per prompt token, charging LLM-in-a-Flash 512
-    # model loads where every other simulator here pays one, and understating
-    # its prefill throughput by roughly that factor.
+    # LLM-in-a-Flash does not model prompt processing: its Limitations section
+    # says the study is 'limited to single-batch inference' and leaves 'more
+    # complex scenarios like prompt processing' to future work. Prefill gets the
+    # same treatment as the other baselines, one pass over the weights for all
+    # NUM_PREFILL_TOKENS positions, which is why it is compute bound.
     weight_t = 0.0
 
-    # Attention: pinned in DRAM
+    # Pinned layers from the pool, any overflow from NAND
     for L in pinned_layers:
         weight_t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
         if pinned_dram_frac < 1.0:
             weight_t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
-    # FFN: full load from NAND (no sparsity, no window, no delta -- sparsity
-    # collapses during prefill, which is this baseline's own stated assumption)
+    # FFN: full load from NAND, since sparsity collapses during prefill (this
+    # baseline's own assumption)
     weight_t += nand_bundled(prefill_ffn_load)
     weight_t += transfer_time_s(prefill_rewrite, DRAM_POOL)
 
-    # KV writes DO scale with prompt length: one per position per sequence.
+    # KV writes scale with prompt length: one per position per sequence.
     weight_t += (NUM_PREFILL_TOKENS * BATCH_SIZE
                  * transfer_time_s(kv_per_seq_bytes, DRAM_POOL))
 
@@ -439,7 +359,7 @@ def simulate_llmflash():
     total_model_bytes = sum(L["bytes"] for L in layers)
     cold_load = ssd_time_s(total_model_bytes)
 
-    # ── Diagnostics ────────────────────────────────────────────────────────────
+    # Diagnostics
     print(f"=== LLM-in-Flash CXL Baseline (batch={BATCH_SIZE}) ===")
     print(f"  Activation fn          : {activation_label}")
     print(f"  Single-seq active_frac : {active_frac_single:.3f} "
@@ -460,7 +380,7 @@ def simulate_llmflash():
           f"{BATCH_SIZE * kv_per_seq_bytes/1e6:.1f}MB")
     print(f"  Available DRAM         : {total_dram/GiB:.0f}GB total")
 
-    # ── Output in format expected by parse_metrics ─────────────────────────────
+    # Metrics in the format parse_metrics expects
     print(f"Decode throughput: {decode_tps:.4f}")
     print(f"Prefill throughput: {prefill_tps:.6f}")
     print(f"Overall throughput: "
@@ -473,7 +393,7 @@ def simulate_llmflash():
     print(f"Write_Util_Pct: 0.0000%")
 
 
-    # ── compute real IO split ──────────────────────────────────────────────────
+    # Read/write byte split of one decode step
     total_read_bytes  = (sum(L["bytes"] * pinned_dram_frac for L in pinned_layers)
                         + ffn_dram_bytes + ffn_nand_bytes + dram_rewrite_bytes)
     total_write_bytes = BATCH_SIZE * kv_per_seq_bytes

@@ -1,20 +1,14 @@
 """
-run_paper_tables.py — regenerate the Section V tables from whatever is in the
-working tree, so no reported number is traceable only to a shell history.
-
-Every table in the paper had been produced by an ad-hoc script that was not
-committed, which meant a fix to the simulator did not invalidate anything
-visibly: the tables kept saying what they said. This file closes that gap. It
-is the only sanctioned way to produce a number that goes into the paper.
+Regenerate the Section V tables from the current working tree. Every number
+reported in the paper comes from this script.
 
     python run_paper_tables.py                # both platforms, both quants
     python run_paper_tables.py --cpu-only
-    python run_paper_tables.py --diag         # + placement and staging dump
+    python run_paper_tables.py --diag         # print simulator output for failed cells
 
-Each cell runs in a temporary directory holding a private copy of the whole
-simulator, with sim_cfg.py and model_cfg.py rewritten for that cell. Nothing
-mutates the repository, so a failed sweep cannot leave the tree configured for
-one experiment.
+Each cell runs in a temporary directory holding a private copy of the
+simulator, with sim_cfg.py and model_cfg.py (and semduplex_scheduler.py for
+some sweeps) rewritten for that cell. The repository itself is never modified.
 """
 import argparse
 import concurrent.futures as cf
@@ -38,14 +32,12 @@ SIMS = [
 
 # RTX 5090: 32 GB GDDR7, of which 28 GB is usable for weights after activations
 # and the runtime's own footprint. 0 = the CPU-only platform, which is what both
-# CMM-H papers actually characterise.
+# CMM-H papers characterise.
 GPU_GB = 28
 
-# An accelerator is two things, and attaching only one of them is a modelling
-# error that quietly understates every accelerated row: it is HBM capacity AND a
-# compute engine. Setting gpu_hbm_capacity_bytes alone runs GPU memory behind
-# the EPYC's 14.4 TFLOPS, so any layer where compute exceeds transfer is timed
-# on the wrong engine. Both are set together here.
+# An accelerator adds both memory capacity and a compute engine, so both are set
+# together. Setting gpu_hbm_capacity_bytes alone would time compute-bound layers
+# on the EPYC's 14.4 TFLOPS.
 #   EPYC 9454 x2 : 96 cores, AVX-512 (64 FLOP/cyc), 2.75 GHz, 0.85 ->  14.4 TF
 #   RTX 5090     : 170 SMs, 512 FLOP/cyc/SM, 2.41 GHz, 0.70        -> 146.9 TF
 ENGINES = {
@@ -93,10 +85,9 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
             s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
                        "ENABLE_PREFILL_WARMUP = False", s, 1, re.M)
         s = re.sub(r'^KV_TIER\s*=\s*"\w+"', f'KV_TIER = "{kv_tier}"', s, 1, re.M)
-        # The KV_TIER constant alone no longer forces anything: the joint search
-        # iterates _kv_opts and overwrites _best_kv, so patching the constant
-        # returned the same number for every tier. Pin the search itself, the
-        # way plot_reserve_curve.py pins the reserve grid.
+        # The joint search iterates _kv_opts and overwrites _best_kv, so patching
+        # KV_TIER alone has no effect. Pin the search list instead, as
+        # plot_reserve_curve.py does for the reserve grid.
         anchor = ('_kv_opts = ["cxl", "host"] + (["gpu"] '
                   'if gpu_hbm_capacity_bytes else [])')
         assert anchor in s, "kv-tier pin anchor drifted; --kv-tier would no-op"
@@ -122,12 +113,9 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
                 float(p.group(1)) if p else None, out)
 
 
-# ── ShareGPT replay ──────────────────────────────────────────────────────────
-# Real prompt/response lengths rather than a fixed 512/16, which is the one thing
-# a reviewer can check against a workload they know. The distribution is the only
-# thing taken from the corpus: per-layer compute, transfer and KV costs still come
-# from the model geometry, so this strengthens an input without changing how
-# timing is computed.
+# ShareGPT replay: real prompt/response lengths instead of a fixed 512/16. Only
+# the length distribution comes from the corpus; per-layer compute, transfer
+# and KV costs still come from the model geometry.
 def _patch_lengths(td, prefill, decode):
     for f, pat, rep in (
             ("semduplex_scheduler.py", r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
@@ -270,8 +258,7 @@ def comparison(gpu, diag=False, metric="decode"):
 
 
 def warmup_ablation(gpu=0):
-    """Phase-1 staging is the mechanism the paper claims. Measure what it is
-    worth by turning it off, on exactly the configurations we report."""
+    """SemSched with Phase-1 warmup staging on and off, on the reported cells."""
     print(f"\n{'=' * 78}\nPhase-1 warmup ablation"
           f"{'  (+RTX 5090)' if gpu else '  (CPU-only)'}\n{'=' * 78}")
     print(f"{'Quant':<6}{'Memory':<11}{'best base':>11}{'warmup ON':>11}"
@@ -301,11 +288,9 @@ MODELS = [
 def model_sweep(gpu):
     """Model scale, 7B to 405B, at the documented 16H+48C module.
 
-    The paper claims the achievable gain is bounded by the non-dominant share
-    of a step: parity where the model fits entirely in fast memory (nothing to
-    schedule), widest where a second tier is a large share, and narrowing again
-    when NAND dominates everything. A 58x model-size range tests that rule at
-    both ends rather than asserting it from the middle.
+    The gain should be bounded by the non-dominant share of a step: parity when
+    the model fits in fast memory, largest when a second tier holds a large
+    share, and narrowing again when NAND dominates.
     """
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
     names = [n for n, _ in SIMS]
@@ -329,14 +314,12 @@ def model_sweep(gpu):
 
 
 def kv_tier_sweep(gpu):
-    """Where should the KV cache live?
+    """Decode throughput with the KV cache pinned to each tier.
 
-    Each tier is charged both ways -- capacity reserved before placement, and
-    every KV access timed at its bandwidth -- so the answer is not simply "the
-    fastest tier". Putting KV in HBM reads it 66x faster than the device but
-    evicts an equal mass of weights down to a slower tier, and the weights are
-    read every step too. The question is which of the two exchanges is cheaper,
-    and it is a measurement, not an argument.
+    Each tier is charged for the capacity KV reserves before placement and for
+    every KV access at its bandwidth. KV in HBM is read 66x faster than from the
+    device, but it evicts an equal mass of weights to a slower tier, and those
+    are read every step too.
     """
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
     tiers = ["cxl", "host"] + (["gpu"] if gpu else [])
@@ -362,13 +345,11 @@ BATCHES = [1, 2, 4, 8, 16, 32, 64, 128]
 def batch_sweep(gpu, quant, c, h=16):
     """Locate the sparsity-collapse crossover.
 
-    The active fraction of an MLP sub-layer under LLM-in-a-Flash's own model is
-    1 - (1 - p)^B with p = 0.46, which saturates at 1.000 by B = 16. Above that
-    every policy reads every byte once per step and the step time is pinned to
-    sum(bytes(tier) / bw(tier)) -- the byte-accounting floor -- so placement
-    capacity is the only thing left that can differ and all five converge.
-    Below it, semantic placement has something to act on. This sweep measures
-    where that transition actually falls rather than asserting it.
+    Under LLM-in-a-Flash's model the active fraction of an MLP sub-layer is
+    1 - (1 - p)^B with p = 0.46, which reaches 1.000 by B = 16. Beyond that every
+    policy reads every byte once per step, the step time is pinned to the
+    byte-accounting floor sum(bytes(tier) / bw(tier)), and all five policies
+    converge. Returns (B, {policy: tps}, SemSched / best baseline) per batch.
     """
     names = [n for n, _ in SIMS]
     rows = []

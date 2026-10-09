@@ -1,19 +1,17 @@
 """
-cxl_link.py — full-duplex CXL 2.0 link queueing model.
+Full-duplex CXL 2.0 link queueing model.
 
 Models CXL.mem as a full-duplex link with two independent lanes:
-    Rx (read) lane  — weight reads from CXL device DRAM/NAND
-    Tx (write) lane — KV-cache writes back to CXL device DRAM
+    Rx (read) lane:  weight reads from CXL device DRAM/NAND
+    Tx (write) lane: KV-cache writes back to CXL device DRAM
 
-Each lane has independent bandwidth (typical: ~27 GB/s effective per direction
-on a PCIe 5.0 x8 link, sources: Wang et al. IPDPS'25; Liu et al. arXiv 2409.14317).
+Each lane has its own bandwidth, typically ~27 GB/s effective per direction on
+a PCIe 5.0 x8 link (Wang et al. IPDPS'25; Liu et al. arXiv 2409.14317).
 
-Wired into semduplex_scheduler.py, where it replaced the earlier
-DUPLEX_PENALTY multiplier for decode-phase write accounting.
-
-Note on the Rx lane: schedule_read() accumulates occupancy for utilization
-reporting only. Read *timing* is set by the tier model in tiers.py, so the
-return value is intentionally unused and reads are not double-charged.
+semduplex_scheduler.py uses it for decode-phase KV write accounting. There,
+schedule_read() only accumulates Rx occupancy for utilization reporting: read
+timing comes from the tier model in tiers.py, so its return value is unused
+and reads are not charged twice.
 """
 
 
@@ -28,7 +26,7 @@ class CXLLink:
         effective sustained throughput per direction.
     txn_overhead_s : float
         Per-transaction protocol overhead (flit framing, flow-control credit
-        accounting). Default 10ns; documented range 7–15ns for CXL 2.0.
+        accounting). Default 10 ns; documented range 7 to 15 ns for CXL 2.0.
 
     State
     -----
@@ -57,8 +55,8 @@ class CXLLink:
         """
         Issue a synchronous read on the Rx lane.
 
-        Returns the time the caller must wait (exposed stall = end - t_now).
-        Caller blocks until the read completes — this is on the critical path.
+        Returns the time a blocking caller waits for the read to complete
+        (exposed stall = end - t_now).
         """
         start = max(t_now, self.rx_busy_until) + self.txn_overhead
         dur = n_bytes / self.bw
@@ -72,9 +70,9 @@ class CXLLink:
         """
         Issue a background write on the Tx lane.
 
-        Tx lane runs independently of Rx (full duplex), so writes do NOT
-        block reads. The caller continues immediately; the write completes
-        asynchronously. We track whether the write meets its deadline.
+        The Tx lane runs independently of Rx (full duplex), so writes do not
+        block reads. The caller continues immediately and the write completes
+        asynchronously; only a missed deadline is reported.
 
         Parameters
         ----------
@@ -89,10 +87,9 @@ class CXLLink:
         Returns
         -------
         exposed_s : float
-            0.0 if the write finishes by `deadline`. Otherwise, the wall-clock
-            slip — i.e. how far past `deadline` the Tx lane is still busy.
-            The caller (scheduler) is responsible for accounting this slip as
-            an actual stall on the next dependent step.
+            0.0 if the write finishes by `deadline`, otherwise how far past
+            `deadline` the Tx lane is still busy. The caller charges this slip
+            as a stall.
         """
         start = max(t_now, self.tx_busy_until) + self.txn_overhead
         dur = n_bytes / self.bw

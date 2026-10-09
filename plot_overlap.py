@@ -1,13 +1,12 @@
 """
-plot_overlap.py -- one decode step in time, measured both ways.
+Timeline of one decode step, with the tiers filled and with a searched reserve.
 
-The paper's claim is temporal: a NAND read over a filled device enters the
-critical path, and the same read over a searched reserve is issued ahead and
-completes behind fast-tier work. This figure shows that on the real schedule,
-not a schematic: the unit list is dumped from an actual decode step of the
-shipped scheduler and of the same scheduler with the search pinned to a filled
-device, and the schedule is reconstructed by a replica of the timing engine
-whose final time is asserted equal to pipelined_time_s on exactly these units.
+With the tiers filled, a NAND read lands on the critical path; with a reserve,
+the same read is issued ahead and completes behind fast-tier work. The unit
+list is dumped from a real decode step of the shipped scheduler and of the
+same scheduler pinned to a filled device. schedule() replays it with a copy of
+the timing engine that records events, and asserts its end time equals
+pipelined_time_s on the same units.
 
     python plot_overlap.py            # run both schedulers, then plot
     python plot_overlap.py --cached   # replot from overlap_data.json
@@ -37,8 +36,8 @@ from tiers import CXL_HOST_LINK_CEILING                     # noqa: E402
 
 CHUNK = 256 * 1024
 
-# The dump is injected immediately before the decode loop's engine call, so the
-# schedule plotted is the one the reported number is made of.
+# The dump is injected right before the decode loop's engine call, so the plot
+# shows the schedule behind the reported number.
 ANCHOR = """            lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
                                    TIER_LAT,
                                    inflight_budget=max(0.0, _prefetch_reserve
@@ -53,8 +52,8 @@ DUMP = """            if token_step == 0 and not __import__("os").path.exists("o
                     open("overlap_dump.json", "w"))
 """ + ANCHOR
 
-# The filled variant is the paper's own ablation pin, identical to
-# plot_reserve_curve.py: reserve nothing, KV on the device, full capacity.
+# Pins for the filled variant, the same as plot_reserve_curve.py: zero reserve,
+# KV on the device, full device capacity.
 PINS = [
     ("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
                0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""",
@@ -177,9 +176,9 @@ def main():
         data = {"filled": measure(pin=True), "reserved": measure(pin=False)}
         json.dump(data, open(DATA, "w"))
 
-    # Window: centred on NAND-bearing units of the SHIPPED schedule, and the
-    # same unit indices are shown for the filled one, so the panels compare the
-    # identical sub-layers.
+    # Window around NAND-bearing units of the shipped (reserved) schedule; the
+    # filled panel shows the same unit indices, so both panels show the same
+    # sub-layers.
     xr, cr, t_res = schedule(data["reserved"])
     _, _, t_fil = schedule(data["filled"])
     nand_units = sorted({i for i, tier, *_ in xr if tier == "CXL Device NAND"})
@@ -200,8 +199,7 @@ def main():
     lim = max(end_a, end_b) * 1e3 * 1.03
     for ax in axes:
         ax.set_xlim(0, lim)
-    # the identical twelve units, on one clock: (b) finishes earlier, and the
-    # emptiness to the right of its last bar IS the saving.
+    # Same twelve units on one clock; the gap after (b)'s last bar is the saving.
     axes[1].axvline(end_b * 1e3, color="#3D4C5C", linewidth=0.7,
                     linestyle=(0, (4, 3)))
     axes[1].annotate(f"same units,\n{(1 - end_b / end_a) * 100:.0f}% sooner",

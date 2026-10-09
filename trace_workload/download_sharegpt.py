@@ -1,9 +1,10 @@
 """
-download_sharegpt.py - extract (prefill_len, decode_len) pairs from ShareGPT.
+Extract (prefill_len, decode_len) pairs from ShareGPT V3 (unfiltered, cleaned
+split): the first user turn and the first assistant reply of each conversation.
 
 Uses tiktoken cl100k_base (GPT-4 tokenizer) as a proxy for Qwen's tokenizer.
-For sequence-length distribution analysis, exact tokenizer choice does not
-materially affect the simulation result.
+For a length distribution, the exact tokenizer does not materially affect the
+simulation result.
 
 Output: trace_workload/sharegpt_lens.json
         list of [prefill_tokens, decode_tokens] pairs.
@@ -25,7 +26,7 @@ def main():
 
     enc = tiktoken.get_encoding("cl100k_base")
 
-    # Load ShareGPT — try the unfiltered Vicuna dump first.
+    # ShareGPT V3 from the Vicuna unfiltered dump on Hugging Face.
     print("Loading ShareGPT...")
     try:
         from datasets import load_dataset
@@ -37,9 +38,9 @@ def main():
     except Exception as e:
         print(f"ShareGPT load failed: {e}")
         print("Falling back to a synthetic distribution drawn from typical LLM-serving traces.")
-        # Distribution drawn from published vLLM/SGLang benchmarks: prefill skews
-        # bimodal (short chat 80-300 tok; longer task 500-2500 tok), decode
-        # roughly log-normal around 100-500 tok.
+        # Bimodal mix modelled on published vLLM/SGLang benchmark traces: 60%
+        # short chat (prefill 80-320, decode 50-350 tokens), 40% longer tasks
+        # (prefill 500-2500, decode 150-700), each drawn uniformly.
         import random
         random.seed(0)
         pairs = []

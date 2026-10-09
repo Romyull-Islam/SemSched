@@ -1,27 +1,19 @@
 """
-verify_results.py — check the reported tables against properties that must hold,
-rather than against a previous run of the same code.
+Check the reported tables against properties that must hold. A re-run only
+shows determinism, so the remaining checks are invariants:
 
-Every defect found in this project passed a re-run. The capacity double-count
-reproduced to six figures for ten days; the identical 63.17 across three cache
-sizes reproduced perfectly; so did LLM-in-a-Flash scoring higher at B=1 than at
-B=2. Determinism is not correctness, so this file tests invariants instead:
-
-  1. DETERMINISM      the same cell twice gives the same number
-  2. CAPACITY         no tier holds more than it has, KV included
-  3. FLOOR            no policy is faster than its own bytes allow
-  4. CAPACITY MONO    more device DRAM never makes a policy slower
-  5. BATCH MONO       larger batch lowers throughput only for a stated reason
-  6. INVARIANCE       a policy whose number does NOT move when capacity does
-                      must have a reason (zero NAND residency); otherwise flag
-
-Check 6 is the one that matters. Three separate bugs this project hit announced
-themselves as a result that would not move when the thing it depends on moved,
-and each time the number looked plausible. Invariance is treated here as a
-failure to be explained, not as stability.
+  1. determinism      the same cell twice gives the same number
+  2. capacity         no tier holds more than it has, KV included
+  3. floor            no policy is faster than its own bytes allow
+  4. capacity mono    more device DRAM never makes a policy slower
+  5. batch mono       larger batch lowers throughput only for a stated reason
+  6. invariance       a number that does not move when capacity does needs a
+                      reason (zero NAND residency); otherwise it is flagged
+  7. model scale      deterministic per model, and throughput decreasing in
+                      the bytes a decode step moves
 
     python verify_results.py            # all checks, both platforms
-    python verify_results.py --quick    # skip the batch sweep
+    python verify_results.py --quick    # skip check 5; check 7 on the GPU platform only
 """
 import argparse
 import os
@@ -43,7 +35,6 @@ def report(cat, ok, msg, warn=False):
     print(f"  {tag:>4}  {msg}")
 
 
-# ── 1. determinism ────────────────────────────────────────────────────────────
 def check_determinism(gpu):
     print("\n1. DETERMINISM — same cell twice")
     for quant, c in (("fp16", 48), ("int8", 32)):
@@ -54,10 +45,9 @@ def check_determinism(gpu):
                    f"{name:<9} {quant} 16H+{c}C: {a} vs {b}")
 
 
-# ── 2/3. capacity and floor, from each simulator's own placement ──────────────
-# Injected inside run_semantic_duplex_simulation's try block, so it carries that
-# block's indentation. Unindented, it is a SyntaxError the simulator reports as
-# a failed run rather than a failed probe.
+# Checks 2 and 3 read SemSched's placement through LEDGER, which is injected
+# inside run_semantic_duplex_simulation's try block and so carries that block's
+# indentation (unindented, the simulator would report a failed run).
 LEDGER = '''
         import collections as _cc, json as _js
         _t = _cc.Counter()
@@ -104,10 +94,9 @@ def check_capacity_and_floor(gpu):
             if led is None:
                 report("cap", False, f"{quant} 16H+{c}C: no ledger"); continue
             tiers, kv, caps = led["tiers"], led["kv"], led["caps"]
-            # The KV cache is charged to whichever tier the placement search
-            # picked, which is no longer always the device. Attribute it by the
-            # split the simulator reports rather than assuming, or a policy that
-            # correctly moved its cache to host DRAM reads as a 137% over-commit.
+            # The placement search can put KV on any tier, so attribute it by
+            # the split the simulator reports; assuming the device would count a
+            # cache moved to host DRAM as a device over-commit.
             split = led.get("kv_split") or {"cxl": 1.0}
             kv_by = {"gpu": "GPU HBM", "host": "Host DRAM", "cxl": "CXL Device DRAM"}
             for key, lbl in (("cxl", "CXL Device DRAM"), ("gpu", "GPU HBM"),
@@ -129,7 +118,6 @@ def check_capacity_and_floor(gpu):
                    f"({step/floor if floor else float('inf'):.2f}x)")
 
 
-# ── 4/6. capacity monotonicity, and invariance that needs a reason ────────────
 def check_capacity_monotonicity(gpu):
     print("\n4. CAPACITY MONOTONICITY — more device DRAM never slower")
     print("6. INVARIANCE — a number that does not move must have a reason")
@@ -156,18 +144,15 @@ def check_capacity_monotonicity(gpu):
                            "-- check its placement has no spill", warn=True)
 
 
-# ── 7. model scale ───────────────────────────────────────────────────────────
 MODELS = ["Mistral7BCfg", "Llama13BCfg", "Qwen3_20BCfg",
           "Qwen2_5_72BCfg", "Llama3_1_405BCfg"]
 
 
 def _step_bytes(cfg_name, quant):
-    """Bytes a decode step must move for this model at this quant: weights once,
-    plus the KV cache read at the generation midpoint. This, not parameter
-    count, is the quantity throughput is monotone in -- Llama 13B (full MHA,
-    54 GB of KV read per step) legitimately decodes SLOWER than Qwen3 20B
-    (GQA, 11 GB), and the first draft of this check flagged all ten policies
-    for that architectural fact."""
+    """Bytes a decode step moves for this model and quant: weights once, plus
+    the KV cache read at the generation midpoint. Throughput is monotone in
+    this, not in parameter count: Llama 13B (full MHA, 54 GB of KV per step)
+    decodes slower than Qwen3 20B (GQA, 11 GB)."""
     import model_cfg as M
     bpp = {"fp16": 2, "int8": 1}[quant]
     cfg = getattr(M, cfg_name)
@@ -179,10 +164,8 @@ def _step_bytes(cfg_name, quant):
 
 
 def check_model_scale(gpu):
-    """Determinism per model, and throughput monotone DECREASING in per-step
-    bytes across models. The first run of the model sweep produced 12x and
-    4.2x readings that this file, pinned to 72B, could not see; this check
-    exists so the next such defect fails a run instead of reaching a table."""
+    """Determinism per model, and throughput decreasing in per-step bytes
+    across models. The other checks only cover 72B."""
     print("\n7. MODEL SCALE — throughput decreasing in per-step bytes; deterministic")
     for quant in ("fp16", "int8"):
         order = sorted(MODELS, key=lambda c: _step_bytes(c, quant))
@@ -205,17 +188,12 @@ def check_model_scale(gpu):
                    + ("" if not bad else "  MORE BYTES, FASTER: " + str(bad)))
 
 
-# ── 5. batch monotonicity ────────────────────────────────────────────────────
 def check_batch_monotonicity(gpu):
-    """Throughput usually rises with batch, because weight bytes are constant in
-    B while B tokens are produced. It does NOT have to. LLM-in-a-Flash's DRAM
-    window is capacity-capped, so between B=1 and B=2 its active set grows 1.54x
-    while the window cannot grow at all and the whole difference comes from
-    NAND: overflow grows 2.29x against a 2x batch, and throughput falls 3%.
-    That is their design under memory pressure, measured, not an accounting
-    error -- and the opposite of the active_frac^2 defect that once inflated
-    B=1. So a drop is reported for explanation rather than failed outright; only
-    an unexplained one is a defect."""
+    """Throughput usually rises with batch, since weight bytes are fixed while
+    B tokens are produced, but it need not. LLM-in-a-Flash's DRAM window is
+    capacity-capped: from B=1 to B=2 its active set grows 1.54x, the window
+    cannot grow, NAND overflow grows 2.29x against a 2x batch, and throughput
+    falls about 3%. That drop is reported as expected; any other drop fails."""
     print("\n5. BATCH MONOTONICITY — a drop must have a stated reason")
     for quant in ("fp16", "int8"):
         for name, sim in R.SIMS:

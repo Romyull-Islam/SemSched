@@ -1,12 +1,11 @@
 """
-plot_evaluation.py -- the three evaluation panels, each measured.
+The three evaluation panels:
 
-  (a) decode throughput across memory capacity, which is the headline claim
-  (b) per-token write stall, which is what the duplex lane actually buys
+  (a) decode throughput across device memory capacity
+  (b) per-token KV write stall, which the duplex lane reduces
   (c) ShareGPT speedup distribution, on real prompt and response lengths
 
-Every value is produced by the same harness that produces the tables, so a
-figure cannot drift from a table. Nothing is read from a saved PDF.
+Values are measured with run_paper_tables.py, the same harness as the tables.
 
     python plot_evaluation.py            # measure and plot
     python plot_evaluation.py --cached   # replot from evaluation_data.json
@@ -31,13 +30,8 @@ OUT = os.path.join(REPO, "figures", "fig_evaluation.pdf")
 sys.path.insert(0, REPO)
 
 POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "SemSched"]
-# Okabe-Ito; SemSched is the only saturated colour, the baselines are muted.
-# Muted baselines, one saturated contribution. The four greys form a MONOTONIC
-# light-to-dark ramp in legend order, so a reader maps legend to bar by position
-# without re-checking: the previous set put LLMFlash darker than FlexGen, which
-# broke that mapping, and its adjacent contrast was 1.22:1, indistinguishable in
-# greyscale print. This ramp runs 1.35-1.51:1 between neighbours, and SemSched
-# stays Okabe-Ito blue, the only hue on the panel.
+# SemSched in Okabe-Ito blue; baselines as a light-to-dark grey ramp in legend
+# order, 1.35-1.51:1 contrast between neighbours so they separate in greyscale.
 COL = {"FlexGen": "#D5DBE0", "LIA": "#B4BEC6", "AimPod": "#93A0AA",
        "LLMFlash": "#72808D", "SemSched": "#0072B2"}
 HATCH = {"SemSched": ""}
@@ -80,7 +74,7 @@ def plot(d):
     })
     fig, axes = plt.subplots(1, 3, figsize=(7.16, 2.05))
 
-    # ── (a) decode across capacity ──────────────────────────────────────────
+    # (a) decode across capacity
     ax = axes[0]
     caps = sorted(d["decode"], key=int)
     w, n = 0.16, len(POLICIES)
@@ -93,15 +87,14 @@ def plot(d):
     ax.set_xticklabels([f"16H+{c}C" for c in caps])
     ax.set_ylabel("decode throughput (tok/s)")
     ax.set_title("(a) capacity sensitivity, INT8", fontsize=8, pad=4)
-    # One legend for the whole figure, above all three panels: panels (a) and
-    # (b) share the policy colours, and an in-panel legend either sits on the
-    # bars or collides with the panel title.
+    # One figure-level legend above the panels, since (a) and (b) share the
+    # policy colours and an in-panel legend would cover bars or the title.
     fig.legend(*ax.get_legend_handles_labels(), frameon=False, ncol=5,
                loc="upper center", bbox_to_anchor=(0.5, 1.035),
                handlelength=1.1, columnspacing=1.3, fontsize=7)
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
 
-    # ── (b) write stall ─────────────────────────────────────────────────────
+    # (b) write stall
     ax = axes[1]
     ys = [d["stall"][p] for p in POLICIES]
     ax.bar(range(len(POLICIES)), ys, width=0.62,
@@ -116,7 +109,7 @@ def plot(d):
     ax.set_ylim(0, max(ys) * 1.22)
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
 
-    # ── (c) ShareGPT distribution ───────────────────────────────────────────
+    # (c) ShareGPT speedup CDF
     ax = axes[2]
     for key, lbl, col, dash in (("gpu", "$+$RTX 5090", "#0072B2", "-"),
                                 ("cpu", "CPU-only", "#D55E00", "--")):

@@ -1,32 +1,25 @@
 """
-pipeline.py — one timing engine, shared by every policy.
+Step timing engine shared by every policy.
 
-The previous model charged a step as sum(bytes(tier) / bw(tier)): every tier
-read serialized behind every other. That is not the machine. Accelerator memory,
-the host memory controller and the CXL device are independent buses, and reads
-issued to different ones proceed at the same time. Charging them serially
-overstates a step by up to 2.35x (INT8 16H+32C: 2.32 s serial against 0.99 s
-when the tiers run concurrently) and, worse, makes the step time a function of
-total bytes alone -- which is why every policy returned the same number no
-matter how it placed them.
+Accelerator memory, the host memory controller and the CXL device are
+independent buses, so reads issued to different tiers proceed concurrently.
+Summing bytes(tier) / bw(tier) over all tiers would make step time depend on
+total bytes alone, whatever the placement.
 
-What a policy can actually capture of that concurrency is decided by how far
-ahead it can issue a read. A transfer for layer i can only overlap work that
-runs before layer i executes, so a scheduler that looks one layer ahead hides
-one layer's worth of time and a scheduler that looks thirty-two ahead hides
-thirty-two. That is a real difference between these systems and it is stated in
-their papers, so it is a parameter here rather than an assumption:
+How much of that concurrency a policy captures depends on how far ahead it can
+issue a read: a transfer for layer i can only overlap work that runs before
+layer i. The lookahead K comes from each system's paper or artifact:
 
     FlexGen    K=1   Algorithm 1 overlaps "the weights load of the next layer"
     LLMFlash   K=5   sliding window of k=5 tokens (Sec 3.2)
     SemSched   K=32  PREFETCH_QUEUE_DEPTH, 16-thread asynchronous I/O pool
-    LIA        K=0   no weight prefetch described; CXL memory is read on demand
-    CXLAimPod  K=0   pooled device memory, no prefetch described
+    LIA        K=1   next-layer double buffer in the ISCA'25 artifact
+    CXLAimPod  K=4   sequential device-side prefetch window
 
-Two constraints keep this honest. Transfers on the SAME tier serialize -- one
-bus, one queue -- so a policy cannot conjure bandwidth by issuing early. And the
-CXL device DRAM and its NAND backend share the host link, so their combined rate
-is capped by it no matter how deep the lookahead.
+Two constraints apply. Transfers on the same tier serialize (one bus, one
+queue), so issuing early cannot create bandwidth. And CXL device DRAM and its
+NAND backend share the host link, which caps their combined rate at any
+lookahead depth.
 """
 from tiers import CXL_HOST_LINK_CEILING
 
@@ -46,7 +39,10 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                      each transfer against the unit that needs it; a value >=
                      len(units) issues everything at t=0 and the pass costs the
                      slowest tier plus the compute tail.
-    tier_bw          {tier: bytes/s}. tier_lat {tier: seconds per chunk}.
+    tier_bw          {tier: bytes/s}; tiers missing here are not charged.
+    tier_lat         {tier: seconds per chunk_bytes chunk}.
+    inflight_budget  bytes that may be fetched but not yet consumed; None means
+                     unbounded.
 
     Returns the completion time of the last unit's compute.
     """
@@ -61,32 +57,24 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
 
     for i, (by_tier, comp_s) in enumerate(units):
         # A transfer may be issued once we are within `prefetch_depth` units of
-        # needing it. Depth 0 means it starts only when the preceding unit has
-        # finished computing -- demand paging, nothing overlapped. Depth d looks
-        # d units further back, so the issue point is unit i-d-1.
+        # needing it. Depth 0 starts it when the preceding unit finishes
+        # computing (demand paging); depth d issues it at the end of unit i-d-1.
         j = i - prefetch_depth - 1
         issue_at = comp_done[j] if j >= 0 else 0.0
 
-        # Bytes fetched ahead of consumption have to live somewhere. A lookahead
-        # of K units needs room for the units still in flight, and a scheduler
-        # cannot prefetch into memory it does not have -- SemSched's device cache
-        # has 0.02-0.36 GB free against sub-layers of 0.4-0.9 GB, so an unbounded
-        # K=32 would be claiming a 14 GB staging buffer that does not exist.
-        # `inflight_budget` caps how far ahead the issue point may actually move:
-        # walk back from unit i only while the accumulated bytes fit.
+        # Prefetched bytes need somewhere to live until they are consumed, so
+        # `inflight_budget` limits how far ahead the issue point can move. For
+        # example, SemSched's device cache has 0.02-0.36 GB free against
+        # sub-layers of 0.4-0.9 GB, far from the ~14 GB an unbounded K=32 needs.
         if inflight_budget is not None:
             # Issuing unit i's read at comp_done[m] leaves units m+1..i fetched
-            # but not yet consumed, so that is what has to be buffered. Start at
-            # m = i-1, which needs room for unit i alone, and walk back only
-            # while the accumulated bytes still fit.
+            # but not yet consumed. Start at m = i-1 (room for unit i alone) and
+            # walk back while the accumulated bytes still fit.
             m = i - 1
             acc = sum(units[i][0].values())
-            # m >= 0 is load-bearing, not defensive: without it a negative m
-            # indexes units[] from the END of the list, so the walk accumulated
-            # some other unit's bytes and stopped in the wrong place, and once
-            # m passed -len(units) it raised IndexError outright. Reaching
-            # m < 0 means everything back to unit 0 fits, which is exactly the
-            # case the issue_at guard below already reads as "issue at t=0".
+            # m >= 0 is required: a negative m would index units[] from the end.
+            # Reaching m < 0 means everything back to unit 0 fits, i.e. issue
+            # at t=0.
             while m > j and m >= 0:
                 nxt = sum(units[m][0].values())
                 if acc + nxt > inflight_budget:

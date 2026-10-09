@@ -1,22 +1,21 @@
 """
-cmmh_hybrid.py — a CMM-H-style hybrid CXL device in gem5/SimCXL.
+A CMM-H-style hybrid CXL device in gem5/SimCXL.
 
-SimCXL ships a flat Type 3 expander. CMM-H is not flat: it is a DDR4 cache in
-front of a NAND backend, and the whole point of the device is the hit/miss
-step between them. This config builds that hierarchy explicitly:
+SimCXL ships a flat Type 3 expander; CMM-H is a DDR4 cache in front of a NAND
+backend. Here the cache-hit and cache-miss paths are separate address ranges
+behind a device-side crossbar, so a traffic generator picks one by address:
 
-    TrafficGen ──┬── host DRAM      (DDR5-4800, fast, small)
-                 │
-                 └── CXLBridge ── CXL DRAM cache (DDR4-2666)
-                                        │  miss
-                                        └── NAND backend (slow, large)
+    gen, gen2 -> membus -+- host DRAM          (DDR5-4800)
+                         +- cxl_bus -+- CXL DRAM cache  (DDR4, hit path)
+                                     +- NAND backend    (miss path)
 
 Every tier size is an argument. Run through sweep.py rather than directly.
 
 Modes
-  stream  one sequential read stream        -> calibrate against the prototype
-  duplex  concurrent read + write streams   -> test the write-injection claim
-  trace   replay a decode trace             -> not yet wired
+  stream      one sequential read stream        -> calibrate against the prototype
+  duplex      reads alone, then reads + writes  -> test the write-injection claim
+  concurrent  target tier and host DRAM at once -> test bus independence
+  trace       replay a decode trace             -> not yet wired
 
 Calibration targets, Soltaniyeh et al. HotStorage 2025:
   cache hit   27 GB/s   505 ns
@@ -71,9 +70,8 @@ system.clk_domain = SrcClockDomain(clock="2.75GHz",
                                    voltage_domain=VoltageDomain())
 system.mem_mode = "timing"
 
-# ── Address map ───────────────────────────────────────────────────────────────
-# Laid out low-to-high in speed order so the traffic generator can target a
-# tier simply by choosing an address range.
+# Address map, laid out fastest tier first; the traffic generator targets a
+# tier by choosing its address range.
 cur = 0
 ranges = {}
 for name, size in (("accel", gb(args.accel_mem)),
@@ -93,14 +91,13 @@ system.membus = SystemXBar()
 def simple_mem(rng, latency_ns, bw_GBps):
     """A tier expressed as its measured achieved bandwidth and latency.
 
-    SimpleMemory rather than a DRAMInterface: the CXL tiers' numbers come from
-    the CMM-H prototype as achieved figures, and re-deriving them from DDR
-    timing parameters would substitute our guess at the device's internals for
-    its published measurements.
+    SimpleMemory rather than a DRAMInterface: the CMM-H numbers are published
+    achieved figures, and deriving them from DDR timing parameters would mean
+    guessing at the device's internals.
     """
-    # null=True: gem5 backs every address range with real host RAM, so a
-    # 16+48+1024 GB hierarchy would need 1 TB of it and dies in instantiate().
-    # We characterise timing, not data, so no backing store is needed.
+    # null=True: otherwise gem5 backs every range with host RAM, and a
+    # 16+48+1024 GB hierarchy fails in instantiate(). Only timing is modelled,
+    # not data.
     m = SimpleMemory(range=rng,
                      latency=f"{latency_ns}ns",
                      bandwidth=f"{bw_GBps}GB/s",
@@ -108,24 +105,23 @@ def simple_mem(rng, latency_ns, bw_GBps):
     return m
 
 
-# ── Tiers ─────────────────────────────────────────────────────────────────────
 if ranges["accel"]:
     system.accel_mem = simple_mem(ranges["accel"], 300, 1792.0)   # GDDR7
     system.accel_mem.port = system.membus.mem_side_ports
 
-# Configured rates are CALIBRATED, not nominal: gem5's SimpleMemory admits
-# more than its configured bandwidth under this generator, and the overshoot is
-# rate-dependent (~9% at 38 GB/s, ~6% at 25), so each tier carries its own
-# empirically-fitted factor. The target is the CMM-H prototype's MEASURED
-# figures: host 38.4, device DRAM cache 27.0, NAND backend 5.0 GB/s.
+# Configured rates are calibrated, not nominal: SimpleMemory admits more than
+# its configured bandwidth under this generator, by a rate-dependent amount
+# (~9% at 38 GB/s, ~6% at 25), so each tier has its own fitted factor. Targets
+# are the CMM-H prototype's measured rates: host 38.4, device DRAM cache 27.0,
+# NAND backend 5.0 GB/s.
 CAL_HOST = 38.4 / 38.47 * (27.0 / 29.429)
 CAL_CXL  = 27.0 / 26.33 * (27.0 / 29.429)
 CAL_NAND = 5.0 / 4.96 * (27.0 / 29.429)
 system.host_mem = simple_mem(ranges["host"], 200, 38.4 * CAL_HOST)     # DDR5-4800
 system.host_mem.port = system.membus.mem_side_ports
 
-# The CXL device sits behind its own bridge so link behaviour is modelled
-# rather than assumed. Both device tiers hang off the device-side bus.
+# Both device tiers hang off their own device-side crossbar, behind the
+# system membus.
 system.cxl_bus = SystemXBar()
 system.cxl_dram = simple_mem(ranges["cxl"], 505, 27.0 * CAL_CXL)      # DDR4 cache
 system.cxl_dram.port = system.cxl_bus.mem_side_ports
@@ -134,12 +130,11 @@ system.nand.port = system.cxl_bus.mem_side_ports
 
 system.cxl_bus.cpu_side_ports = system.membus.mem_side_ports
 
-# ── Traffic ───────────────────────────────────────────────────────────────────
 system.gen = PyTrafficGen()
 system.gen.port = system.membus.cpu_side_ports
-# A second generator, so two tiers can be driven at the same instant. One
-# generator interleaving addresses cannot test bus independence: its own issue
-# rate becomes the bottleneck and the tiers take turns.
+# A second generator drives another tier at the same time. One generator
+# interleaving addresses cannot test bus independence: its own issue rate
+# becomes the bottleneck and the tiers take turns.
 system.gen2 = PyTrafficGen()
 system.gen2.port = system.membus.cpu_side_ports
 
@@ -163,9 +158,8 @@ def generator():
         # Read one tier: the calibration point.
         yield stream(tgt, dur, 1.0)
     elif args.mode == "duplex":
-        # The claim under test. First reads alone, then reads with writes
-        # interleaved. If the link is genuinely full-duplex the second phase
-        # should not slow the reads down.
+        # Reads alone, then reads with writes interleaved. On a full-duplex
+        # link the second phase should not slow the reads down.
         yield stream(tgt, dur, 1.0)               # phase 1: pure read
         yield stream(tgt, dur, 0.5)               # phase 2: read + write
     elif args.mode == "concurrent":
@@ -185,9 +179,8 @@ def generator2():
                                        ranges["host"].end, args.req_size,
                                        1000, 1000, 100, 0)
     else:
-        # In every other mode this generator must exist but do nothing. An
-        # immediate exit here ended the WHOLE simulation at tick 0, which is
-        # why the duplex phase produced an empty stats file.
+        # Idle in every other mode. An exit here would end the whole
+        # simulation at tick 0 and leave stats.txt empty.
         yield system.gen2.createIdle(2 * dur + 1000)
     yield system.gen2.createExit(0)
 
@@ -202,7 +195,7 @@ print(f"[cmmh_hybrid] mode={args.mode} host={args.host_dram} "
       f"cxl={args.cxl_dram} nand={args.nand} accel={args.accel_mem}")
 exit_event = m5.simulate()
 # gem5 does not dump stats on its own when a script ends this way, and an empty
-# stats.txt is indistinguishable from a run that produced no traffic.
+# stats.txt looks the same as a run with no traffic.
 m5.stats.dump()
 print(f"[cmmh_hybrid] exiting @ tick {m5.curTick()}: "
       f"{exit_event.getCause()}")
