@@ -1,29 +1,14 @@
-# lia_baseline.py
-# ─────────────────────────────────────────────────────────────────────────────
-# SIMULATOR: LIA — LLM Inference Acceleration (Kim et al., ISCA '25)
+# LIA baseline (Kim et al., ISCA '25): weights tiered below the GPU into CXL
+# memory, KV cache kept in host DDR.
 #
-# Decode-phase includes growing-KV reads: at decode step t the attention layer
-# reads (PREFILL_TOKENS + t) × per-token-KV-bytes × BATCH_SIZE from host DDR
-# (LIA's KV residence tier). KV read and write share the DDR bus and serialize.
-# ─────────────────────────────────────────────────────────────────────────────
+# Each decode step is timed by pipeline.pipelined_time_s over the layers' weight
+# reads and growing-KV reads; at step t attention reads
+# (PREFILL_TOKENS + t) x per-token KV bytes x BATCH_SIZE from host DDR.
 #
-# Layer-step timing:
-#   ltime = max(comp_s, weight_mem_time, kv_write_time)
-#
-# Weight reads use the CXL link (Rx direction) and KV writes use the host DDR
-# bus — these are physically separate buses, so the model permits them to
-# overlap with compute on the CPU. This is the hardware-accurate interpretation
-# of the LIA setup; a conservative serial-sum interpretation gives results
-# within ~0.3% on the configurations tested.
-#
-# Stall accounting (separated):
-#   Read  stall : max(0, weight_mem_time - comp_s)
-#                 CXL DRAM (or NAND overflow) fetch blocking compute
-#   Write stall : dram_time_s(kv_bytes)
-#                 KV write to Host DRAM, serialized after weight read
-#                 (LIA has separate CXL bus for reads and DDR bus for writes,
-#                  but does NOT pipeline them — that is SemDuplex's innovation)
-# ─────────────────────────────────────────────────────────────────────────────
+# Reported stalls (diagnostics, not added to the step time):
+#   read stall  : max(0, weight_mem_time - comp_s), the CXL DRAM (or NAND)
+#                 weight fetch in excess of compute
+#   write stall : time to write the step's new KV to host DRAM
 
 import math
 import pandas as pd
@@ -36,25 +21,11 @@ from model_cfg import build_layers, BYTES_PER_PARAM
 from tiers import GPU_HBM
 from pipeline import pipelined_time_s
 
-# CORRECTED 2026-08-14. This was PREFETCH_DEPTH = 0, justified as "LIA describes no weight
-# prefetch ... crediting lookahead they do not claim would be inventing a system." The
-# premise is false, and it denied LIA the one mechanism FlexGen is granted for free.
-#
-# LIA's official ISCA'25 artifact (ece-fast-lab/ISCA-2025-LIA, lia/modeling_opt.py)
-# prefetches the NEXT layer into an alternating double buffer on a dedicated stream:
-#     load_weight_stream = torch.cuda.Stream()
-#     if idx < len(self.layers) - 1:
-#         with torch.cuda.stream(load_weight_stream):
-#             load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2,
-#                        self.layers[idx+1], i, overlap=overlap)
-#     overlap = not no_overlap          # ON by default
-# and that sits in the `decoding_policy in [2, 4]` branch -- the branch every CXL run in
-# scripts/cxl_offloading.sh takes. Read directly from the badged artifact source on
-# 2026-08-14; ACM returns 403 for the PDF, so the artifact is the evidence, not the prose.
-#
-# Depth 1 is LIA's own design and is the SAME value FlexGen already receives for the
-# identical single-layer-lookahead mechanism. Granting it to one policy and withholding it
-# from the other was the asymmetry; this is the correction, not a favour.
+# One layer of weight prefetch. LIA's ISCA'25 artifact (ece-fast-lab/ISCA-2025-LIA,
+# lia/modeling_opt.py) loads layer idx+1 into an alternating double buffer
+# (gpu_buff_1 / gpu_buff_2) on a separate load_weight_stream, with overlap on by
+# default, in the `decoding_policy in [2, 4]` branch that every CXL run in
+# scripts/cxl_offloading.sh uses. FlexGen gets the same depth for the same mechanism.
 PREFETCH_DEPTH = 1
 TIER_BW  = {"GPU HBM": GPU_HBM.bw_Bps, "Host DRAM": HOST_DRAM.bw_Bps,
             "CXL Device DRAM": CXL_DRAM.bw_Bps,
@@ -79,7 +50,6 @@ PREFILL_TOKENS          = 512
 PREFILL_FLOP_MULTIPLIER = 15.0
 
 
-# ── Timing helpers ────────────────────────────────────────────────────────────
 def compute_time_s(flops):
     if flops <= 0: return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core * parallel_efficiency)
@@ -91,31 +61,20 @@ def ssd_time_s(n):  return transfer_time_s(
     n, Tier("Host SSD (stream)", NVME_STREAM_BW, NVME_STREAM_LAT_S))
 
 
-# ── Build model ───────────────────────────────────────────────────────────────
 layers = build_layers(sequence_length=PREFILL_TOKENS)
 kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 
 
-# ── LIA Placement: ALL weights → CXL DRAM, spill to NAND only on overflow ────
-# LIA is "A Single-GPU LLM Inference Acceleration" -- Sapphire Rapids with an
-# A100 or H100. CXL is the tier BENEATH the GPU, not a replacement for it.
+# Placement: GPU HBM, then CXL device DRAM, then NAND. LIA is single-GPU
+# inference (Sapphire Rapids with an A100 or H100), so CXL is the tier below the
+# GPU. Host DRAM holds only the KV cache.
 placement = []
 gpu_free  = gpu_hbm_capacity_bytes
 
-# ── KV capacity reservation (audit A12, completed) ───────────────────────────
-# A12 reserved KV capacity in FlexGen, CXLAimPod and LLM-in-a-Flash but skipped
-# LIA, on the grounds that its published policy already keeps host DRAM
-# exclusively for the KV cache. That is true, and sufficient only while the
-# cache FITS in host DRAM. At B=128 it does not: 20.31 GiB of KV against a
-# 16 GiB host at FP16. LIA was storing 127% of a tier in it and paying nothing
-# for the excess -- the same defect A12 corrected everywhere else.
-#
-# The overflow goes where a CXL machine puts it: the device DRAM. That costs
-# LIA twice, and both are real. The bytes occupy device capacity that can no
-# longer hold weights, and they are read at the device's 27 GB/s rather than
-# the host's 38.4 GB/s on every step. Nothing LIA's paper claims is removed --
-# its cascade, its host-resident KV policy and its GPU tier are untouched; the
-# cache is simply required to fit somewhere.
+# KV is reserved at the generation mean, PREFILL_TOKENS + TOKENS/2. What does not
+# fit in host DRAM (e.g. 20.31 GiB of KV against a 16 GiB host at FP16 B=128)
+# goes to CXL device DRAM, where it displaces weights and is read at 27 GB/s
+# instead of 38.4 GB/s.
 _kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
 _kv_in_host  = min(_kv_resident, host_dram_capacity_bytes)
@@ -133,31 +92,18 @@ for L in layers:
     else:
         placement.append(PL_CXL_DEV_NAND)
 
-# ── Staging budget for the next-layer prefetch (added 2026-08-14) ─────────────
-# PREFETCH_DEPTH alone cannot do anything: pipeline.py can only walk the issue point
-# back past i-1 if there are in-flight bytes to hold the fetch, and the budget passed
-# below was gpu_free + cxl_free -- both driven to ~0 by a cascade that fills every tier
-# to capacity. So LIA was advertised at depth 1 and silently simulated at depth 0. That
-# is the same structural clamp the audit found on every baseline, and it is why depth
-# and budget have to be corrected together; each is inert alone.
-#
-# SIZE COMES FROM THE ARTIFACT, NOT FROM WHAT IS LYING AROUND. modeling_opt.py allocates
-# exactly two weight buffers (gpu_buff_1, gpu_buff_2) and alternates them by layer
-# parity, so the staging LIA actually holds is 2 x the largest unit -- not "all free
-# memory", which would hand it an unearned advantage of a different kind.
-#
-# WHERE IT LIVES. LIA keeps host DRAM exclusively for the KV cache (see the A12 note
-# above), which is why the weight cascade above never emits PL_HOST_DRAM -- that is
-# faithful, not a bug. But whatever the KV does not occupy is idle, and idle host DRAM is
-# precisely where create_buffer() would put staging. At FP16 B=128 the KV is 20.31 GiB
-# against a 16 GiB host, so this is 0 and nothing changes; at INT8 the cache is smaller
-# and the buffers fit, which is where the correction bites.
+# Staging for the next-layer prefetch. pipeline.py moves the issue point earlier
+# than unit i-1 only if the in-flight bytes fit in this budget, and the cascade
+# leaves gpu_free and cxl_free near 0, so without it depth 1 behaves as depth 0.
+# The size follows the artifact: two weight buffers alternated by layer parity,
+# i.e. 2x the largest layer. They can use host DRAM the KV leaves free (none at
+# FP16 B=128, some at INT8).
 _LIA_HOST_FREE = max(0.0, host_dram_capacity_bytes - _kv_in_host)
 _LIA_DOUBLE_BUF = 2.0 * max(L["bytes"] for L in layers)
 _LIA_STAGING = min(_LIA_DOUBLE_BUF, gpu_free + cxl_free + _LIA_HOST_FREE)
 
 
-# ── Phase 1: PREFILL ──────────────────────────────────────────────────────────
+# Prefill
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
@@ -170,9 +116,9 @@ for i, L in enumerate(layers):
     prefill_latency += max(comp_s, mem_time)
 
 
-# ── Phase 2: DECODE ───────────────────────────────────────────────────────────
-total_read_stall_s         = 0.0   # CXL/NAND weight fetch blocking compute
-total_kv_write_stall_s     = 0.0   # Host DRAM KV write serialized after weight
+# Decode
+total_read_stall_s         = 0.0   # CXL/NAND weight fetch in excess of compute
+total_kv_write_stall_s     = 0.0   # KV write time to host DRAM
 per_token_latency          = 0.0
 kv_layer_count             = 0
 per_token_read_stall_pcts  = []
@@ -189,7 +135,6 @@ for token_step in range(TOKENS):
         kv_scaled = kv_inc[L["name"]] * BATCH_SIZE
         comp_s    = compute_time_s(L["flops"] * BATCH_SIZE)
 
-        # ── Weight read from CXL tier ─────────────────────────────────────────
         if placement[i] == PL_CXL_DEV_DRAM:
             weight_mem_time = cxl_time_s(weight_sz)
         elif placement[i] == PL_CXL_DEV_NAND:
@@ -197,8 +142,8 @@ for token_step in range(TOKENS):
         else:
             weight_mem_time = dram_time_s(weight_sz)
 
-        # Growing-KV: attention reads all prior K/V from host DRAM (LIA places KV
-        # cache in host DDR). KV read shares the DDR bus with the KV write.
+        # Attention reads all cached K/V from host DRAM, sharing the DDR bus with
+        # the KV write.
         kv_read_time = 0.0
         if kv_scaled > 0:
             kv_positions_cached = PREFILL_TOKENS + token_step
@@ -208,16 +153,12 @@ for token_step in range(TOKENS):
                              + (cxl_time_s(kv_read_bytes * _kv_cxl_frac)
                                 if _kv_cxl_frac > 0 else 0.0))
 
-        # ── Read stall: CXL fetch in excess of compute ────────────────────────
         read_stall = max(0.0, weight_mem_time - comp_s)
         total_read_stall_s += read_stall
         step_read_stall_s  += read_stall
 
-        # ── Write stall: KV to Host DRAM ──────────────────────────────────────
-        # Weight read on the CXL link, KV write on host DDR — physically
-        # independent buses. ltime takes the max across the three contending
-        # paths (compute, CXL read, DDR write+read) since each runs on
-        # independent hardware. KV read+write share the DDR bus and serialize.
+        # Weight reads use the CXL link and KV traffic uses host DDR, so ltime is
+        # the max of compute, weight read, and KV read + write (which share DDR).
         kv_write_time = 0.0
         if kv_scaled > 0:
             kv_write_time           = (dram_time_s(kv_scaled * (1.0 - _kv_cxl_frac))
@@ -253,14 +194,14 @@ for token_step in range(TOKENS):
 decode_tps = BATCH_SIZE / (per_token_latency / TOKENS)
 
 
-# ── Overall throughput ────────────────────────────────────────────────────────
+# Overall throughput includes a cold load of the weights from NVMe.
 total_model_bytes = sum(L["bytes"] for L in layers)
 cold_load         = ssd_time_s(total_model_bytes)
 pf_time           = prefill_latency
 dec_time          = per_token_latency
 
 
-# ── Reporting ─────────────────────────────────────────────────────────────────
+# Reporting
 total_weight_rd = sum(L["bytes"] for L in layers)
 total_kv_wr     = sum(L.get("kv_cache_bytes", 0) for L in layers) / PREFILL_TOKENS
 total_io_vol    = total_weight_rd + total_kv_wr
@@ -276,7 +217,6 @@ print(f"Overall throughput: {(PREFILL_TOKENS + TOKENS) / (cold_load + pf_time + 
 avg_read_stall_pct  = sum(per_token_read_stall_pcts)  / len(per_token_read_stall_pcts)
 avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
 
-# Separated stall reporting
 print(f"Read_Stall_Time_s:  {total_read_stall_s      / TOKENS:.6f}")
 print(f"Read_Stall_Pct:     {avg_read_stall_pct:.4f}%")
 print(f"Write_Stall_Time_s: {total_kv_write_stall_s  / TOKENS:.6f}")

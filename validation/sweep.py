@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-sweep.py — drive SimCXL across the same memory matrix as the main artifact.
+Drive SimCXL over the same (host DRAM, CXL DRAM) grid as the main artifact.
 
-The point of this file is that no tier size is hard-coded anywhere. The main
-artifact's results are a *surface* over (host DRAM, CXL DRAM), not a point:
-the advantage peaks where NAND residency divided by cache capacity is near
-unity, so any validation that fixes one configuration cannot test the claim
-that matters. This sweeps the same grid.
+The main results are a surface over that grid, peaking where NAND residency
+over cache capacity is near 1, so the validation sweeps the grid rather than
+fixing one configuration. No tier size is hard-coded.
 
     ./sweep.py --hosts 8 16 32 64 --cxls 32 48 64 96
     ./sweep.py --hosts 16 --cxls 48 --gpu 28        # the headline point
@@ -26,9 +24,8 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 GEM5 = os.path.join(REPO, "SimCXL", "build", "X86", "gem5.opt")
 CONFIG = os.path.join(REPO, "configs", "cmmh_hybrid.py")
 
-# CMM-H prototype, Soltaniyeh et al. HotStorage 2025. These are the calibration
-# targets: whatever we build inside gem5 has to reproduce them before any
-# result from it means anything.
+# Calibration targets from the CMM-H prototype (Soltaniyeh et al., HotStorage
+# 2025); the gem5 model must reproduce these first.
 CMMH = {
     "dram_hit_bw_GBps":   27.0,
     "dram_hit_lat_ns":    505,

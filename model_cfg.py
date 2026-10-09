@@ -1,15 +1,12 @@
-# model_cfg.py
 from dataclasses import dataclass
 
 
-# ---- QUANT PRESET (change this one line to switch quantization for all sims) ----
-QUANT = "fp32" # Auto-set
-# ----------------------------------------------------------------
+# Weight precision for all simulators: "fp32", "fp16", "int8" or "int4".
+QUANT = "fp32" # patched per run by run_paper_tables.py
 
 
-# --- NEW: Scaling factor to create a more realistic, compute-bound scenario ---
+# Multiplier on per-layer FLOPs (2 x params per token); 1.0 leaves them unscaled.
 FLOP_PROXY_SCALE = 1.0
-# ----------------------------------------------------------------
 
 
 BYTES_PER_PARAM = {
@@ -20,7 +17,7 @@ BYTES_PER_PARAM = {
 }[QUANT]
 
 
-# Mistral 7B configuration (replaces original Llama7B)
+# Mistral 7B
 @dataclass(frozen=True)
 class Mistral7BCfg:
     num_blocks: int = 32
@@ -28,10 +25,10 @@ class Mistral7BCfg:
     emb_dim: int = 4096
     mlp_hidden: int = 14336
     q_heads: int = 32
-    kv_heads: int = 8  # Mistral uses grouped-query attention (GQA)
+    kv_heads: int = 8  # grouped-query attention (GQA)
 
 
-# 13B model configuration, based on Llama 2 13B (UNCHANGED)
+# Llama 2 13B
 @dataclass(frozen=True)
 class Llama13BCfg:
     num_blocks: int = 40
@@ -39,14 +36,14 @@ class Llama13BCfg:
     emb_dim: int = 5120
     mlp_hidden: int = 13824
     q_heads: int = 40
-    kv_heads: int = 40  # Multi-Head Attention
+    kv_heads: int = 40  # multi-head attention
 
 
-# NEW: Qwen3 20B configuration (April 2024, ~20B params, different series from Phi-3.5/Mistral/Llama)
+# Qwen3-style 20B configuration (~20B params)
 @dataclass(frozen=True)
 class Qwen3_20BCfg:
     num_blocks: int = 40
-    vocab_size: int = 151936  # Qwen3 uses larger vocab
+    vocab_size: int = 151936  # Qwen vocabulary
     emb_dim: int = 6144
     mlp_hidden: int = 22016
     q_heads: int = 40
@@ -54,22 +51,19 @@ class Qwen3_20BCfg:
 
 
 
-# NEW: Qwen2.5 72B configuration (decoder-only, dense)
-# Public materials indicate an ~72B model with 80 layers, 8192 embedding dim,
-# 64 attention heads with GQA (8 KV heads), ~28,672 MLP hidden, and ~152K vocab.
-# This matches common open 70B-class shapes while keeping Qwen’s large vocab. [web:451][web:440]
+# Qwen2.5 72B, dense decoder: 80 layers, 8192 emb dim, 64 Q heads / 8 KV heads
+# (GQA), ~152K vocab. The default model.
 @dataclass(frozen=True)
 class Qwen2_5_72BCfg:
     num_blocks: int = 80
-    vocab_size: int = 152064        # ~152K vocab typical in Qwen2.5 releases
+    vocab_size: int = 152064
     emb_dim: int = 8192
-    mlp_hidden: int = 28672         # SwiGLU-style intermediate dim (effective)
+    mlp_hidden: int = 28672         # SwiGLU intermediate dim
     q_heads: int = 64
-    kv_heads: int = 8               # GQA (KV heads)
+    kv_heads: int = 8               # GQA
 
 
-# Llama-3.1 405B -- the largest open dense model, added to test whether the
-# mechanism holds when the weight footprint far exceeds every DRAM tier.
+# Llama 3.1 405B, for a weight footprint far larger than every DRAM tier.
 # 126 layers, 16384 emb dim, 128 Q heads / 8 KV heads (GQA), 53248 MLP hidden,
 # 128256 vocab. FP16 footprint ~810 GB against 64 GB of DRAM: 92% NAND-resident.
 @dataclass(frozen=True)
@@ -82,9 +76,8 @@ class Llama3_1_405BCfg:
     kv_heads: int = 8
 
 
-# Default model configuration (change to switch models for all sims)
-DEFAULT_MODEL_CFG = Qwen2_5_72BCfg # Auto-set
-# ----------------------------------------------------------------
+# Model used by all simulators.
+DEFAULT_MODEL_CFG = Qwen2_5_72BCfg # patched per run by run_paper_tables.py
 
 
 def build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
@@ -127,11 +120,10 @@ def decomposed_build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
     head_dim = d // cfg.q_heads
     kv_total = cfg.kv_heads * head_dim
 
-    # Calculate attention and MLP parameters separately
     attn_params = (d * d) + (d * head_dim * cfg.q_heads) + (d * kv_total) + (d * d)  # Q, K, V, O
     mlp_params = (d * cfg.mlp_hidden) + (cfg.mlp_hidden * d) + (d * cfg.mlp_hidden)  # Gate, Up, Down
 
-    # KV cache bytes pertain only to attention layer
+    # Only the attention sublayer carries KV cache
     kv_cache_bytes = 2 * cfg.kv_heads * head_dim * sequence_length * BYTES_PER_PARAM
 
     for L in base_layers:
@@ -164,7 +156,7 @@ def decomposed_build_layers(cfg=DEFAULT_MODEL_CFG(), sequence_length=512):
 
 
 
-# Hot layers to pin in Host DRAM first (modify for placement experiments)
+# Layers FlexGen pins whole in the fastest tier with room
 HOT_LAYERS_BY_NAME = ("lm_head", "final_norm")
 
 

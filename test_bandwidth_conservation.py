@@ -1,14 +1,10 @@
 """
-test_bandwidth_conservation.py — physical-plausibility invariants.
+Physical-plausibility invariants: no modeled transfer may move bytes faster
+than the tier it crosses can carry them.
 
-The defect that motivated this file: Phase-1 staging divided the *whole* NAND
-transfer time by the thread-pool size, which divides the bytes/bandwidth term as
-well and implies ~80 GB/s out of a 5 GB/s device. No test could catch it, because
-no test asserted that a modeled transfer respects the physical rate of the tier
-it crosses.
-
-These tests make that class of error unrepresentable rather than merely absent:
-any future change that moves bytes faster than a tier can carry them fails here.
+Includes a regression test for dividing the whole NAND staging time, bandwidth
+term included, by the thread-pool size, which implies ~80 GB/s from a 5 GB/s
+device.
 
     python -m pytest test_bandwidth_conservation.py -q
 """
@@ -28,7 +24,7 @@ def effective_bw(nbytes, seconds):
     return nbytes / seconds if seconds > 0 else float("inf")
 
 
-# ── The transfer model itself ────────────────────────────────────────────────
+# The transfer model itself
 
 @pytest.mark.parametrize("tier", ALL_TIERS, ids=lambda t: t.name)
 @pytest.mark.parametrize("nbytes", [IO_CHUNK_BYTES, 1 * GB, 10 * GB, 200 * GB])
@@ -53,10 +49,14 @@ def test_tier_ordering_holds():
     assert HOST_DRAM.chunk_latency_s < CXL_DRAM.chunk_latency_s < CXL_SSD_NAND.chunk_latency_s
 
 
-# ── Phase-1 staging: the regression test for the original defect ─────────────
+# Phase-1 staging
 
 def stage_schedule(layer_bytes, n_threads):
-    """Reproduce semduplex_scheduler's Phase-1 staging schedule."""
+    """Phase-1 staging time with per-chunk latency amortized over n_threads.
+
+    semduplex_scheduler.py keeps the latency serial, which is never faster than
+    this, so the bounds below also cover it.
+    """
     t = 0.0
     for b in layer_bytes:
         bw_term = b / CXL_SSD_NAND.bw_Bps
@@ -68,10 +68,7 @@ def stage_schedule(layer_bytes, n_threads):
 
 @pytest.mark.parametrize("n_threads", [1, 4, 16, 64, 1024])
 def test_staging_respects_nand_bandwidth_at_any_thread_count(n_threads):
-    """Threads amortize per-chunk latency; they cannot beat the bandwidth floor.
-
-    This is the assertion that would have caught the original `dur / |T|` bug.
-    """
+    """Threads amortize per-chunk latency; they cannot beat the bandwidth floor."""
     layers = [1.41 * GB] * 71          # ~100 GB of NAND-resident FP16 sublayers
     total = sum(layers)
     t = stage_schedule(layers, n_threads)
@@ -89,9 +86,9 @@ def test_more_threads_never_reduce_time_below_the_bandwidth_bound():
 
 
 def test_the_original_buggy_formula_is_rejected():
-    """Guard on the guard: the old model must FAIL this suite.
+    """The `dur / |T|` formula must violate the bandwidth floor.
 
-    If this ever passes, the invariant has been weakened into uselessness.
+    If it does not, the invariant is too weak to catch that bug.
     """
     layers = [1.41 * GB] * 71
     total = sum(layers)

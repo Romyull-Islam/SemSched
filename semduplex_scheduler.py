@@ -1,30 +1,22 @@
-# semduplex_scheduler.py
-# ------------------------------------------------------------
-# SIMULATOR: Semantic-Aware Duplex CXL Scheduler (SemSched)
-# ------------------------------------------------------------
+# SemSched simulator: hybrid-CXL LLM inference with
+#   - sub-layer placement (attention and MLP placed separately, order set by
+#     PLACEMENT_ORDER) and a per-configuration search over the staging reserve
+#     and the KV-cache tier,
+#   - optional Phase-1 NAND staging into device DRAM (STAGE_RESERVE_FRAC),
+#   - K=32 lookahead, sparsity-ranked prefetching on a 16-thread I/O pool,
+#   - a two-queue full-duplex CXL link (cxl_link.py): independent Rx and Tx lanes
+#     (27 GB/s each, 505 ns per transaction). A write that fits under the read
+#     window costs nothing; one that overruns it is charged the slip as stall.
+#     Uwrite is measured from the queue (tx_busy_total / t_end).
 #
-# Models hybrid-CXL LLM inference with:
-#   - sub-layer semantic placement (Attention / MLP placed by type & sparsity)
-#   - 16-thread parallel NAND warmup before decode
-#   - deep-lookahead (K=32) sparsity-ranked prefetching
-#   - two-queue full-duplex CXL link model (cxl_link.py) for honest
-#     read/write concurrency accounting:
-#       - independent Rx and Tx lanes (27 GB/s each, 505 ns overhead),
-#       - writes fitting under the read window are truly free (no penalty),
-#       - writes exceeding the window expose their slip as actual stall,
-#       - Uwrite is *measured* from the queue (tx_busy_total / t_end),
-#         not derived from post-hoc byte accounting.
+# Prefill throughput is per sequence (PREFILL_TOKENS / pf_time_val), the
+# convention of the baselines (FlexGen, LIA, LLMFlash).
 #
-# Prefill throughput is reported per-sequence (PREFILL_TOKENS / pf_time_val)
-# to match the convention of the baselines (FlexGen, LIA, LLMFlash).
-#
-# Decode-phase modeling:
-#   - Growing KV: at decode step t, attention reads (PREFILL_TOKENS + t) ×
-#     per-token-KV-bytes × BATCH_SIZE from CXL DRAM (linear-in-context KV growth).
-#   - Adaptive low-batch streaming: when BATCH_SIZE < ADAPTIVE_BATCH_THRESHOLD,
-#     MLP transfer bytes are scaled by active_fraction = 1 - (1 - sparsity)^B
-#     (mimicking the LLMFlash sliding-window policy for batch-1 efficiency).
-# ------------------------------------------------------------
+# Decode:
+#   - growing KV: step t reads (PREFILL_TOKENS + t) x per-token KV bytes x
+#     BATCH_SIZE from the KV tier;
+#   - below ADAPTIVE_BATCH_THRESHOLD, the per-layer pass scales MLP transfer
+#     bytes by the active fraction 1 - (1 - sparsity)^B (LLMFlash sliding window).
 
 import math
 import pandas as pd
@@ -66,42 +58,21 @@ PREFILL_FLOP_MULTIPLIER = 15.0
 
 DUPLEX_PENALTY = 1.15
 
-# Which tier holds the KV cache. This is a placement decision, not a constant of
-# the hardware, and the baselines disagree about it: FlexGen and LIA put KV in
-# host DRAM, CXLAimPod in the device, LLM-in-a-Flash in a unified pool. SemSched
-# has always used the device, on the argument that weights are read-only and so
-# NAND-safe while KV is written every step and can never spill -- so the tier
-# weights can least afford to lose is the one KV should occupy.
-#
-# That argument is about *safety*, not speed, and it was never measured. The
-# knob exists so it can be. A tier is charged both ways: capacity is reserved
-# from it before placement, and every KV read and write is timed at its
-# bandwidth. If the cache does not fit, the remainder spills to the next slower
-# tier and is timed there -- the rule now applied to every simulator.
+# Tier for the KV cache: "cxl" | "host" | "gpu". Its capacity is reserved before
+# placement, KV reads and writes are timed at its bandwidth, and overflow spills
+# to the next slower tier. The decode setup searches the KV tier over _kv_opts
+# together with the staging reserve, so this value only seeds that search.
 KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
 
-# Which order placement considers sub-layers in. "semantic" is the paper's
-# contribution and the default, so the shipped behaviour is unchanged. The
-# alternatives exist so the contribution can be ABLATED: the measured advantage
-# has so far been attributed to the staging reserve and the prefetch depth,
-# neither of which is semantic, and the ordering itself had never been tested
-# against a null. If semantic ties sequential, the paper's headline mechanism is
-# not what produces the result and the framing has to change.
+# Order in which sub-layers claim fast memory: "size-desc" (default) |
+# "semantic" | "sequential" | "random". "semantic" is the type and sparsity
+# priority order in fill(); size-desc beats it in the ablation (Sec. V-D).
 import os as _os
-# "size-desc" is the DEFAULT because it is what the measurements support: the
-# semantic order this system was originally named for loses to it in 11 of 12
-# configurations, by up to 18% (GPU INT8 16H+48C: 87.32 vs 80.84 t/s), and at
-# two accelerated INT8 cells the difference is a win against the strongest
-# baseline rather than a loss. Shipping the eponymous heuristic once its own
-# ablation refuted it would be sentiment, not engineering. "semantic" remains
-# selectable for the ablation in Sec V-D.
 PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "size-desc")
 
-# How much of the staging reserve Phase-1 warmup may consume, as a fraction.
-# The rest stays as the prefetcher's in-flight budget. They are the same bytes
-# used two ways -- pinned for the session, or cycled to overlap NAND reads
-# against the other tiers -- so the split is a real scheduling choice and is
-# measured rather than assumed. See the sweep in the commit message.
+# Fraction of the staging reserve that Phase-1 warmup may pin for the session;
+# the rest is the prefetcher's in-flight budget. Default 0: staging loses this
+# split in every configuration (Sec. V-D).
 STAGE_RESERVE_FRAC = float(_os.environ.get("SEMSCHED_STAGE_FRAC", "0.0"))
 
 # Bandwidth and per-chunk latency of each placement tier, keyed by the label
@@ -115,10 +86,9 @@ TIER_LAT = {PL_GPU_HBM:      GPU_HBM.chunk_latency_s,
             PL_CXL_DEV_DRAM: CXL_DRAM.chunk_latency_s,
             PL_CXL_DEV_NAND: CXL_SSD_NAND.chunk_latency_s}
 
-# Adaptive low-batch threshold. Below this batch size, MLP transfers are scaled
-# by the LLMFlash-style active-fraction formula 1 - (1 - p)^B. At B >= threshold,
-# the active fraction saturates near 1.0 and we fall back to full semantic
-# placement transfer. Crossover at B=4 is observed in the LLMFlash baseline runs.
+# Below this batch size, MLP transfers are scaled by the LLMFlash active
+# fraction 1 - (1 - p)^B. At larger B the fraction is close to 1 and full layers
+# are transferred. The B=4 crossover is observed in the LLMFlash baseline runs.
 ADAPTIVE_BATCH_THRESHOLD = 4
 
 OVERLAP_ATTENTION = 0.35
@@ -126,7 +96,7 @@ OVERLAP_MLP       = 0.65
 OVERLAP_NORM      = 0.45
 OVERLAP_OTHER     = 0.45
 
-# AGGRESSIVE SUB-LAYER STREAMING OVERLAP (PhD Research Contribution)
+# Overlap factor for a streamed sub-layer.
 SEMANTIC_STREAM_OVERLAP = 0.85
 
 
@@ -146,7 +116,7 @@ def decomposed_build_layers(sequence_length):
                 "head_dim":       L.get("head_dim", 128),
                 "kv_heads":       L.get("kv_heads", 8),
                 "kv_cache_bytes": L.get("kv_cache_bytes", 0),
-                "sparsity":       0.05,  # Attention: structurally dense (paper §3.1)
+                "sparsity":       0.05,  # attention is structurally dense
             })
             mname  = f"{L['name']}_mlp"
             mflops = L["flops"] - aflops
@@ -157,7 +127,7 @@ def decomposed_build_layers(sequence_length):
                 "bytes":          mbytes,
                 "flops":          mflops,
                 "kv_cache_bytes": 0,
-                "sparsity":       L.get("sparsity", 0.54),  # FIX: propagate from parent
+                "sparsity":       L.get("sparsity", 0.54),  # inherited from the block
             })
         else:
             new_layers.append(L)
@@ -227,7 +197,6 @@ class DuplexTrafficMonitor:
     def record_layer_time(self, t):
         self.total_decode_time_s += t
 
-    # ── These 3 were accidentally deleted — restore them ──
     def get_read_ratio(self):
         r = sum(self.read_history)
         w = sum(self.write_history)
@@ -239,7 +208,7 @@ class DuplexTrafficMonitor:
     def needs_write_injection(self):
         return self.get_read_ratio() > 0.6
 
-    # ── New time-based metric ──
+    # Write time as a percentage of decode time.
     def get_write_util_pct(self):
         if self.total_decode_time_s <= 0:
             return 0.0
@@ -324,11 +293,8 @@ class IOThread:
 def tier_of(p, staged=True):
     """Map a placement label to its Tier.
 
-    A NAND-resident layer is read at CXL DRAM speed ONLY if Phase 1 actually
-    staged it into the device cache. Previously this returned CXL_DRAM
-    unconditionally, so 73 GB of NAND traffic was billed at 27 GB/s instead of
-    5 GB/s every decode step -- a 5.4x under-charge that accounted for the
-    reported speedup on its own.
+    A NAND-resident layer is read at CXL DRAM speed only if Phase 1 staged it
+    into the device cache; otherwise it is read from NAND.
     """
     if p == PL_GPU_HBM:   return GPU_HBM
     if p == PL_HOST_DRAM: return HOST_DRAM
@@ -341,8 +307,8 @@ def split_time_s(nbytes, fr, staged=True):
     """Time to move `nbytes` of a layer split across tiers by the map `fr`.
 
     Placement fills each tier exactly, so a sub-layer may straddle a boundary.
-    Each share is timed at the tier that actually holds it; with a single-tier
-    layer this reduces to transfer_time_s(nbytes, tier_of(...)) exactly.
+    Each share is timed at the tier that holds it; for a single-tier layer this
+    reduces to transfer_time_s(nbytes, tier_of(...)).
     """
     return sum(transfer_time_s(nbytes * f, tier_of(t, staged))
                for t, f in fr.items() if f > 0)
@@ -370,17 +336,9 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         # Attention layers must also hold their growing KV increment.
         return L["bytes"] + (kv_inc[L["name"]] if ltypes[i] == LayerType.ATTENTION else 0)
 
-    # Bytes of each layer not yet assigned to a tier, and the split that results.
-    # Placement used to be all-or-nothing: a sub-layer that did not fit whole was
-    # passed over and the remaining capacity was left empty, so 0.91 GB of fast
-    # memory sat unused at FP16 16H+48C while the bytes that could have occupied
-    # it were read from NAND at 5 GB/s instead. Every tier is now filled exactly,
-    # a layer splitting across the boundary when it straddles one.
-    #
-    # This changes the packing, not the policy. The semantic priority order below
-    # is untouched -- output head, then attention with its KV, then embeddings,
-    # then MLP by descending sparsity -- and what a split layer does is occupy
-    # the tier its priority earned it, up to the capacity that tier has left.
+    # Bytes of each layer not yet assigned to a tier, and the per-tier fraction
+    # of each layer. Every tier is filled exactly: a layer that straddles a
+    # capacity boundary is split across it.
     rem  = [float(L["bytes"]) for L in layers]
     frac = [dict() for _ in layers]
 
@@ -388,8 +346,8 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         """Move as much of layer i into `tier_label` as fits. Returns new free."""
         if free <= 0 or rem[i] <= 0:
             return free
-        # Attention layers must also hold their growing KV increment; that part
-        # is indivisible, so it is only charged when the whole layer fits.
+        # The KV increment is indivisible, so it is charged only when the whole
+        # layer fits.
         want = rem[i] + (extra if rem[i] == layers[i]["bytes"] else 0.0)
         got  = min(want, free)
         if got <= 0:
@@ -400,19 +358,18 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         return free - got
 
     def fill(tier_label, cap):
-        """Apply the semantic priority order into one tier; return unused bytes.
+        """Fill one tier in PLACEMENT_ORDER; return the unused bytes.
 
-        The order is the contribution: output head first (touched every step),
-        then attention with its KV (latency-critical), then embeddings, then MLP
-        by descending activation sparsity (least bandwidth per useful FLOP),
-        then whatever dense MLP still fits.
+        The "semantic" order: output head (touched every step), attention with
+        its KV (latency-critical), embeddings, MLP with sparsity > 0.60 by
+        descending sparsity, then whatever dense MLP still fits.
         """
         free = cap
         if free <= 0:
             return free
         if PLACEMENT_ORDER != "semantic":
-            # Null orderings, for the ablation. Same tiers, same capacities, same
-            # bytes -- only the sequence in which sub-layers claim fast memory.
+            # Same tiers, capacities and bytes; only the order in which
+            # sub-layers claim fast memory differs.
             if PLACEMENT_ORDER == "sequential":
                 order = list(range(len(layers)))
             elif PLACEMENT_ORDER == "size-desc":
@@ -449,10 +406,8 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
                 free = take(i, tier_label, free)
         return free
 
-    # The cascade. With an accelerator attached the whole ordering shifts up a
-    # level: what would have been pinned in host DRAM goes to HBM, what would
-    # have been in CXL DRAM moves to host, and NAND residency shrinks. With
-    # gpu_cap = 0 this reduces exactly to the three-tier placement.
+    # Fill tiers fastest first; whatever is left goes to NAND. With gpu_cap = 0
+    # this is the three-tier placement.
     fill(PL_GPU_HBM, gpu_cap)
     fill(PL_HOST_DRAM, host_cap)
     fill(PL_CXL_DEV_DRAM, cxl_cap)                            # 4: CXL DRAM
@@ -463,19 +418,11 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
                                         + rem[i] / L["bytes"])
             rem[i] = 0.0
 
-    # ── Spread the NAND residue through execution order ──────────────────
-    # Which bytes end up on NAND is fixed by capacity, but WHERE they sit in the
-    # execution order is not, and a K-deep lookahead can only overlap a transfer
-    # against work that runs before it. Filling MLP by descending sparsity puts
-    # the leftover in one contiguous mid-model band -- at INT8 16H+32C, ten of
-    # eleven NAND sub-layers landed at indices 30-48 of 163, so 5.7 GB of 5 GB/s
-    # traffic saturates the backend in 12% of the step while the fast tiers idle
-    # either side of it.
-    #
-    # Sub-layers of one kind are the same size, so moving the residue among them
-    # is byte-neutral: the ledger is identical, only the positions change. That
-    # makes this pure scheduling -- it cannot flatter the accounting, because it
-    # does not touch it.
+    # Spread the NAND residue through execution order (Sec. IV-C). A K-deep
+    # lookahead can only overlap a transfer with work that runs before it, and
+    # the fill order tends to leave the residue in one contiguous band.
+    # Sub-layers in a (type, size) group are interchangeable, so swapping their
+    # splits changes positions but not bytes.
     _groups = {}
     for i, L in enumerate(layers):
         _groups.setdefault((ltypes[i], L["bytes"]), []).append(i)
@@ -498,9 +445,9 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         for _d, _r in zip(_donor, _recv):
             frac[_d], frac[_r] = frac[_r], frac[_d]
 
-    # `place` names the tier holding the largest share. It drives the control
-    # flow -- staging, prefetch, duplex lane selection -- which is per-layer and
-    # cannot be fractional; `frac` carries the split that timing uses.
+    # `place` names the tier holding the largest share. It drives the per-layer
+    # control flow (staging, prefetch, duplex lane selection), which cannot be
+    # fractional; `frac` carries the split that timing uses.
     place = [max(f, key=f.get) for f in frac]
 
     return place, ltypes, kv_inc, sparsity, frac
@@ -543,35 +490,19 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
     lat, nand_link_free_at = 0.0, 0.0
     stats = {"bytes_prefetched": 0, "warmup_time": 0}
 
-    # Phase 1: parallel NAND warmup (staging NAND-resident layers into device DRAM).
-    # FIX (BigData 2026): the previous model divided the *whole* transfer time by
-    # |T|=16, which divides the bandwidth term as well and implies ~80 GB/s from a
-    # 5 GB/s device. Aggregate NAND bandwidth is a hard physical floor; a thread
-    # pool can only amortize the per-chunk access latency. The resulting cost is
-    # now charged into `lat` (previously it was computed and then discarded, so
-    # staging was free -- see REVISION_PLAN.md Part 2.A).
-    # Staging runs on the asynchronous I/O pool, i.e. on the NAND->device-DRAM
-    # DMA path, which is a resource independent of the compute engine. It is
-    # therefore OVERLAPPED with prefill compute, not serialized ahead of it: a
-    # layer stalls only if its staging has not completed by the time execution
-    # reaches it. `stage_finish[i]` is layer i's staging completion time on a
-    # bandwidth-limited NAND channel (threads amortize per-chunk latency only).
+    # Phase 1: stage NAND-resident layers into device DRAM, up to the cache
+    # capacity (none if ENABLE_PREFILL_WARMUP is False). Staging uses the NAND->DRAM DMA path, independent of compute, so
+    # it overlaps prefill: a layer waits only if its staging has not finished
+    # when execution reaches it. stage_finish[i] is that completion time on a
+    # single bandwidth-limited NAND channel.
     stage_finish = {}
     t_stage      = 0.0
-    # ENABLE_PREFILL_WARMUP was declared but never read, so every ablation that
-    # set it to False measured the warmup-ON configuration and reported it as
-    # OFF. The flag now gates the staging loop it names.
     _stage_budget = cache.cap if ENABLE_PREFILL_WARMUP else 0
     for i, L in enumerate(layers):
         if place[i] == PL_CXL_DEV_NAND:
             bw_term  = L["bytes"] / CXL_SSD_NAND.bw_Bps
-            # Serial per-chunk latency, NOT divided by the I/O thread pool.
-            # No baseline models concurrent staging I/O, and FlexGen and
-            # LLM-in-a-Flash both describe overlapped I/O in their own papers,
-            # so crediting ourselves alone with it would be a strawman. The
-            # division is inert in any case -- staging completes inside the
-            # prefill slack, so stage_finish never binds and removing it changes
-            # every reported figure by 0.000.
+            # Per-chunk latency is serial, not divided across the I/O pool,
+            # since no baseline models concurrent staging I/O either.
             lat_term = (math.ceil(L["bytes"] / IO_CHUNK_BYTES)
                         * CXL_SSD_NAND.chunk_latency_s)
             if L["bytes"] > _stage_budget:
@@ -586,46 +517,23 @@ def run_prefill_chunked(layers, place, ltypes, sparsity, inc,
 
     for i, L in enumerate(layers):
         sz        = L["bytes"]
-        # FIX (BigData 2026): prefill processes `seq_len` tokens for each of B
-        # sequences, so FLOPs = 2*P*seq_len*B. The baselines previously used a
-        # magic PREFILL_FLOP_MULTIPLIER=15 that SemSched did not apply at all,
-        # giving SemSched a 15x compute advantage in prefill. Parameters remain
-        # dense (no sparsity discount) -- prefill fires all neurons.
+        # Prefill runs seq_len tokens for each of B sequences: FLOPs =
+        # 2*P*seq_len*B. No sparsity discount, since prefill fires all neurons.
         eff_flops = L["flops"] * seq_len * BATCH_SIZE
         mem = split_time_s(sz, frac[i], i in cache.session_pinned)
 
         comp_chunk = compute_time_s(eff_flops, cpu_cores) / chunks
-        # Chunked pipelining overlaps a chunk's compute with the next chunk's
-        # transfer, but it can never take less time than the compute itself:
-        # every FLOP is still executed. The unfloored form below charged
-        # (chunks-1) compute chunks, one short of the total, which let prefill
-        # finish ~1/chunks BELOW the 2*P*S*B compute floor -- impossible, and
-        # worth about 10% at the chunk counts we use.
+        # Overlap can hide transfer time but not compute: every FLOP still runs.
         full_comp  = comp_chunk * chunks
-        # Chunked pipeline: transfer of chunk k+1 overlaps compute of chunk k,
-        # so the cost is the slower stream plus one chunk of the faster one to
-        # fill the pipe. The previous form, mem + (chunks-1)*comp_chunk, added
-        # the FULL transfer to nearly-full compute and therefore only overlapped
-        # when one term dominated; at mem ~= comp it charged close to their sum
-        # -- 187.5 where 112.5 is correct at chunks=8 -- which produced a
-        # non-monotonic dip to 0.85x exactly in the mixed regime the pipeline
-        # exists to handle.
+        # Transfer of chunk k+1 overlaps compute of chunk k, so the cost is the
+        # slower stream plus one chunk of the faster one to fill the pipe.
         pipe_time  = (max(mem, full_comp) + min(mem, full_comp) / chunks
                       if chunks > 1 else max(mem, comp_chunk))
 
         # Wait for this layer's asynchronous staging only if it has not finished.
         start = max(lat, stage_finish.get(i, 0.0))
-        # The DUPLEX_PENALTY = 1.15 multiplier that used to be applied here is
-        # gone. The decode path replaced it with the measured queue model
-        # (see the Tx-lane scheduling below, which notes the replacement), but
-        # prefill was never updated, so a blanket 15% survived on every layer
-        # with sparsity > 0.20 -- and only at INT8/INT4, because
-        # should_activate_duplex() gates on the quantization format. A data
-        # format cannot affect link contention, no baseline carries any
-        # equivalent term, and prefill writes one KV entry per sequence. It cost
-        # 64.3 s of a 732.8 s INT8 prefill and nothing at FP16, which is what
-        # made SemSched 11.5% above the compute floor at INT8 while every
-        # baseline sat within 2.9% of it.
+        # No duplex penalty in prefill; write contention is modeled only in
+        # decode, by the CXLLink queue.
         lat = start + pipe_time
 
         tmon.record_read(sz)
@@ -636,9 +544,7 @@ def ssd_cold_time_s(n):
     return transfer_time_s(
         n, Tier("Host SSD (stream)", NVME_STREAM_BW, NVME_STREAM_LAT_S))
 
-# ==========================================
-# TRACK WRITE STALLS / PER-TOKEN LATENCY
-# ==========================================
+# Per-token latency and write-stall sweep over all simulators (not run by default).
 def track_write_stalls():
     print("\n" + "=" * 70)
     print("TRACKING PER-TOKEN LATENCY & STALLS FOR ALL SIMULATORS")
@@ -646,8 +552,8 @@ def track_write_stalls():
     
     results = []
     
-    # We use the tight memory config (16GB Host + 32GB CXL) and B=128 
-    # to properly expose the NAND stalls across the different precisions.
+    # The tight memory config (16 GB host + 32 GB CXL) at B=128 exposes NAND
+    # stalls at every precision.
     target_batch = 128
     h_gb, c_gb = 16, 32 
     quants_to_test = ["fp32", "fp16", "int8", "int4"]
@@ -668,11 +574,10 @@ def track_write_stalls():
                 mets = parse_metrics(ret.stdout, sim)
                 tps = mets["TPS"]
                 
-                # Recover the exact per-token execution time (Compute + Stall)
-                # Since TPS = BatchSize / Per_Token_Latency
+                # Per-token latency (compute + stall), from TPS = batch / latency.
                 latency_s = target_batch / tps if tps > 0 else 0.0
-                
-                # SemDuplex explicitly prints its single-token latency; let's grab it directly if available
+
+                # Prefer the simulator's own single-token latency if it prints one.
                 exact_lat_match = re.search(r"Single-token decode latency:\s*([\d\.]+)s", ret.stdout)
                 if exact_lat_match:
                     latency_s = float(exact_lat_match.group(1))
@@ -714,38 +619,20 @@ def run_semantic_duplex_simulation():
         num_blocks = sum(1 for L in layers
                          if "decoder_" in L["name"] and "_attn" in L["name"])
 
-        # The KV cache is resident in CXL device DRAM for the whole session, so
-        # its bytes are NOT available to hold weights. Placement previously used
-        # the full device capacity, so at 32H+64C it put 63.9 GB of MLP into the
-        # same 64 GB the 20.6 GB KV cache also needs -- 32% over. KV belongs in
-        # the slowest DRAM tier precisely because weights can least afford to
-        # lose it: KV can never spill to NAND (it is written every step), while
-        # weights are read-only and NAND-safe. Reserving it here is what makes
-        # that placement honest.
-        # KV GROWS. Reserving its final size starves the early steps of weight
-        # capacity they could have used, and reserving its initial size
-        # over-commits the device later. The device instead yields weight
-        # capacity progressively as KV expands: at step t the space available
-        # for weights is C - kv(P+t), so the time-averaged budget over the
-        # generation is C - kv(P + T/2). Placement is a one-shot decision, so
-        # the time-average is what it should see; the eviction that realises it
-        # step by step is the runtime's job.
+        # KV capacity is reserved from its tier before placement. KV grows, and
+        # at step t the weights can use C - kv(P + t), so placement (a one-shot
+        # decision) is given the time-averaged reservation kv(P + T/2).
         _kv_per_tok = sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128)
                           * BYTES_PER_PARAM
                           for L in layers
                           if classify_layer_type(L) == LayerType.ATTENTION) * BATCH_SIZE
         _kv_mean = int(_kv_per_tok * (PREFILL_TOKENS + TOKENS / 2.0))
 
-        # Charge the KV cache to whichever tier KV_TIER names, spilling down the
-        # hierarchy when it does not fit. `_kv_split` is the fraction of every KV
-        # access served by each tier, and is what the decode loop times against;
-        # the capacities below are what placement is then allowed to use.
         _caps = {"gpu":  gpu_hbm_capacity_bytes,
                  "host": host_dram_capacity_bytes,
                  "cxl":  cxl_dev_dram_capacity_bytes}
-        # The pristine capacities. _kv_place is called once per candidate tier by
-        # the search below and must always subtract the cache from the FULL
-        # device, never from a dict a previous call already reduced.
+        # Unreduced capacities: every _kv_place call starts from these, not
+        # from a dict an earlier call already reduced.
         _caps0 = dict(_caps)
         _kv_tiers = {"gpu": GPU_HBM, "host": HOST_DRAM, "cxl": CXL_DRAM}
 
@@ -753,12 +640,9 @@ def run_semantic_duplex_simulation():
             """Charge the cache to `tier`, spilling down when it does not fit.
 
             Returns (split, caps): the fraction of every KV access served by each
-            tier, and what placement may then use. Which tier should hold the
-            cache is not obvious and not constant -- putting it in HBM reads it
-            66x faster but evicts an equal mass of weights, and the weights are
-            read every step too. It is searched alongside the staging reserve
-            rather than fixed, because the answer moves with quantization: at
-            FP16 the device wins, at INT8 the host does.
+            tier, and the capacity left for placement. A faster KV tier evicts
+            an equal mass of weights, so the tier is searched with the staging
+            reserve rather than fixed.
             """
             order = {"gpu": ["gpu", "host", "cxl"],
                      "host": ["host", "cxl"],
@@ -783,36 +667,22 @@ def run_semantic_duplex_simulation():
             return sum(transfer_time_s(n * f, _kv_tiers[t])
                        for t, f in _kv_split.items() if f > 0)
 
-        # ── Adaptive prefetch reservation ────────────────────────────────────
-        # Every other policy fills each tier to 100%: FlexGen's LP maximises
-        # residency by construction, and LIA, CXLAimPod and LLM-in-a-Flash place
-        # greedily until full. That is optimal only if reads are served on
-        # demand. With a K-deep lookahead it is not, because bytes fetched ahead
-        # of consumption need somewhere to live, and a device filled to the brim
-        # has nowhere -- which is why a K=32 queue over a full device buys 1.00x,
-        # exactly what no prefetch at all buys.
-        #
-        # So hold some device DRAM back. The reserved bytes stop being resident,
-        # which costs NAND traffic, and start being staging room, which lets the
-        # NAND transfers overlap the host and accelerator reads instead of
-        # serialising behind them. Neither effect dominates everywhere: too small
-        # a reserve cannot cover a transfer, too large a one pushes more onto
-        # NAND than overlap can hide. The optimum is interior and moves with the
-        # tier bandwidths, the model size and the capacity, so it is searched per
-        # configuration rather than tuned once.
+        # Staging reserve. Bytes held back from placement become in-flight room
+        # for the K-deep prefetcher, so NAND transfers can overlap the other
+        # tiers' reads instead of serializing behind them; the cost is more NAND
+        # residency. The optimum depends on tier bandwidths, model size and
+        # capacity, so it is searched per configuration.
         _dev_total = _caps["cxl"]
 
         _host_total = _caps["host"]
 
         def _plan(dev_res, host_res):
-            """Place with bytes held back as staging, and time one decode step.
+            """Place with dev_res and host_res bytes held back as staging room,
+            and time one decode step.
 
-            Staging room need not come from the device. Host DRAM sits idle most
-            of a step -- 0.42 s of 2.85 s at INT8 16H+32C -- and it is off the
-            CXL link entirely, so a buffer there lets device and NAND transfers
-            run ahead without competing for the link they are trying to escape.
-            The weights it displaces do cross that link, so the trade is real in
-            both directions and the balance is what the search resolves.
+            Host DRAM is off the CXL link, so a buffer there lets device and NAND
+            transfers run ahead without competing for the link, but the weights
+            it displaces then cross the link.
             """
             pl, lt, kvi, sp, fr = semantic_aware_placement(
                 layers, max(0, _host_total - host_res),
@@ -835,28 +705,17 @@ def run_semantic_duplex_simulation():
                                     inflight_budget=dev_res + host_res), \
                    (pl, lt, kvi, sp, fr)
 
-        # The search covers both placement decisions together, because they are
-        # not separable: where the cache sits changes which tier is the
-        # bottleneck, which changes how much staging room is worth holding back.
-        # Dense enough that the best absolute reserve at one capacity is still
-        # representable at a larger one. The coarse 6-point grid produced a
-        # capacity-monotonicity violation the checker caught: the 48 GB
-        # optimum (a specific absolute reserve) fell between grid points at
-        # 64 GB, and the larger device measured 4.8% slower.
-        # The top of the range matters as much as the density: leaving bytes
-        # on NAND deliberately, so they ride an otherwise idle bus concurrently
-        # instead of serialising on the device bus, can require reserving MORE
-        # than 40% of a large device. Capping at 0.40 made a 64 GB device 4.8%
-        # slower than a 48 GB one, because the 48 GB optimum was unrepresentable.
+        # KV tier and reserves are searched jointly: where the cache sits changes
+        # which tier is the bottleneck, and so how much staging room is worth
+        # holding back. Reserve fractions run to 0.50 because leaving bytes on
+        # NAND, to use an otherwise idle bus, can need a large reserve on a big
+        # device.
         _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
                0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
         _kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
         def build_units(fr, kvi, kv_split, token_step, pinned=()):
-            """The per-step unit list, used by BOTH the plan evaluator and the
-            decode loop. These were two hand-maintained copies that drifted:
-            the evaluator predicted 411.6 s for a plan the decode loop then
-            realized at 441.1 s, so the search kept the wrong finalist. One
-            builder makes prediction equal realization by construction."""
+            """Per-step unit list, shared by the plan evaluator and the decode
+            loop so that the search times exactly what decode runs."""
             us = []
             for _i, _L in enumerate(layers):
                 _by = {}
@@ -875,20 +734,12 @@ def run_semantic_duplex_simulation():
                 us.append((_by, compute_time_s(_L["flops"] * BATCH_SIZE, cpu_cores)))
             return us
 
-        # Two-stage search. The one-step estimate ranks the field cheaply but
-        # misorders near-tied plans -- measured as a 64 GB device landing 3.6%
-        # below a 48 GB one because the estimate preferred the wrong finalist.
-        # So the estimate now only SHORTLISTS: the top finalists are re-timed
-        # exactly, all TOKENS decode steps with the real growing KV, and the
-        # realized best is kept. Monotonicity in capacity follows, because a
-        # larger device's candidate set contains every smaller device's plan
-        # and exact evaluation cannot invert them.
-        # The scheduler may DECLINE capacity: the search also runs with the
-        # device clamped to each smaller standard size, so a larger device's
-        # candidate set contains every smaller device's winning plan verbatim.
-        # A fractional grid cannot guarantee that -- the 48 GB optimum sits at
-        # 52% of a 64 GB device, off any reasonable grid -- and without it a
-        # bigger device measured slower, which the invariant checker rejects.
+        # Two-stage search. The one-step estimate misorders near-tied plans, so
+        # it only shortlists; finalists are timed exactly over all TOKENS steps
+        # with growing KV and the realized best is kept. The search also runs
+        # with the device clamped to each smaller standard size (32, 48 GB), so
+        # a larger device's candidates include every smaller device's plan and
+        # decode time cannot get worse with more capacity.
         _cands = []
         _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
@@ -903,11 +754,9 @@ def run_semantic_duplex_simulation():
                         _dr, _hr = _dev_total * _df, _host_total * _hf
                         _t, _p = _plan(_dr, _hr)
                         _cands.append((_t, _kvt, _dr, _hr, _p, _devcap))
-        # Shortlist PER (device-cap, KV-tier) group rather than globally: the
-        # one-step estimator systematically misranks NAND-heavy plans against
-        # all-resident ones, and a global top-N could exclude an entire group,
-        # which is how a clamped-capacity plan beat the full-capacity group on
-        # CPU FP16 while its true optimum never got exact-evaluated.
+        # Shortlist per (device cap, KV tier) group, not globally: the one-step
+        # estimate misranks NAND-heavy plans against all-resident ones, and a
+        # global top-N could drop a whole group.
         _cands.sort(key=lambda x: x[0])
         _bygroup = {}
         for _cd in _cands:
@@ -948,73 +797,35 @@ def run_semantic_duplex_simulation():
         _dev_for_weights = max(0, _dev_total - _dev_res)
 
         tmon    = DuplexTrafficMonitor()
-        # The CXL device has ONE pool of DRAM. Placement has already consumed
-        # part of it for PL_CXL_DEV_DRAM layers, so Phase 1 may only stage into
-        # what is left. Handing the cache the full device capacity double-counts
-        # it: at 16H+64C placement uses 63.02 GB of 64 GB, then staging asks for
-        # a further 73.23 GB -- 213% of the device -- and every NAND-resident
-        # layer is then billed at the 27 GB/s hit rate instead of 5 GB/s.
-        # The KV cache is the other resident claim on that same pool, and it is
-        # already subtracted from what placement was allowed to use
-        # (_dev_for_weights). Subtracting only _placed_in_dev here handed Phase 1
-        # the KV cache's own space as staging room: at INT8 16H+32C it staged
-        # 5.13 GB into the 10.16 GB the KV cache occupies, so the one
-        # configuration with any NAND residency read all of it at DRAM speed and
-        # scored identically to 48C and 64C, which have none. Staging may only
-        # use what is left of the WEIGHT budget.
         _placed_in_dev = sum(L["bytes"] for i, L in enumerate(layers)
                              if place[i] == PL_CXL_DEV_DRAM)
-        # Phase-1 staging draws on the SAME reserve the prefetcher stages into.
-        # Until now it could only use what placement left over, which is ~0 by
-        # construction, so it staged 0.00 GB in every configuration while the
-        # reserve sat beside it unused -- a named contribution starved by an
-        # accounting boundary rather than by physics.
-        #
-        # The two uses genuinely compete, and for the bytes that fit, staging
-        # wins outright: a NAND-resident sub-layer of size S staged once costs
-        # S/5 + 16*S/27 = 0.79*S across the generation, against 16*S/5 = 3.2*S
-        # to fetch it every step. Four times cheaper -- but only for what fits,
-        # whereas prefetch overlap applies to everything.
-        #
-        # So staging takes the reserve first and the prefetcher gets what
-        # survives. Whatever Phase 1 pins is resident for the whole session and
-        # is no longer in flight, so it must come off the in-flight budget --
-        # counting it in both places is the double-book this file has been
-        # bitten by twice.
-        # Staging room is EXACTLY what STAGE_RESERVE_FRAC grants, zero by
-        # default. The previous form added (dev_for_weights - placed_in_dev),
-        # intended as "whatever placement left over" -- but placed_in_dev sums
-        # whole layers by their majority label while placement fills
-        # fractionally, and the mismatch manufactured 0.56 GB of phantom room.
-        # Phase 1 then staged into it and decode deducted those bytes from the
-        # prefetch budget (1.98 -> 1.42 GB), so the realized step was 7% slower
-        # than the plan the search had validated: the one mechanism the
-        # evaluator does not model was silently re-enabling itself. Staging
-        # loses the reserve split in all twelve configurations (Sec V-D), so
-        # the shipped default stages nothing.
+        # Phase-1 staging room comes only from the staging reserve, never from
+        # device DRAM that placed weights or the KV cache already occupy. It is
+        # the share STAGE_RESERVE_FRAC grants (0 by default). Bytes Phase 1 pins
+        # stay resident for the session, so decode deducts them from the
+        # prefetcher's in-flight budget.
         _stage_room = _prefetch_reserve * STAGE_RESERVE_FRAC
         _cache_cap = _stage_room
         cache   = AttentionGuidedCache(_cache_cap)
         sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)
         threads = [IOThread(i) for i in range(IO_THREAD_POOL_SIZE)]
 
-        # Two-queue CXL link model:
-        # CXL_DRAM bw=27 GB/s, lat=505ns — matches tiers.py for consistency.
+        # Two-queue CXL link, 27 GB/s and 505 ns per transaction, as CXL_DRAM in
+        # tiers.py.
         link = CXLLink(bw_gbps=27.0, txn_overhead_s=505e-9)
-        queue_uwrite_samples = []   # collect per-token Uwrite from queue
+        queue_uwrite_samples = []   # per-token Uwrite measured from the queue
 
         pf_time_val, pf_stats = run_prefill_chunked(
             layers, place, ltypes, sparsity, inc,
             cache, tmon, sched, threads, seq_len, frac)
 
-        # ── Multi-token decode loop with per-token write stall tracking ────────
+        # Decode loop.
         total_spar_flops           = 0
         per_token_write_stall_pcts = []
         rows                       = []
         lat                        = 0.0
-        # FIX (BigData 2026): accumulate every decode step so throughput is the
-        # MEAN across tokens, matching FlexGen/LIA/LLMFlash. Previously SemSched
-        # reported only the final step, which with growing-KV is its slowest.
+        # Throughput uses the mean step time over all tokens, as in
+        # FlexGen/LIA/LLMFlash.
         total_decode_lat           = 0.0
 
         for token_step in range(TOKENS):
@@ -1028,7 +839,7 @@ def run_semantic_duplex_simulation():
             link.reset()  # fresh queue state per token (matches `lat` semantics)
             fetched           = set()
 
-            # Reset thread state each token — each decode step is independent
+            # Each decode step starts with idle I/O threads.
             for t in threads:
                 t.busy_until   = 0.0
                 t.current_task = None
@@ -1036,20 +847,14 @@ def run_semantic_duplex_simulation():
             for idx, L in enumerate(layers):
                 sz        = L["bytes"]
                 has_kv    = inc[L["name"]] > 0
-                # FIX (BigData 2026): (a) decode FLOPs scale with batch size --
-                # each of the B sequences runs the layer; (b) the previous
-                # (1 - sparsity) FLOP discount is removed. SemSched uses sparsity
-                # for *placement*, not to skip compute (§III/§IV), and neither
-                # FlexGen nor LIA received the discount. Sparsity-based compute
-                # skipping belongs to LLMFlash, where it is now modeled.
+                # Each of the B sequences runs the layer. No sparsity discount:
+                # sparsity guides placement here. Compute skipping belongs to
+                # the LLMFlash baseline.
                 eff_flops = L["flops"] * BATCH_SIZE
 
-                # Adaptive low-batch streaming for MLP layers.
-                # At low batch, only `active_fraction` of MLP neurons fire, so transferring
-                # the full MLP weight is wasteful. We mimic LLMFlash's sliding-window
-                # approach by scaling MLP transfer bytes by 1 - (1 - p)^B (the union of
-                # active sets across the batch). Above the threshold, semantic placement
-                # is preferable so the scaling collapses back to ~1.0.
+                # Low-batch MLP streaming: only the union of the B sequences'
+                # active neurons, 1 - (1 - p)^B of the layer, is transferred
+                # (LLMFlash sliding window).
                 if ltypes[idx] == LayerType.MLP and BATCH_SIZE < ADAPTIVE_BATCH_THRESHOLD:
                     p = sparsity[idx]            # MLP layer sparsity
                     active_fraction = 1.0 - (1.0 - p) ** BATCH_SIZE
@@ -1061,7 +866,8 @@ def run_semantic_duplex_simulation():
 
                 sched.adjust_thread_allocation(tmon)
 
-                # ── Aggressive Semantic Prefetcher ────────────────────────────
+                # Prefetch NAND-resident sub-layers among the next
+                # PREFETCH_QUEUE_DEPTH, attention first, then by sparsity.
                 pf_cands = []
                 for i in range(1, PREFETCH_QUEUE_DEPTH + 1):
                     fi = idx + i
@@ -1082,7 +888,7 @@ def run_semantic_duplex_simulation():
                         t.current_task    = (fi, layers[fi]["bytes"])
                         cache.set_attention_score(fi, score)
 
-                # ── Serve layer from tier ─────────────────────────────────────
+                # A NAND layer not yet in the cache waits for its prefetch.
                 src       = place[idx]
                 raw_stall = 0
                 if place[idx] == PL_CXL_DEV_NAND and not cache.contains(idx, sz):
@@ -1094,25 +900,18 @@ def run_semantic_duplex_simulation():
                             break
                     if stall_until == 0:
                         stall_until = lat + transfer_time_s(sz, CXL_SSD_NAND)
-                    # DOUBLE-CHARGE REMOVED. stall_until is derived from the
-                    # SAME NAND transfer that `mem` below charges in full, so
-                    # adding (1-sigma) of it billed the transfer at 1.15x while
-                    # every baseline bills it at 1.00x. That asymmetry, not any
-                    # policy difference, was the whole +25% gap against the
-                    # byte-accounting floor. The transfer is charged once, by
-                    # `mem`, and overlapped with compute via max(comp, mem) --
-                    # exactly as the baselines model it.
+                    # raw_stall only enters the per-layer report row. The NAND
+                    # transfer is charged once, by `mem` below, and overlapped
+                    # with compute via max(comp, mem), as in the baselines.
                     raw_stall = max(0, stall_until - lat)
 
-                # ── Compute + memory time ─────────────────────────────────────
                 comp  = compute_time_s(eff_flops, cpu_cores)
                 mem   = split_time_s(
                     sz, frac[idx], idx in cache.session_pinned)
 
-                # Growing-KV: attention layers read all prior K/V from cache.
-                # At decode step `token_step`, total cached positions = PREFILL_TOKENS + token_step.
-                # KV cache resides at CXL_DRAM in SemSched's design. The KV read uses
-                # the same Rx lane as the weight read, so we serialize it into `mem`.
+                # Growing KV: attention reads all PREFILL_TOKENS + token_step
+                # cached positions, timed at the KV tier(s) and serialized with
+                # the weight read in `mem`.
                 if has_kv:
                     kv_positions_cached = PREFILL_TOKENS + token_step
                     kv_read_bytes = kv_positions_cached * inc[L["name"]] * BATCH_SIZE
@@ -1123,13 +922,10 @@ def run_semantic_duplex_simulation():
 
                 tmon.record_read(sz)
 
-                # ── Queue-based duplex write accounting ───────────────────────
-                # The CXL link is modeled as two independent lanes (Rx for reads,
-                # Tx for writes). For each CXL-resident read we register Rx-lane
-                # busy time. For each KV write we schedule on Tx with deadline =
-                # end of this layer's natural duration; if the write doesn't fit,
-                # the queue returns the exposed slip which we charge as actual
-                # stall (replaces the DUPLEX_PENALTY = 1.15 multiplier).
+                # Duplex write accounting. The CXL link has independent Rx
+                # (read) and Tx (write) lanes. A KV write is scheduled on Tx
+                # with the end of this layer's read window as its deadline, and
+                # only the slip past the deadline is charged as stall.
                 ltime_base = ltime  # snapshot before any KV adjustments
 
                 # Track Rx-lane usage for CXL-resident reads (Host DRAM reads
@@ -1147,13 +943,8 @@ def run_semantic_duplex_simulation():
                         pass
 
                     elif place[idx] == PL_HOST_DRAM:
-                        # Host DRAM is not on the CXL link; KV write serialized
-                        # through host DDR.
-                        # Timed at whatever tier holds the cache, not at a fixed
-                        # CXL rate. The Tx-lane overlap below applies only to the
-                        # device-resident case, which is what the duplex link
-                        # models; writes are 0.017% of a step, so the branch that
-                        # does not overlap costs nothing measurable either way.
+                        # Off the CXL link, so no Tx overlap: the KV write is
+                        # serialized, timed at the tier holding the cache.
                         kv_write_t = _kv_time(kv_write_scaled)
                         exposed_stall = kv_write_t
                         tmon.write_stall_time_s += exposed_stall
@@ -1162,8 +953,7 @@ def run_semantic_duplex_simulation():
                         step_stall_s += exposed_stall
 
                     elif place[idx] in (PL_CXL_DEV_DRAM, PL_CXL_DEV_NAND):
-                        # Write on Tx lane, may run concurrently with Rx read.
-                        # Deadline = end of this layer's natural read window.
+                        # Tx-lane write, concurrent with the Rx read.
                         exposed = link.schedule_write_background(
                             lat, kv_write_scaled, deadline=lat + ltime_base)
                         if exposed > 0:
@@ -1171,20 +961,19 @@ def run_semantic_duplex_simulation():
                             tmon.write_stall_count  += 1
                             ltime        += exposed
                             step_stall_s += exposed
-                        # else: write fully hidden under read window → no stall
-                # ─────────────────────────────────────────────────────────────
+                        # otherwise the write hid under the read window
 
                 lat         += ltime
                 step_time_s += ltime
                 tmon.record_layer_time(ltime)
 
-                # ── Resolve completed prefetch tasks ──────────────────────────
+                # Completed prefetches enter the cache.
                 for t in threads:
                     if t.current_task and t.busy_until <= lat:
                         cache.add(t.current_task[0], t.current_task[1])
                         t.current_task = None
 
-                # ── Record layer row only on first token ──────────────────────
+                # Per-layer report rows come from the first token.
                 if token_step == 0:
                     rows.append({
                         "Layer":        idx + 1,
@@ -1197,17 +986,16 @@ def run_semantic_duplex_simulation():
                         "Read_Ratio":   f"{tmon.get_read_ratio():.2%}"
                     })
 
-            # ── Per-token: write stall as % of this token's total decode time ─
+            # Write stall as a percentage of this token's step time.
             stall_pct_this_token = (step_stall_s / step_time_s * 100) \
                                    if step_time_s > 0 else 0.0
             per_token_write_stall_pcts.append(stall_pct_this_token)
 
-            # sample measured Tx-lane utilization from the queue
             queue_uwrite_samples.append(link.write_utilization_pct())
-            # The step costs what the pipeline actually takes: tiers run
-            # concurrently, and a transfer may be issued PREFETCH_QUEUE_DEPTH
-            # sub-layers before it is needed. `lat` up to here was the serial
-            # sum, which is the same number for any policy moving the same bytes.
+            # Step time comes from the pipeline model: tiers run concurrently
+            # and a transfer may be issued up to PREFETCH_QUEUE_DEPTH sub-layers
+            # early. The serial `lat` above only feeds the reported statistics
+            # (per-layer rows, write stalls, Uwrite).
             lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
                                    TIER_LAT,
                                    inflight_budget=max(0.0, _prefetch_reserve
@@ -1217,7 +1005,6 @@ def run_semantic_duplex_simulation():
                 _kv_mean, _kv_tiers[max(_kv_split, key=_kv_split.get)])
             total_decode_lat += lat
 
-        # ── Post-loop aggregates ───────────────────────────────────────────────
         avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)
 
         total_layers = len(rows)
@@ -1230,13 +1017,11 @@ def run_semantic_duplex_simulation():
         mean_lat = total_decode_lat / TOKENS
         print(f"\nSingle-token decode latency: {mean_lat:.6f}s")
 
-        # Phase-1 staging is a reported mechanism, so report it rather than
-        # leaving it to be inferred from an ablation.
         print(f"Warmup time: {pf_stats['warmup_time']:.6f}")
         print(f"Warmup staged bytes: {pf_stats['bytes_prefetched']}")
         print(f"Decode throughput: {BATCH_SIZE / mean_lat:.6f} t/s")
-        # Per-sequence prefill TPS (matches FlexGen/LIA/LLMFlash convention)
-        # reporting convention (flexgen_baseline.py:155, lia_baseline.py:149).
+        # Per-sequence prefill TPS, the convention of flexgen_baseline.py and
+        # lia_baseline.py.
         print(f"Prefill throughput: {PREFILL_TOKENS / pf_time_val:.6f} t/s")
 
         total_model_size = sum(L["bytes"] for L in layers)
@@ -1259,7 +1044,7 @@ def run_semantic_duplex_simulation():
         print(f"Read_Ratio: {final_util_ratio:.4f}%")
         print(f"Write_Util_Pct: {tmon.get_write_util_pct():.4f}%")
 
-        # queue-measured Uwrite (averaged across tokens)
+        # Queue-measured Uwrite, averaged over tokens.
         queue_uwrite_avg = (sum(queue_uwrite_samples) / len(queue_uwrite_samples)) \
                            if queue_uwrite_samples else 0.0
         print(f"Queue_Uwrite_Pct: {queue_uwrite_avg:.4f}%")

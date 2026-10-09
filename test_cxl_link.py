@@ -1,10 +1,9 @@
 """
-test_cxl_link.py — verification suite for cxl_link.CXLLink.
-
-Run before plugging the queue model into semduplex_scheduler.py.
+Verification suite for cxl_link.CXLLink, the two-queue full-duplex link model
+used by semduplex_scheduler.py.
 
 Each test states the property under test and the expected numerical result.
-A test failure means the queue model is wrong — fix cxl_link.py first.
+A failure means the queue model is wrong; fix cxl_link.py first.
 
 Usage:
     python test_cxl_link.py
@@ -43,9 +42,7 @@ def check_close(name, got, want, rtol=0.01, comment=""):
     print(msg)
 
 
-# ---------------------------------------------------------------------------
-# Test group 1 — Single-lane bandwidth correctness
-# ---------------------------------------------------------------------------
+# Group 1: single-lane bandwidth
 def test_pure_read_bandwidth():
     """A single 27 GB read at 27 GB/s should take ~1.0 s."""
     print("\n[1.1] pure read bandwidth — Rx lane only")
@@ -68,13 +65,11 @@ def test_pure_write_bandwidth():
     check("rx_busy_until == 0 (no reads)", link.rx_busy_until, 0.0)
 
 
-# ---------------------------------------------------------------------------
-# Test group 2 — Full-duplex independence (the core property)
-# ---------------------------------------------------------------------------
+# Group 2: full-duplex independence of the Rx and Tx lanes
 def test_reads_and_writes_run_concurrently():
     """
-    Read 1 s + write 0.5 s issued simultaneously → t_end = 1.0 s.
-    On a half-duplex bus this would be 1.5 s; on full-duplex it must be 1.0 s.
+    A 1 s read and a 0.5 s write issued together end at t = 1.0 s.
+    A half-duplex bus would take 1.5 s.
     """
     print("\n[2.1] full-duplex: concurrent read+write on separate lanes")
     link = CXLLink(bw_gbps=27.0, txn_overhead_s=10e-9)
@@ -94,7 +89,7 @@ def test_write_exceeds_deadline_exposes_remainder():
     """
     Read window [0, 1.0]; issue 2.0s write at t=0.
     Write end = 2.0s; deadline = 1.0s; exposed = 1.0s.
-    Caller must charge the 1.0s as a stall on the dependent next step.
+    The caller charges that 1.0s as a stall on the dependent next step.
     """
     print("\n[2.2] write exceeds deadline → exposed remainder accounted")
     link = CXLLink(bw_gbps=27.0, txn_overhead_s=10e-9)
@@ -114,14 +109,12 @@ def test_tx_does_not_block_subsequent_read():
     print("\n[2.3] Tx busy does NOT delay subsequent Rx operation")
     link = CXLLink(bw_gbps=27.0, txn_overhead_s=10e-9)
     link.schedule_write_background(t_now=0.0, n_bytes=27e9, deadline=10.0)
-    read_stall = link.schedule_read(t_now=0.0, n_bytes=27e6)   # 1 MB / 27 GB/s = ~37 us
+    read_stall = link.schedule_read(t_now=0.0, n_bytes=27e6)   # 27 MB / 27 GB/s = 1 ms
     check_close("read stall ≈ 0.001 s (NOT 1.001 s)", read_stall, 0.001, rtol=0.05,
                 comment="separate Rx lane is immediately free")
 
 
-# ---------------------------------------------------------------------------
-# Test group 3 — Hand-calculable end-to-end scenarios
-# ---------------------------------------------------------------------------
+# Group 3: hand-calculable end-to-end scenarios
 def test_hand_calculable_10_layer_loop():
     """
     Loop scenario approximating LLM decode:
@@ -135,7 +128,7 @@ def test_hand_calculable_10_layer_loop():
     t = 0.0
     for _ in range(10):
         read_stall = link.schedule_read(t, 2.7e9)
-        # Write issued at current t, deadline = t + read_stall (i.e. next read start)
+        # Write issued at t with deadline t + read_stall, the next read's start
         link.schedule_write_background(t, 135e6, deadline=t + read_stall)
         t += read_stall
     check_close("total wall time ≈ 1.0 s", t, 1.0, rtol=1e-4)
@@ -151,11 +144,10 @@ def test_paper_scale_72b_b128_estimate():
       80 layers, each:
         - read ~875 MB weights (= 0.032 s @ 27 GB/s)
         - write ~10 MB KV (= 370 us @ 27 GB/s)
-    Expected: t_end ≈ 2.6 s, Uwrite ≈ 1.1%.
+    Expected: t_end ~ 2.6 s, Uwrite ~ 1.1%.
 
-    Paper Table III claims Uwrite = 2.71% — this test computes an analytically
-    bounded value; the actual Uwrite depends on which layers are CXL-resident
-    and is set by the scheduler, not by this micro-test.
+    Table III reports Uwrite = 2.71%. That value depends on which layers the
+    scheduler places on CXL; this test checks only the analytic ratio.
     """
     print("\n[3.2] 72B INT8 B=128 micro-estimate (analytic bound)")
     link = CXLLink(bw_gbps=27.0, txn_overhead_s=10e-9)
@@ -174,9 +166,7 @@ def test_paper_scale_72b_b128_estimate():
                 comment="= write_bytes / read_bytes when fully hidden")
 
 
-# ---------------------------------------------------------------------------
-# Test group 4 — Boundary / corner cases
-# ---------------------------------------------------------------------------
+# Group 4: boundary cases
 def test_zero_byte_operations():
     """0-byte ops should still cost txn_overhead but no bandwidth time."""
     print("\n[4.1] zero-byte transactions cost overhead only")
@@ -205,9 +195,6 @@ def test_utilization_zero_when_idle():
     check("idle Uread == 0", link.read_utilization_pct(), 0.0)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 70)
     print("CXLLink verification suite — cxl_link.py")

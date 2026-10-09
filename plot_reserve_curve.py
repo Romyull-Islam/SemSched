@@ -1,11 +1,11 @@
 """
-plot_reserve_curve.py -- the motivation figure.
+Motivation figure: decode throughput against the share of fast memory held
+back as prefetch staging.
 
-One plot carries the paper's claim: every published policy fills its fast tiers
-completely, which is the leftmost point on every curve here, and every curve
-peaks somewhere else. The peak is interior, it is worth 15-55%, and it moves
-with quantization, capacity and platform -- 5%, 8%, 12%, 20% across four
-configurations -- which is why it has to be searched rather than set.
+Published policies fill their fast tiers completely, the leftmost point of
+each curve. Every curve peaks at an interior reserve worth 15-55%, and the
+peak moves with quantization, capacity and platform (5%, 8%, 12%, 20% across
+the four configurations), so the reserve has to be searched rather than fixed.
 
 Data comes from reserve_curve.json, produced by pinning the scheduler's reserve
 grid to a single fraction and sweeping it. Regenerate with:
@@ -56,11 +56,9 @@ def measure():
                 shutil.copy(os.path.join(R.REPO, f), td)
             p = os.path.join(td, "semduplex_scheduler.py")
             s = open(p).read()
-            # Pin the search to ONE plan: the swept reserve fraction, KV on the
-            # device, full device capacity (no declining). Each replace asserts,
-            # because a silent no-op here produced a perfectly flat curve when
-            # the search was rewritten under this script -- every point was the
-            # default search re-run, identical by construction.
+            # Pin the search to one plan: the swept reserve fraction, KV on the
+            # device, full device capacity. Each replace asserts its anchor; a
+            # silent no-op would re-run the default search at every point.
             reps = [
                 ("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
                0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""",
@@ -126,9 +124,8 @@ def plot(data):
 
     # Every published policy fills its tiers; that is x = 0.
     ax.axvline(0, color="#B00020", linewidth=0.8, zorder=2)
-    # Target the zero-reserve line BELOW every data point: aimed at y=0.70 the
-    # tip sat beside one curve's x=0 marker (0.72x) and read as that policy's
-    # throughput, when the claim is about x, where the policies operate, not y.
+    # Arrow points at the x = 0 line below all data points, so it is not read
+    # as one curve's value.
     ax.annotate("every published policy\nfills its tiers (zero reserve)",
                 xy=(0, 0.585), xytext=(6.5, 0.56),
                 fontsize=6.8, color="#B00020", ha="left", va="center",

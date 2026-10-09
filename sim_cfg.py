@@ -1,59 +1,42 @@
-# sim_cfg.py
 from tiers import GiB
 
+# run_paper_tables.py patches TOKENS, BATCH_SIZE, the compute engine and the
+# GPU, host and CXL DRAM capacities per run; the values here are defaults for
+# running a simulator directly.
 TOKENS = 16
 
-BATCH_SIZE = 1 # Auto-set
+BATCH_SIZE = 1
 
 
-# ── Compute engine ────────────────────────────────────────────────────────────
-# Dual AMD EPYC 9454 (Zen 4, Genoa): 2 sockets x 48 cores @ 2.75 GHz, AVX-512
-# at 64 FLOP/cycle/core, 85% achieved -> 14.4 TFLOPS. NO ACCELERATOR.
+# Compute engine: dual AMD EPYC 9454 (Zen 4, Genoa), 2 sockets x 48 cores at
+# 2.75 GHz, AVX-512 at 64 FLOP/cycle/core, 85% achieved -> 14.4 TFLOPS, no
+# accelerator. Zeng et al. characterized CMM-H on this host.
 #
-# This is the host on which CMM-H was actually characterized by Zeng et al.,
-# so the platform matches the device literature rather than being chosen by us.
-# It also sits closest to the memory-bound threshold of every engine that
-# passes it -- 4.2x above the 3.46 TFLOPS needed at B=128 FP16 -- which makes
-# it the most conservative passing choice, not the most flattering.
-#
-# The result is invariant above that threshold. Verified identical (13.36 t/s,
-# 1.29x at 16H+48C) on: this part, LIA's 40-core Sapphire Rapids with AMX
-# (61.4 TF), CXLAimPod's 86-core Granite Rapids with AMX (132.1 TF), and a
-# commodity RTX 4090 (115.6 TF). The only engine in the CXL literature that
-# fails is the Xeon 6710E of the CMM-H prototype paper -- a Sierra Forest
-# E-core part with neither AMX nor AVX-512, 2.2 TFLOPS, below the threshold --
-# where the advantage falls to 1.08x. That case is reported, not hidden.
-#
-# No GPU is modeled. Both CMM-H papers are CPU-only, and an accelerator turns
-# out to be neither necessary nor helpful here: what matters is clearing the
-# threshold, and every modern server CPU already does.
+# Above the 3.46 TFLOPS needed at B=128 FP16 (this engine has 4.2x that) the
+# result is unchanged, 13.36 t/s and 1.29x at 16H+48C, on this part, LIA's
+# 40-core Sapphire Rapids with AMX (61.4 TF), CXLAimPod's 86-core Granite Rapids
+# with AMX (132.1 TF) and an RTX 4090 (115.6 TF). Below it, the Xeon 6710E of the
+# CMM-H prototype paper (Sierra Forest, no AMX or AVX-512, 2.2 TF) gives 1.08x.
 cpu_freq_hz = 2.75e9                # EPYC 9454 base clock
 cpu_cores = 96                      # 2 sockets x 48 cores
 flops_per_cycle_per_core = 64.0     # AVX-512 FMA, Zen 4
-parallel_efficiency = 0.85          # achieved across 2 sockets; CALIBRATED
-                                    # against LLMCompass, which measures 1.00
-                                    # for our GEMM shapes at B=128, so
-                                    # assuming less makes our advantage
-                                    # smaller rather than larger.
+parallel_efficiency = 0.85          # across 2 sockets; LLMCompass gives 1.00
+                                    # for these GEMM shapes at B=128, and a
+                                    # lower value shrinks SemSched's advantage
 
-# Accelerator HBM available to hold weights. 0 = no accelerator, which is the
-# default and matches both CMM-H papers. When non-zero it is a real tier at
-# HBM bandwidth, not extra host capacity: every policy's placement cascade
-# shifts up by one level, so what was pinned in host DRAM moves to HBM, what
-# was in CXL DRAM moves to host, and NAND residency shrinks accordingly.
+# Accelerator memory for weights (tiers.GPU_HBM); 0 means no accelerator, as in
+# both CMM-H papers. When nonzero it is a separate tier above host DRAM, not
+# extra host capacity.
 gpu_hbm_capacity_bytes = 0 * GiB
 
-# Host DRAM: DDR5-4800
-host_dram_capacity_bytes = 32 * GiB # Auto-set
-# DDR5-4800 bandwidth: 38.4 GB/s per channel (official spec)
-# Reference: Intel ARK above, JEDEC DDR5 standard
+# Host DRAM: DDR5-4800, 38.4 GB/s per channel (JEDEC DDR5)
+host_dram_capacity_bytes = 32 * GiB
 
-# CXL Expansion Device (Samsung CMM-H type)
-cxl_dev_dram_capacity_bytes = 64 * GiB # Auto-set
-cxl_ssd_capacity_bytes = 1024 * GiB   # 1 TB, the documented CMM-H prototype
-                                      # (Soltaniyeh et al.); was 256 GiB, which
-                                      # contradicted Table II and could not hold
-                                      # a 405B model's NAND residency.
+# CXL expansion device (Samsung CMM-H)
+cxl_dev_dram_capacity_bytes = 64 * GiB
+cxl_ssd_capacity_bytes = 1024 * GiB   # 1 TB, the CMM-H prototype (Soltaniyeh
+                                      # et al.; Table II); holds a 405B model's
+                                      # NAND share
 
-# NVMe SSD Baseline (PCIe Gen4 x4)
+# Host NVMe SSD (PCIe Gen4 x4)
 ssd_capacity_bytes = 512 * GiB

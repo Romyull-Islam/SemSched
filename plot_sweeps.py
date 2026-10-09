@@ -1,12 +1,8 @@
 """
-plot_sweeps.py -- the batch-size and model-scale results as figures.
+Batch-size and model-scale sweeps as figures. The full grids come from
+run_paper_tables.py --batch-sweep and --models.
 
-Both were 8-plus-column tables; a reviewer absorbs a crossover from a curve in
-seconds and from a 96-cell grid never, and the venue's papers are figure-led.
-The full grids still regenerate from run_paper_tables.py --batch-sweep and
---models, so nothing is lost to the artifact by plotting the shape.
-
-Data comes from sweep_figs.json, parsed from the harness's own sweep output.
+Data comes from sweep_figs.json, parsed from that harness output.
 
     python plot_sweeps.py
 
@@ -49,7 +45,8 @@ def deco(ax):
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1f}$\\times$"))
 
 
-# ── batch: median line + min-max band per (platform, quant), 48C shown solid ──
+# Batch sweep: median and min-max band over the three device capacities, per
+# (platform, quant).
 fig, ax = plt.subplots(figsize=(3.45, 2.15))
 BS = [1, 2, 4, 8, 16, 32, 64, 128]
 for (plat, quant), (c, m, ls) in STYLE.items():
@@ -79,7 +76,7 @@ fig.savefig(os.path.join(REPO, "figures", "fig_batch.pdf"),
             bbox_inches="tight", pad_inches=0.015)
 print("wrote figures/fig_batch.pdf")
 
-# ── models: ratio per model, categorical x, both platforms and quants ─────────
+# Model scale: speedup per model at 16H+48C, both platforms and quants.
 fig, ax = plt.subplots(figsize=(3.45, 2.05))
 MODELS = ["Mistral 7B", "Llama 13B", "Qwen3 20B", "Qwen2.5 72B", "Llama 405B"]
 X = range(len(MODELS))
@@ -94,9 +91,8 @@ ax.set_xlabel("model (16H$+$48C)")
 ax.set_ylabel("speedup vs. best baseline")
 deco(ax)
 ax.set_ylim(0.93, 1.55)
-# No in-plot annotations: at this width every clear region is one data
-# revision away from being under a line, and a white box that keeps text
-# legible hides the curve behind it. The caption carries both endpoints.
+# No in-plot annotations; at this width they would cover a curve. The caption
+# gives both endpoints.
 ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0),
           ncol=2, handlelength=1.9, borderaxespad=0.1, labelspacing=0.3,
           columnspacing=1.2)
