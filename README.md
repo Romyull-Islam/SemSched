@@ -131,3 +131,13 @@ SemSched: Trading Memory Capacity for Prefetch Bandwidth in LLM Inference
 on Hybrid CXL Devices. Md Romyull Islam, Tu N. Nguyen, Selena He, Yong Shi,
 and Kun Suo. IEEE BigData 2026 (under submission).
 ```
+
+## Related projects
+
+Part of my work on efficient LLM systems ([all projects](https://github.com/Romyull-Islam)):
+
+- [μKV (EndurKV)](https://github.com/Romyull-Islam/EndurKV): KV-cache eviction with in-place compaction for LLM inference on a phone
+- [AQLoRA](https://github.com/Romyull-Islam/AQLoRA): zero-search precision allocation for fast quantized LoRA fine-tuning
+- [SLMs on the edge](https://github.com/Romyull-Islam/SLM): performance of small language models on Raspberry Pi, Jetson Orin and Mac mini (IEEE IPCCC 2024)
+- [VLM-Benchmarking](https://github.com/Romyull-Islam/VLM-Benchmarking): accuracy, time and energy of small vision-language models on Jetson AGX Orin
+- [Build, Train, Deploy](https://github.com/Romyull-Islam/llm_booklet): an open five-week LLM course in PyTorch
