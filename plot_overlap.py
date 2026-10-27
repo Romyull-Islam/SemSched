@@ -31,7 +31,8 @@ DATA = os.path.join(REPO, "overlap_data.json")
 OUT = os.path.join(REPO, "figures", "fig_overlap.pdf")
 sys.path.insert(0, REPO)
 
-from pipeline import pipelined_time_s, SHARED_LINK           # noqa: E402
+from pipeline import (pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH,  # noqa: E402
+                      DEVICE_DRAM, DEVICE_NAND)
 from tiers import CXL_HOST_LINK_CEILING                     # noqa: E402
 
 CHUNK = 256 * 1024
@@ -41,7 +42,7 @@ CHUNK = 256 * 1024
 ANCHOR = """            lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
                                    TIER_LAT,
                                    inflight_budget=max(0.0, _prefetch_reserve
-                                                       - pf_stats["bytes_prefetched"]))"""
+                                                       - pf_stats["bytes_prefetched"]),"""
 DUMP = """            if token_step == 0 and not __import__("os").path.exists("overlap_dump.json"):
                 __import__("json").dump(
                     {"units": [[bt, c] for bt, c in units],
@@ -119,8 +120,14 @@ def schedule(d):
                 link_free = start + nb / CXL_HOST_LINK_CEILING
             end = start + dur
             tier_free[tier] = end
-            ready = max(ready, end)
             xfer.append((i, tier, start, end))
+            if NAND_PASS_THROUGH and tier == DEVICE_NAND and bw.get(DEVICE_DRAM):
+                # The cache fill and read-out also hold the device DRAM.
+                d0 = max(start, tier_free.get(DEVICE_DRAM, 0.0))
+                d1 = d0 + nb / bw[DEVICE_DRAM]
+                tier_free[DEVICE_DRAM] = d1
+                end = max(end, d1)
+            ready = max(ready, end)
         s0 = max(ready, prev_end)
         prev_end = s0 + c
         comp_done[i] = prev_end
@@ -200,13 +207,13 @@ def main():
     for ax in axes:
         ax.set_xlim(0, lim)
     # Same twelve units on one clock; the gap after (b)'s last bar is the saving.
-    axes[1].axvline(end_b * 1e3, color="#3D4C5C", linewidth=0.7,
+    axes[1].axvline(end_b * 1e3, color="#3D4C5C", linewidth=1.0,
                     linestyle=(0, (4, 3)))
     axes[1].annotate(f"same units,\n{(1 - end_b / end_a) * 100:.0f}% sooner",
-                     xy=(end_b * 1e3, 2.6), xytext=(end_b * 1e3 + lim * 0.04, 2.35),
+                     xy=(end_b * 1e3, 2.6), xytext=(end_b * 1e3 + lim * 0.09, 2.35),
                      fontsize=6.4, color="#3D4C5C",
-                     arrowprops=dict(arrowstyle="->", color="#3D4C5C",
-                                     linewidth=0.7))
+                     arrowprops=dict(arrowstyle="-|>", color="#3D4C5C",
+                                     mutation_scale=9, linewidth=1.1))
     axes[1].set_xlabel("time within the step (ms)", fontsize=7.2)
     fig.tight_layout(pad=0.4, h_pad=1.1)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

@@ -129,8 +129,8 @@ def plot(data):
     ax.annotate("every published policy\nfills its tiers (zero reserve)",
                 xy=(0, 0.585), xytext=(6.5, 0.56),
                 fontsize=6.8, color="#B00020", ha="left", va="center",
-                arrowprops=dict(arrowstyle="->", color="#B00020",
-                                linewidth=0.7, shrinkA=0, shrinkB=2))
+                arrowprops=dict(arrowstyle="-|>", color="#B00020", mutation_scale=9,
+                                linewidth=1.1, shrinkA=0, shrinkB=2))
 
     ax.set_xlabel("fast memory held back as prefetch staging (%)")
     ax.set_ylabel("decode throughput\nvs. best baseline")
