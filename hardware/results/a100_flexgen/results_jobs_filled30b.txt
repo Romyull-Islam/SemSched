@@ -1,0 +1,10 @@
+c_65_k0_r1_try1 model=opt-30b cpu=65 budget=60 k=0 gpu=0 decode throughput: 1.454 exit 0 load_max=122.95  
+c_65_k8_r1_try1 model=opt-30b cpu=65 budget=60 k=8 gpu=0 decode throughput: 1.491 exit 0 load_max=116.65  
+c_60_k8_r1_try1 model=opt-30b cpu=60 budget=60 k=8 gpu=0 decode throughput: 1.933 exit 0 load_max=107.93  
+c_65_k0_r2_try1 model=opt-30b cpu=65 budget=60 k=0 gpu=0 decode throughput: 1.453 exit 0 load_max=101.48  
+c_65_k8_r2_try1 model=opt-30b cpu=65 budget=60 k=8 gpu=0 decode throughput: 1.446 exit 0 load_max=76.32  
+c_60_k8_r2_try1 model=opt-30b cpu=60 budget=60 k=8 gpu=0 decode throughput: 1.951 exit 0 load_max=74.16  
+c_65_k0_r3_try1 model=opt-30b cpu=65 budget=60 k=0 gpu=0 decode throughput: 1.473 exit 0 load_max=64.89  
+c_65_k8_r3_try1 model=opt-30b cpu=65 budget=60 k=8 gpu=0 decode throughput: 1.452 exit 0 load_max=44.96  
+c_60_k8_r3_try1 model=opt-30b cpu=60 budget=60 k=8 gpu=0 decode throughput: 1.956 exit 0 load_max=82.90  
+retry done Sun Oct 25 03:48:51 PM UTC 2026

@@ -146,7 +146,10 @@ def ssd_time_s(n):
 def simulate_llmflash():
     import model_cfg as _mcfg
 
-    layers     = decomposed_build_layers(DEFAULT_MODEL_CFG())
+    # Built for the real prompt length: the KV terms below divide the layers'
+    # kv_cache_bytes by NUM_PREFILL_TOKENS to get bytes per token.
+    layers     = decomposed_build_layers(DEFAULT_MODEL_CFG(),
+                                         sequence_length=NUM_PREFILL_TOKENS)
 
     # KV capacity reservation: the pool holds the KV cache as well as weights.
     # Reserved at the generation mean, PREFILL + TOKENS/2, since the cache grows

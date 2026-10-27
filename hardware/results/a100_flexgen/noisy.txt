@@ -1,0 +1,14 @@
+a_20_k0_r3 model=opt-13b cpu=20 budget=30 k=0 gpu=0 decode throughput: 2.114 exit 0 load_max=900.15 
+a_20_k8_r3 model=opt-13b cpu=20 budget=30 k=8 gpu=0 decode throughput: 2.113 exit 0 load_max=922.18 
+a_63_k0_r4 model=opt-13b cpu=63 budget=30 k=0 gpu=0 decode throughput: 3.244 exit 0 load_max=929.20 
+a_63_k8_r4 model=opt-13b cpu=63 budget=30 k=8 gpu=0 decode throughput: 3.024 exit 0 load_max=881.02 
+a_60_k0_r4 model=opt-13b cpu=60 budget=30 k=0 gpu=0 decode throughput: 2.875 exit 0 load_max=910.77 
+a_60_k8_r4 model=opt-13b cpu=60 budget=30 k=8 gpu=0 decode throughput: 3.536 exit 0 load_max=911.79 
+a_50_k0_r4 model=opt-13b cpu=50 budget=30 k=0 gpu=0 decode throughput: 2.742 exit 0 load_max=877.71 
+a_50_k8_r4 model=opt-13b cpu=50 budget=30 k=8 gpu=0 decode throughput: 3.286 exit 0 load_max=891.08 
+a_40_k0_r4 model=opt-13b cpu=40 budget=30 k=0 gpu=0 decode throughput: 2.665 exit 0 load_max=806.35 
+a_40_k8_r4 model=opt-13b cpu=40 budget=30 k=8 gpu=0 decode throughput: 3.239 exit 0 load_max=705.14 
+a_30_k0_r4 model=opt-13b cpu=30 budget=30 k=0 gpu=0 decode throughput: 2.355 exit 0 load_max=646.20 
+a_30_k8_r4 model=opt-13b cpu=30 budget=30 k=8 gpu=0 decode throughput: 2.928 exit 0 load_max=628.92 
+a_20_k0_r4 model=opt-13b cpu=20 budget=30 k=0 gpu=0 decode throughput: 2.228 exit 0 load_max=461.22 
+a_20_k8_r4 model=opt-13b cpu=20 budget=30 k=8 gpu=0 decode throughput: 2.122 exit 0 load_max=418.58 

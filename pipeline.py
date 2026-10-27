@@ -21,6 +21,8 @@ queue), so issuing early cannot create bandwidth. And CXL device DRAM and its
 NAND backend share the host link, which caps their combined rate at any
 lookahead depth.
 """
+import os
+
 from tiers import CXL_HOST_LINK_CEILING
 
 # Tiers sharing one physical link, and the ceiling they share. CMM-H device DRAM
@@ -28,9 +30,17 @@ from tiers import CXL_HOST_LINK_CEILING
 # so 27 + 5 GB/s cannot both be realised: the link carries 31.5.
 SHARED_LINK = {"CXL Device DRAM", "CXL Device NAND"}
 
+# On CMM-H a NAND read is first copied into the DRAM cache and then returned
+# from it (Soltaniyeh et al., HotStorage'25, Fig. 1b), so NAND bytes also
+# occupy the device DRAM. NAND_PASS_THROUGH=1 charges them there, which caps the
+# device's combined rate at the DRAM rate. This is the default; NAND_PASS_THROUGH=0
+# runs the two tiers in parallel instead.
+NAND_PASS_THROUGH = os.environ.get("NAND_PASS_THROUGH", "1") == "1"
+DEVICE_DRAM, DEVICE_NAND = "CXL Device DRAM", "CXL Device NAND"
+
 
 def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
-                     chunk_bytes=256 * 1024, inflight_budget=None):
+                     chunk_bytes=256 * 1024, inflight_budget=None, demand=()):
     """Time for one pass over `units` with reads issued `prefetch_depth` ahead.
 
     units            [(bytes_by_tier: {tier: bytes}, compute_s), ...] in
@@ -43,6 +53,8 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
     tier_lat         {tier: seconds per chunk_bytes chunk}.
     inflight_budget  bytes that may be fetched but not yet consumed; None means
                      unbounded.
+    demand           indices of units whose transfers are not prefetched: they
+                     are issued when the preceding unit finishes, as on a miss.
 
     Returns the completion time of the last unit's compute.
     """
@@ -83,6 +95,9 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                 m -= 1
             issue_at = max(issue_at, comp_done[m] if m >= 0 else 0.0)
 
+        if i in demand:
+            issue_at = max(issue_at, comp_done[i - 1] if i else 0.0)
+
         ready = issue_at
         for tier, nbytes in by_tier.items():
             if nbytes <= 0:
@@ -102,6 +117,13 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                 link_free = start + nbytes / CXL_HOST_LINK_CEILING
             finish = start + dur
             tier_free[tier] = finish
+            if NAND_PASS_THROUGH and tier == DEVICE_NAND and tier_bw.get(DEVICE_DRAM):
+                # The cache fill and read-out stream alongside the NAND read but
+                # hold the DRAM for these bytes at the DRAM's own rate.
+                d_start = max(start, tier_free.get(DEVICE_DRAM, 0.0))
+                d_finish = d_start + nbytes / tier_bw[DEVICE_DRAM]
+                tier_free[DEVICE_DRAM] = d_finish
+                finish = max(finish, d_finish)
             ready = max(ready, finish)
 
         # Compute is one engine: units execute in order, each starting when its

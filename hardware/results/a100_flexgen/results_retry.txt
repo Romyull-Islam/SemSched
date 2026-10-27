@@ -1,0 +1,16 @@
+14 noisy runs to redo Sat Oct 24 01:17:16 PM UTC 2026
+a_20_k0_r3_retry1 model=opt-13b cpu=20 budget=30 k=0 gpu=0 decode throughput: 2.713 exit 0 load_max=36.82  
+a_20_k8_r3_retry1 model=opt-13b cpu=20 budget=30 k=8 gpu=0 decode throughput: 2.669 exit 0 load_max=58.93  
+a_63_k0_r4_retry1 model=opt-13b cpu=63 budget=30 k=0 gpu=0 decode throughput: 3.843 exit 0 load_max=49.67  
+a_63_k8_r4_retry1 model=opt-13b cpu=63 budget=30 k=8 gpu=0 decode throughput: 3.800 exit 0 load_max=32.94  
+a_60_k0_r4_retry1 model=opt-13b cpu=60 budget=30 k=0 gpu=0 decode throughput: 3.225 exit 0 load_max=35.84  
+a_60_k8_r4_retry1 model=opt-13b cpu=60 budget=30 k=8 gpu=0 decode throughput: 4.377 exit 0 load_max=40.38  
+a_50_k0_r4_retry1 model=opt-13b cpu=50 budget=30 k=0 gpu=0 decode throughput: 3.172 exit 0 load_max=55.97  
+a_50_k8_r4_retry1 model=opt-13b cpu=50 budget=30 k=8 gpu=0 decode throughput: 4.366 exit 0 load_max=48.30  
+a_40_k0_r4_retry1 model=opt-13b cpu=40 budget=30 k=0 gpu=0 decode throughput: 3.028 exit 0 load_max=46.06  
+a_40_k8_r4_retry1 model=opt-13b cpu=40 budget=30 k=8 gpu=0 decode throughput: 4.185 exit 0 load_max=44.99  
+a_30_k0_r4_retry1 model=opt-13b cpu=30 budget=30 k=0 gpu=0 decode throughput: 2.716 exit 0 load_max=56.51  
+a_30_k8_r4_retry1 model=opt-13b cpu=30 budget=30 k=8 gpu=0 decode throughput: 3.745 exit 0 load_max=49.59  
+a_20_k0_r4_retry1 model=opt-13b cpu=20 budget=30 k=0 gpu=0 decode throughput: 2.701 exit 0 load_max=50.43  
+a_20_k8_r4_retry1 model=opt-13b cpu=20 budget=30 k=8 gpu=0 decode throughput: 2.669 exit 0 load_max=65.16  
+retry done Sat Oct 24 02:13:09 PM UTC 2026

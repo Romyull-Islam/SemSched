@@ -1,0 +1,9 @@
+calib13b_50_try1 model=opt-13b cpu=50 budget=48 k=0 gpu=0  anon 707907584 kernel 151040000 shmem 27437830144 inactive_file 15871856640  load_max=81.09  
+calib30b_50_try1 model=opt-30b cpu=50 budget=96 k=0 gpu=0  anon 702050304 kernel 302399488 shmem 52670763008 inactive_file 26313990144  load_max=69.23  
+res13b_try1 model=opt-13b cpu=100 budget=48 k=0 gpu=0 decode throughput: 15.684 exit 0 load_max=44.05  
+res30b_try1 model=opt-30b cpu=100 budget=96 k=0 gpu=0 decode throughput: 6.799 exit 0 load_max=73.62  
+mem13b_63_k0_try1 model=opt-13b cpu=63 budget=30 k=0 gpu=0 decode throughput: 3.853 exit 0 load_max=62.90  
+mem13b_63_k8_try1 model=opt-13b cpu=63 budget=30 k=8 gpu=0 decode throughput: 3.757 exit 0 load_max=63.02  
+mem13b_60_k8_try1 model=opt-13b cpu=60 budget=30 k=8 gpu=0 decode throughput: 4.421 exit 0 load_max=73.99  
+mem30b_60_k0_try1 model=opt-30b cpu=60 budget=52 k=0 gpu=0 decode throughput: 1.466 exit 0 load_max=79.98  
+retry done Sun Oct 25 07:47:03 AM UTC 2026

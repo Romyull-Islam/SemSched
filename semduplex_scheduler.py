@@ -19,6 +19,7 @@
 #     bytes by the active fraction 1 - (1 - sparsity)^B (LLMFlash sliding window).
 
 import math
+import time
 import pandas as pd
 import sys
 import traceback
@@ -74,6 +75,28 @@ PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "size-desc")
 # the rest is the prefetcher's in-flight budget. Default 0: staging loses this
 # split in every configuration (Sec. V-D).
 STAGE_RESERVE_FRAC = float(_os.environ.get("SEMSCHED_STAGE_FRAC", "0.0"))
+
+# Fraction of device-cache prefetch hints the CMM-H controller does not follow
+# (Sec. III-F). A NAND read whose hint is dropped is served on demand instead of
+# ahead of use. Decode applies it; the search plans as if every hint is
+# followed, so the plan is not adjusted to the loss.
+HINT_DROP = float(_os.environ.get("SEMSCHED_HINT_DROP", "0.0"))
+
+# Context length the placement is planned for. By default the plan sees the
+# real prompt length; setting it differently tests a plan made for one context
+# length and served at another, as under continuous batching, where the
+# requests in a batch change and the KV volume per step changes with them.
+PLAN_PREFILL = int(_os.environ.get("SEMSCHED_PLAN_PREFILL", "0")) or None
+
+
+def dropped_hints(units):
+    """Indices of NAND-reading units whose hint is dropped, spread evenly over
+    the step by a golden-ratio sequence so the result does not depend on which
+    end of the model the drops fall."""
+    if HINT_DROP <= 0:
+        return set()
+    nand = [i for i, (by, _) in enumerate(units) if by.get(PL_CXL_DEV_NAND, 0) > 0]
+    return {i for n, i in enumerate(nand) if ((n + 1) * 0.6180339887) % 1.0 < HINT_DROP}
 
 # Bandwidth and per-chunk latency of each placement tier, keyed by the label
 # `frac` uses. The pipeline engine needs these to run tiers concurrently.
@@ -626,7 +649,8 @@ def run_semantic_duplex_simulation():
                           * BYTES_PER_PARAM
                           for L in layers
                           if classify_layer_type(L) == LayerType.ATTENTION) * BATCH_SIZE
-        _kv_mean = int(_kv_per_tok * (PREFILL_TOKENS + TOKENS / 2.0))
+        _plan_prefill = PLAN_PREFILL or PREFILL_TOKENS
+        _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS / 2.0))
 
         _caps = {"gpu":  gpu_hbm_capacity_bytes,
                  "host": host_dram_capacity_bytes,
@@ -690,7 +714,7 @@ def run_semantic_duplex_simulation():
                 gpu_cap=_caps["gpu"])
             # A representative step: mid-generation, so the KV read is the one
             # placement was sized for.
-            _mid = PREFILL_TOKENS + TOKENS / 2.0
+            _mid = _plan_prefill + TOKENS / 2.0
             us = []
             for _i, _L in enumerate(layers):
                 _by = {t: _L["bytes"] * f for t, f in fr[_i].items()}
@@ -713,7 +737,7 @@ def run_semantic_duplex_simulation():
         _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
                0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
         _kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
-        def build_units(fr, kvi, kv_split, token_step, pinned=()):
+        def build_units(fr, kvi, kv_split, token_step, pinned=(), prefill=PREFILL_TOKENS):
             """Per-step unit list, shared by the plan evaluator and the decode
             loop so that the search times exactly what decode runs."""
             us = []
@@ -726,7 +750,7 @@ def run_semantic_duplex_simulation():
                           if t_ == PL_CXL_DEV_NAND and _i in pinned else t_)
                     _by[tt] = _by.get(tt, 0.0) + _L["bytes"] * f_
                 if kvi[_L["name"]] > 0:
-                    _kb = (PREFILL_TOKENS + token_step) * kvi[_L["name"]] * BATCH_SIZE
+                    _kb = (prefill + token_step) * kvi[_L["name"]] * BATCH_SIZE
                     for _t2, _f2 in kv_split.items():
                         _lbl = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM,
                                 "cxl": PL_CXL_DEV_DRAM}[_t2]
@@ -740,6 +764,7 @@ def run_semantic_duplex_simulation():
         # with the device clamped to each smaller standard size (32, 48 GB), so
         # a larger device's candidates include every smaller device's plan and
         # decode time cannot get worse with more capacity.
+        _search_t0 = time.perf_counter()
         _cands = []
         _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
@@ -770,11 +795,11 @@ def run_semantic_duplex_simulation():
             pl, lt, kvi, sp, fr = plan
             tot = 0.0
             for _tk in range(TOKENS):
-                us = build_units(fr, kvi, kv_split, _tk)
+                us = build_units(fr, kvi, kv_split, _tk, prefill=_plan_prefill)
                 lat = pipelined_time_s(us, PREFETCH_QUEUE_DEPTH, TIER_BW,
                                        TIER_LAT, inflight_budget=dr + hr)
                 lat += kv_growth_spill_time_s(
-                    _kv_per_tok * (PREFILL_TOKENS + _tk + 1), _kv_mean,
+                    _kv_per_tok * (_plan_prefill + _tk + 1), _kv_mean,
                     _kv_tiers[max(kv_split, key=kv_split.get)])
                 tot += lat
             return tot
@@ -789,11 +814,23 @@ def run_semantic_duplex_simulation():
                 _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
                 _best_devcap = _devcap
         _caps0["cxl"] = _best_devcap
+        print(f"Search time: {time.perf_counter() - _search_t0:.2f} s for {len(_cands)} finalists")
+        print(f"Search choice: device {_best_devcap / GiB:.0f} GB of "
+              f"{cxl_dev_dram_capacity_bytes / GiB:.0f}, KV tier {_best_kv}, "
+              f"reserves host {_host_res / GiB:.2f} GB device {_dev_res / GiB:.2f} GB")
         # Re-establish the winning cache placement: _kv_split and _caps are read
         # by _kv_time and by the decode loop.
         _kv_split, _caps = _kv_place(_best_kv)
         _dev_total, _host_total = _caps["cxl"], _caps["host"]
         place, ltypes, inc, sparsity, frac = _best
+        _by_tier = {}
+        for _i, _L in enumerate(layers):
+            for _t, _f in frac[_i].items():
+                _by_tier[_t] = _by_tier.get(_t, 0.0) + _L["bytes"] * _f
+        print("Placement: " + ", ".join(f"{_t} {_b / GiB:.1f} GB weights"
+                                        for _t, _b in _by_tier.items())
+              + "; KV " + ", ".join(f"{_t} {_kv_mean * _f / GiB:.1f} GB"
+                                    for _t, _f in _kv_split.items()))
         _dev_for_weights = max(0, _dev_total - _dev_res)
 
         tmon    = DuplexTrafficMonitor()
@@ -999,7 +1036,8 @@ def run_semantic_duplex_simulation():
             lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER_BW,
                                    TIER_LAT,
                                    inflight_budget=max(0.0, _prefetch_reserve
-                                                       - pf_stats["bytes_prefetched"]))
+                                                       - pf_stats["bytes_prefetched"]),
+                                   demand=dropped_hints(units))
             lat += kv_growth_spill_time_s(
                 _kv_per_tok * (PREFILL_TOKENS + token_step + 1),
                 _kv_mean, _kv_tiers[max(_kv_split, key=_kv_split.get)])

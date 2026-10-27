@@ -1,0 +1,5 @@
+probe30b_65_try1 model=opt-30b cpu=65 budget=96 k=0 gpu=0  anon 389812224 kernel 300072960 shmem 58043666432 inactive_file 31702384640  load_max=44.43  
+probe30b_70_try1 model=opt-30b cpu=70 budget=96 k=0 gpu=0  anon 701886464 kernel 267395072 shmem 58043666432 inactive_file 27057774592  load_max=43.17  
+probe30b_75_try1 model=opt-30b cpu=75 budget=96 k=0 gpu=0  anon 353742848 kernel 254951424 shmem 58034487296 inactive_file 19235835904  load_max=93.47  
+probe30b_80_try1 model=opt-30b cpu=80 budget=96 k=0 gpu=0  anon 701681664 kernel 364134400 shmem 82202857472 inactive_file 16612151296  load_max=92.89  
+retry done Sun Oct 25 02:21:17 PM UTC 2026
