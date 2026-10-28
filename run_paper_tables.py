@@ -47,7 +47,7 @@ ENGINES = {
 GRID = [16]                       # host DRAM
 CXLS = [32, 48, 64]               # CXL device DRAM
 QUANTS = ["fp16", "int8"]
-BATCH, DECODE = 128, 16
+BATCH, DECODE = 128, 256
 
 
 def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
@@ -69,6 +69,13 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
     s = re.sub(r"^cpu_freq_hz\s*=\s*[\d.e+]+", f"cpu_freq_hz = {freq}", s, 1, re.M)
     s = re.sub(r"^parallel_efficiency\s*=\s*[\d.]+",
                f"parallel_efficiency = {eff}", s, 1, re.M)
+    open(p, "w").write(s)
+
+    # LLM-in-a-Flash keeps its own decode count rather than reading sim_cfg.
+    p = os.path.join(td, "llmflash_baseline.py")
+    s = open(p).read()
+    s, n = re.subn(r"^NUM_DECODE_TOKENS(\s*)= \d+", f"NUM_DECODE_TOKENS\\1= {DECODE}", s, 1, re.M)
+    assert n == 1, "llmflash decode anchor drifted"
     open(p, "w").write(s)
 
     p = os.path.join(td, "model_cfg.py")
@@ -386,6 +393,135 @@ def batch_table(gpu):
                     + f"{ratio:>8.2f}x{af:>14.3f}")
 
 
+# Equal footing (reviewer 4 and reviewer 1). Each baseline gets lookahead K and
+# a fixed reserve of a fraction of host and device DRAM, taken off the capacity
+# it places into and added to its staging budget. The rewrites below are the
+# only changes to each baseline: its depth constant or call, and its budget.
+EQ_DEPTHS = [1, 4, 8, 16, 32]
+# The same 15 reserve values SemSched searches (semduplex_scheduler.py).
+EQ_RESERVES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
+               0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+EQ_PATCH = {
+    "flexgen_baseline.py": [(r"^PREFETCH_DEPTH = 1$", "PREFETCH_DEPTH = {k}"),
+                            ("inflight_budget=max(0.0, _FLEXGEN_STAGING)",
+                             "inflight_budget=max(0.0, _FLEXGEN_STAGING) + EQ_EXTRA")],
+    "lia_baseline.py": [(r"^PREFETCH_DEPTH = 1$", "PREFETCH_DEPTH = {k}"),
+                        ("inflight_budget=max(0.0, _LIA_STAGING)",
+                         "inflight_budget=max(0.0, _LIA_STAGING) + EQ_EXTRA")],
+    "cxlaimpod_baseline.py": [("elapsed = pipelined_time_s(\n        units, PREFETCH_WINDOW,",
+                               "elapsed = pipelined_time_s(\n        units, {k},"),
+                              ("inflight_budget=max(0.0, gpu_free + cxl_free + host_free))",
+                               "inflight_budget=max(0.0, gpu_free + cxl_free + host_free) + EQ_EXTRA)")],
+    "llmflash_baseline.py": [("t = pipelined_time_s(_units, WINDOW_SIZE_K,",
+                              "t = pipelined_time_s(_units, {k},"),
+                             ("inflight_budget=_window) + step_kv",
+                              "inflight_budget=_window + EQ_EXTRA) + step_kv")],
+}
+DYN_DEPTHS = [1, 2, 4, 8, 16, 32]
+
+
+def _run_variant(sim, quant, h, c, gpu, rewrites=(), env=None):
+    """One cell with `rewrites` applied to the simulator's private copy."""
+    with tempfile.TemporaryDirectory() as td:
+        for f in DEPS + [s for _, s in SIMS] + ["dynamic_baseline.py"]:
+            shutil.copy(os.path.join(REPO, f), td)
+        patch(td, quant, h, c, gpu)
+        p = os.path.join(td, sim)
+        s = open(p).read()
+        for old, new in rewrites:
+            if old.startswith("^"):
+                s, n = re.subn(old, new, s, 1, re.M)
+            else:
+                n = s.count(old)
+                s = s.replace(old, new, 1)
+            assert n == 1, (sim, old)
+        open(p, "w").write(s)
+        r = subprocess.run([sys.executable, sim], cwd=td, capture_output=True,
+                           text=True, timeout=900, env={**os.environ, **(env or {})})
+        m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
+        return float(m.group(1)) if m else None
+
+
+def _eq_job(job):
+    kind, sim, quant, c, gpu, k, x = job
+    h = 16
+    if kind == "base":
+        frac = x
+        rw = [(o, n.format(k=k)) for o, n in EQ_PATCH[sim]]
+        return job, _run_variant_scaled(sim, quant, h, c, gpu, frac, rw)
+    if kind == "dyn":
+        return job, _run_variant(sim, quant, h, c, gpu,
+                                 env={"DYN_PREFETCH_DEPTH": str(k), "DYN_KV_TIER": x})
+    return job, _run_variant(sim, quant, h, c, gpu,
+                             rewrites=[(r"^PREFETCH_QUEUE_DEPTH  = 32$",
+                                        f"PREFETCH_QUEUE_DEPTH  = {k}")])
+
+
+def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites):
+    """A baseline with a fixed reserve: it places into (1 - frac) of host and
+    device DRAM, and the reserved bytes are added to its staging budget."""
+    with tempfile.TemporaryDirectory() as td:
+        for f in DEPS + [s for _, s in SIMS]:
+            shutil.copy(os.path.join(REPO, f), td)
+        patch(td, quant, h * (1 - frac), c * (1 - frac), gpu)
+        p = os.path.join(td, sim)
+        s = f"EQ_EXTRA = {frac * (h + c) * 1024 ** 3!r}\n" + open(p).read()
+        for old, new in rewrites:
+            if old.startswith("^"):
+                s, n = re.subn(old, new, s, 1, re.M)
+            else:
+                n = s.count(old)
+                s = s.replace(old, new, 1)
+            assert n == 1, (sim, old)
+        open(p, "w").write(s)
+        r = subprocess.run([sys.executable, sim], cwd=td, capture_output=True,
+                           text=True, timeout=900)
+        m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
+        return float(m.group(1)) if m else None
+
+
+def equal_footing(gpu):
+    """Every policy at its best lookahead: baselines also at their best fixed
+    reserve, the dynamic-replacement baseline at its best KV tier."""
+    jobs = []
+    for quant in QUANTS:
+        for c in CXLS:
+            for sim in EQ_PATCH:
+                for k in EQ_DEPTHS:
+                    for frac in EQ_RESERVES:
+                        jobs.append(("base", sim, quant, c, gpu, k, frac))
+            for k in DYN_DEPTHS:
+                for kv in ("cxl", "host"):
+                    jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
+            for k in EQ_DEPTHS:
+                jobs.append(("sem", "semduplex_scheduler.py", quant, c, gpu, k, None))
+    res = {}
+    with cf.ProcessPoolExecutor() as ex:
+        for job, tps in ex.map(_eq_job, jobs):
+            res[job] = tps or 0.0
+
+    def best(pred):
+        cand = [(v, j) for j, v in res.items() if pred(j)]
+        return max(cand) if cand else (0.0, None)
+
+    names = dict((s, n) for n, s in SIMS)
+    print(f"\n{'=' * 100}\nEqual footing: every policy at its best setting"
+          f"{'  (+RTX 5090)' if gpu else '  (CPU-only)'}\n{'=' * 100}")
+    print(f"{'Quant':<6}{'Memory':<10}{'best static baseline':>34}{'dynamic (Belady)':>24}"
+          f"{'SemSched':>18}{'vs static':>11}{'vs dynamic':>11}")
+    print("-" * 100)
+    for quant in QUANTS:
+        for c in CXLS:
+            cell = lambda j: j[2] == quant and j[3] == c
+            bv, bj = best(lambda j: j[0] == "base" and cell(j))
+            dv, dj = best(lambda j: j[0] == "dyn" and cell(j))
+            sv, sj = best(lambda j: j[0] == "sem" and cell(j))
+            bdesc = f"{names[bj[1]]} K={bj[5]} r={bj[6]:.0%}"
+            ddesc = f"K={dj[5]} KV={dj[6]}"
+            print(f"{quant.upper():<6}{f'16H+{c}C':<10}{bv:>8.2f} ({bdesc:<22}){dv:>9.2f} ({ddesc:<11})"
+                  f"{sv:>8.2f} (K={sj[5]:<2}){sv / bv:>10.2f}x{sv / dv:>10.2f}x")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-sweep", action="store_true",
@@ -403,10 +539,19 @@ def main():
                     help="sweep model scale, 7B to 405B, at 16H+48C")
     ap.add_argument("--sharegpt", action="store_true",
                     help="replay real ShareGPT prompt/response lengths")
+    ap.add_argument("--equal-footing", action="store_true",
+                    help="every policy at its best lookahead and reserve, plus a "
+                         "Belady dynamic-replacement baseline")
     ap.add_argument("--detail", action="store_true",
                     help="per-policy warmup / prefill / decode / wall-clock table")
     a = ap.parse_args()
 
+    if a.equal_footing:
+        if not a.gpu_only:
+            equal_footing(0)
+        if not a.cpu_only:
+            equal_footing(GPU_GB)
+        return
     if a.models:
         if not a.gpu_only:
             model_sweep(0)
