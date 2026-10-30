@@ -9,6 +9,7 @@ TierSched's speedup over the best of the four baselines in each one.
     python sensitivity.py context    # prompts of 2K / 8K / 32K tokens at B=16
     python sensitivity.py mismatch   # plan for 512-token prompts, serve others
     python sensitivity.py passthrough  # NAND reads charged to device DRAM, or not
+    python sensitivity.py streaming  # a unit computes alongside its own reads, or after them
     python sensitivity.py all
 
 Results go to sensitivity.json, keyed by sweep and setting.
@@ -98,6 +99,8 @@ SWEEPS = {
                                  for p in (2048, 8192, 32768)], batch=16),
     "passthrough": lambda: speedups([(f"pass-through {v}", {"env": {"NAND_PASS_THROUGH": v}})
                                      for v in ("1", "0")]),
+    "streaming": lambda: speedups([(f"stream compute {v}", {"env": {"STREAM_COMPUTE": v}})
+                                   for v in ("0", "1")]),
     # Plan once for 512-token prompts; serve prompts of another length. The
     # baselines need no plan, so they run at the served length either way.
     "mismatch": lambda: {

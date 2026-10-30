@@ -22,8 +22,9 @@ machine. All commands use the default pass-through NAND model
 | Fig. 1, reserve curve | `python plot_reserve_curve.py --measure` | 2 min |
 | Fig. 4, one decode step, filled vs reserved | `python plot_overlap.py` | 2 min |
 | Fig. 5, lookahead depth | `python plot_depth.py --measure` | 2 min |
-| Table V, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `mismatch`) | 10 min |
+| Table V, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `streaming`, `mismatch`) | 10 min |
 | Table VI, mechanism ablation | `python ablation_passthrough.py` | 2 min |
+| Sec. V-G, per-configuration search against the best single reserve | `python fixed_reserve.py` | 6 min |
 | Sec. V-H, KV-cache tier | `python run_paper_tables.py --kv-tier` | 2 min |
 | Fig. 7, batch size, B = 1 to 128 | `python run_paper_tables.py --batch-sweep` | 15 min |
 | Fig. 8, model scale, 7B to 405B | `python run_paper_tables.py --models` | 6 min |
@@ -68,6 +69,7 @@ adds the prefetcher. The measured logs and CSVs behind the paper are in
 | Variable | Effect |
 |---|---|
 | `NAND_PASS_THROUGH=0` | NAND reads are not charged to the device DRAM (Table V, "NAND bypasses device DRAM") |
+| `STREAM_COMPUTE=1` | a sub-layer computes alongside its own reads instead of after them, as a CPU computing on weights in place would (Table V, "Compute overlaps its own reads") |
 | `TIERSCHED_PLACEMENT_ORDER` | `size-desc` (default), `semantic`, `sequential` or `random` (Sec. V-G) |
 | `TIERSCHED_HINT_DROP` | fraction of prefetch hints the device ignores; ignored hints become demand reads (Table V) |
 | `TIERSCHED_PLAN_PREFILL` | plan for this prompt length and serve the configured one (Sec. VII) |
@@ -118,7 +120,7 @@ that each patch anchor still matches the file.
 | `tiersched.py` | TierSched: two-stage placement search and bounded decode |
 | `{flexgen,lia,cxlaimpod,llmflash}_baseline.py` | one per baseline, each implementing its own paper |
 | `dynamic_baseline.py` | dynamic replacement by Belady's rule, or CMM-H's default LRU cache |
-| `sensitivity.py`, `realistic_runs.py`, `ablation_passthrough.py`, `replan_cost.py` | the experiments listed above |
+| `sensitivity.py`, `realistic_runs.py`, `ablation_passthrough.py`, `fixed_reserve.py`, `replan_cost.py` | the experiments listed above |
 | `tiers.py` | device bandwidths and the interface ceilings they are asserted against |
 | `RESULTS.md` | the measured tables in prose |
 
@@ -144,6 +146,10 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
   profiles rather than per-model measurement.
 - NAND latency is charged serially per 256 KB read, with no SSD queue
   parallelism; `sensitivity.py nandlat` varies it from 0.5 to 100 us.
+- A sub-layer computes once all its bytes have landed, as on a GPU that copies
+  weights into its own memory. A CPU computing on weights in place overlaps the
+  two; `sensitivity.py streaming` runs that variant, which lowers the CPU-only
+  gains (to 1.01-1.27x) and keeps all twelve leads.
 - No physical CMM-H device. The CMM-H numbers are trace-driven simulation
   against documented device specifications; the mechanism and the timing
   engine are checked on real DRAM-over-NVMe servers (`hardware/`).

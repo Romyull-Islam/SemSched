@@ -48,6 +48,7 @@ below and nothing else.
 ├── sensitivity.py               # Table V: hints ignored, NAND rate and latency, long prompts
 ├── realistic_runs.py            # Realistic host and decode-length experiments
 ├── ablation_passthrough.py      # Table VI: mechanism ablation
+├── fixed_reserve.py             # Per-configuration search against one fixed reserve
 ├── replan_cost.py               # Cost of re-planning when the context length changes
 ├── parse_sweeps.py              # Harness output -> sweep_figs.json
 │

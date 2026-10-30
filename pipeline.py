@@ -38,6 +38,12 @@ SHARED_LINK = {"CXL Device DRAM", "CXL Device NAND"}
 NAND_PASS_THROUGH = os.environ.get("NAND_PASS_THROUGH", "1") == "1"
 DEVICE_DRAM, DEVICE_NAND = "CXL Device DRAM", "CXL Device NAND"
 
+# By default a unit computes only once all its bytes have landed, as when a GPU
+# copies weights into its own memory first. STREAM_COMPUTE=1 lets a unit's
+# compute run alongside its own reads instead, as a CPU computing on weights it
+# loads in place would; the unit then ends when both are done.
+STREAM_COMPUTE = os.environ.get("STREAM_COMPUTE", "0") == "1"
+
 
 def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                      chunk_bytes=256 * 1024, inflight_budget=None, demand=()):
@@ -128,8 +134,12 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
 
         # Compute is one engine: units execute in order, each starting when its
         # bytes have landed and the previous unit has finished.
-        start_comp = max(ready, prev_comp_end)
-        prev_comp_end = start_comp + comp_s
+        if STREAM_COMPUTE:
+            start_comp = max(issue_at, prev_comp_end)
+            prev_comp_end = max(start_comp + comp_s, ready)
+        else:
+            start_comp = max(ready, prev_comp_end)
+            prev_comp_end = start_comp + comp_s
         comp_done[i] = prev_comp_end
 
     return prev_comp_end
