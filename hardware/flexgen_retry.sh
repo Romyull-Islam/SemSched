@@ -1,7 +1,7 @@
 #!/bin/bash
 # Rerun the noisy points of the overnight FlexGen sweep.
 #
-#   cd ~/semsched_hw && nohup ./flexgen_retry.sh > flexgen_retry.out 2>&1 &
+#   cd ~/tiersched_hw && nohup ./flexgen_retry.sh > flexgen_retry.out 2>&1 &
 #
 # Waits for flexgen_overnight.sh to finish, then reruns every run in
 # fg_night/results.txt that was noisy. A run is noisy when another user's process

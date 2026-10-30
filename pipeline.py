@@ -12,7 +12,7 @@ layer i. The lookahead K comes from each system's paper or artifact:
 
     FlexGen    K=1   Algorithm 1 overlaps "the weights load of the next layer"
     LLMFlash   K=5   sliding window of k=5 tokens (Sec 3.2)
-    SemSched   K=32  PREFETCH_QUEUE_DEPTH, 16-thread asynchronous I/O pool
+    TierSched   K=32  PREFETCH_QUEUE_DEPTH, 16-thread asynchronous I/O pool
     LIA        K=1   next-layer double buffer in the ISCA'25 artifact
     CXLAimPod  K=4   sequential device-side prefetch window
 
@@ -76,7 +76,7 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
 
         # Prefetched bytes need somewhere to live until they are consumed, so
         # `inflight_budget` limits how far ahead the issue point can move. For
-        # example, SemSched's device cache has 0.02-0.36 GB free against
+        # example, TierSched's device cache has 0.02-0.36 GB free against
         # sub-layers of 0.4-0.9 GB, far from the ~14 GB an unbounded K=32 needs.
         if inflight_budget is not None:
             # Issuing unit i's read at comp_done[m] leaves units m+1..i fetched

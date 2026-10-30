@@ -29,12 +29,12 @@ OUT = os.path.join(REPO, "figures", "fig_evaluation.pdf")
 
 sys.path.insert(0, REPO)
 
-POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "SemSched"]
-# SemSched in Okabe-Ito blue; baselines as a light-to-dark grey ramp in legend
+POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "TierSched"]
+# TierSched in Okabe-Ito blue; baselines as a light-to-dark grey ramp in legend
 # order, 1.35-1.51:1 contrast between neighbours so they separate in greyscale.
 COL = {"FlexGen": "#D5DBE0", "LIA": "#B4BEC6", "AimPod": "#93A0AA",
-       "LLMFlash": "#72808D", "SemSched": "#0072B2"}
-HATCH = {"SemSched": ""}
+       "LLMFlash": "#72808D", "TierSched": "#0072B2"}
+HATCH = {"TierSched": ""}
 
 
 def measure():

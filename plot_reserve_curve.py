@@ -54,7 +54,7 @@ def measure():
         with tempfile.TemporaryDirectory() as td:
             for f in R.DEPS + [s for _, s in R.SIMS]:
                 shutil.copy(os.path.join(R.REPO, f), td)
-            p = os.path.join(td, "semduplex_scheduler.py")
+            p = os.path.join(td, "tiersched.py")
             s = open(p).read()
             # Pin the search to one plan: the swept reserve fraction, KV on the
             # device, full device capacity. Each replace asserts its anchor; a
@@ -75,7 +75,7 @@ def measure():
                 s = s.replace(a, b, 1)
             open(p, "w").write(s)
             R.patch(td, quant, 16, c, gpu)
-            r = subprocess.run([sys.executable, "semduplex_scheduler.py"], cwd=td,
+            r = subprocess.run([sys.executable, "tiersched.py"], cwd=td,
                                capture_output=True, text=True, timeout=900)
             m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
             return float(m.group(1)) if m else None
@@ -84,7 +84,7 @@ def measure():
     for label, quant, c, gpu in CASES:
         tps = [one(f, quant, c, gpu) for f in FRACS]
         base = max(R.run(s, quant, 16, c, gpu)[0]
-                   for n, s in R.SIMS if n != "SemSched")
+                   for n, s in R.SIMS if n != "TierSched")
         if max(tps) - min(tps) < 1e-9:
             raise SystemExit(f"flat curve for {label}: the pin no-oped")
         out[label] = {"frac": FRACS, "tps": tps, "base": base}

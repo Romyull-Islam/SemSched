@@ -8,7 +8,7 @@ Models CXL.mem as a full-duplex link with two independent lanes:
 Each lane has its own bandwidth, typically ~27 GB/s effective per direction on
 a PCIe 5.0 x8 link (Wang et al. IPDPS'25; Liu et al. arXiv 2409.14317).
 
-semduplex_scheduler.py uses it for decode-phase KV write accounting. There,
+tiersched.py uses it for decode-phase KV write accounting. There,
 schedule_read() only accumulates Rx occupancy for utilization reporting: read
 timing comes from the tier model in tiers.py, so its return value is unused
 and reads are not charged twice.

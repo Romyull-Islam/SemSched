@@ -1,5 +1,5 @@
 """
-SemSched's placement search for FlexGen on a real server: choose the CPU share
+TierSched's placement search for FlexGen on a real server: choose the CPU share
 and prefetch depth for a host-memory budget, before any of them is run.
 
 Each candidate (share, depth) is scored by io_replay.py: one decode step's disk

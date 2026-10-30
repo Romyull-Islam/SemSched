@@ -45,7 +45,7 @@ def check_determinism(gpu):
                    f"{name:<9} {quant} 16H+{c}C: {a} vs {b}")
 
 
-# Checks 2 and 3 read SemSched's placement through LEDGER, which is injected
+# Checks 2 and 3 read TierSched's placement through LEDGER, which is injected
 # inside run_semantic_duplex_simulation's try block and so carries that block's
 # indentation (unindented, the simulator would report a failed run).
 LEDGER = '''
@@ -62,20 +62,20 @@ LEDGER = '''
 '''
 BW = {"GPU HBM": 1792e9, "Host DRAM": 38.4e9,
       "CXL Device DRAM": 27e9, "CXL Device NAND": 5e9}
-KV_TIER_LABEL = "CXL Device DRAM"          # SemSched's default KV_TIER = "cxl"
+KV_TIER_LABEL = "CXL Device DRAM"          # TierSched's default KV_TIER = "cxl"
 
 
-def semsched_ledger(quant, h, c, gpu):
+def tiersched_ledger(quant, h, c, gpu):
     with tempfile.TemporaryDirectory() as td:
         for f in R.DEPS + [s for _, s in R.SIMS]:
             shutil.copy(os.path.join(R.REPO, f), td)
-        p = os.path.join(td, "semduplex_scheduler.py")
+        p = os.path.join(td, "tiersched.py")
         s = open(p).read().replace(
             "        sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)",
             LEDGER + "        sched   = DuplexScheduler(IO_THREAD_POOL_SIZE)", 1)
         open(p, "w").write(s)
         R.patch(td, quant, h, c, gpu)
-        r = subprocess.run([sys.executable, "semduplex_scheduler.py"], cwd=td,
+        r = subprocess.run([sys.executable, "tiersched.py"], cwd=td,
                            capture_output=True, text=True, timeout=900)
         out = r.stdout + r.stderr
         m = re.search(r"LEDGER (\{.*\})", out)
@@ -90,7 +90,7 @@ def check_capacity_and_floor(gpu):
     print("3. FLOOR    — no policy is faster than its own bytes allow")
     for quant in ("fp16", "int8"):
         for c in R.CXLS:
-            led, tps = semsched_ledger(quant, 16, c, gpu)
+            led, tps = tiersched_ledger(quant, 16, c, gpu)
             if led is None:
                 report("cap", False, f"{quant} 16H+{c}C: no ledger"); continue
             tiers, kv, caps = led["tiers"], led["kv"], led["caps"]
@@ -129,10 +129,10 @@ def check_capacity_monotonicity(gpu):
                    f"{name:<9} {quant}: " + " -> ".join(f"{v:.2f}" for v in vals))
             # identical across every capacity: legitimate only with no spill
             if max(vals) - min(vals) < 1e-9:
-                led, _ = (semsched_ledger(quant, 16, R.CXLS[0], gpu)
-                          if name == "SemSched" else (None, None))
+                led, _ = (tiersched_ledger(quant, 16, R.CXLS[0], gpu)
+                          if name == "TierSched" else (None, None))
                 nand = led["tiers"].get("CXL Device NAND", 0.0) if led else None
-                if name == "SemSched":
+                if name == "TierSched":
                     report("invariance", nand is not None and nand < 1e6,
                            f"{name:<9} {quant}: identical across "
                            f"{R.CXLS} with NAND="

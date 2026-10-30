@@ -74,7 +74,7 @@ def measure(pin):
         for f in R.DEPS + [s for _, s in R.SIMS]:
             shutil.copy(os.path.join(R.REPO, f), td)
         R.patch(td, "int8", 16, 48, 0)                 # the 1.49x cell, CPU-only
-        p = os.path.join(td, "semduplex_scheduler.py")
+        p = os.path.join(td, "tiersched.py")
         s = open(p).read()
         assert ANCHOR in s, "dump anchor drifted"
         s = s.replace(ANCHOR, DUMP, 1)
@@ -83,7 +83,7 @@ def measure(pin):
                 assert a in s, f"pin anchor drifted: {a[:50]!r}"
                 s = s.replace(a, b, 1)
         open(p, "w").write(s)
-        subprocess.run([sys.executable, "semduplex_scheduler.py"], cwd=td,
+        subprocess.run([sys.executable, "tiersched.py"], cwd=td,
                        capture_output=True, text=True, timeout=900)
         return json.load(open(os.path.join(td, "overlap_dump.json")))
 

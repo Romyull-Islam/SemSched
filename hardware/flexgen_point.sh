@@ -18,7 +18,7 @@
 set -u
 CPU=$1; LIMIT=$2; DEPTH=$3; OUT=$(realpath -m "$4")
 mkdir -p "$(dirname "$OUT")"
-OFFLOAD_DIR=${OFFLOAD_DIR:-/tmp/mislam22_flexgen}
+OFFLOAD_DIR=${OFFLOAD_DIR:-/tmp/flexgen_offload}
 FLEXGEN=${FLEXGEN:-$HOME/flexgen_exp/FlexLLMGen}
 PY=${PY:-$HOME/venvs/flexgen/bin/python}
 UNIT=fgpoint-$$
@@ -27,7 +27,7 @@ cd "$FLEXGEN"
 PIN=()
 [ -n "${NUMA_NODE:-}" ] && PIN=(numactl --cpunodebind="$NUMA_NODE" --membind="$NUMA_NODE")
 systemd-run --user --scope -q --unit="$UNIT" -p MemoryMax=${START_LIMIT:-48G} -p MemorySwapMax=0 \
-    "${PIN[@]}" "$PY" -u "$HOME/semsched_hw/flexgen_reserve.py" --prefetch-depth "$DEPTH" \
+    "${PIN[@]}" "$PY" -u "$HOME/tiersched_hw/flexgen_reserve.py" --prefetch-depth "$DEPTH" \
     --model "facebook/${MODEL:-opt-13b}" --path "$HOME/flexgen_exp/opt_weights" \
     --offload-dir "$OFFLOAD_DIR" --gpu-batch-size 16 --prompt-len 512 --gen-len "${GENLEN:-32}" \
     --percent 0 "$CPU" 100 0 100 0 > "$OUT" 2>&1 &

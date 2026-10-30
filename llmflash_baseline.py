@@ -30,7 +30,7 @@ from sim_cfg import (
 
 
 def compute_time_s(flops):
-    """Same compute model as FlexGen, LIA and SemSched: compute is a property of
+    """Same compute model as FlexGen, LIA and TierSched: compute is a property of
     the simulated hardware, not of the scheduling policy."""
     if flops <= 0:
         return 0.0
@@ -43,7 +43,7 @@ from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
 
 # LLM-in-a-Flash treats DRAM as one unified tier [1], so host DRAM and CXL
 # device DRAM form a single pool. Accelerator memory joins the pool when one is
-# attached, which gives this policy the same accelerator SemSched gets.
+# attached, which gives this policy the same accelerator TierSched gets.
 from sim_cfg import gpu_hbm_capacity_bytes as _g
 _h = host_dram_capacity_bytes
 _c = cxl_dev_dram_capacity_bytes
@@ -271,7 +271,7 @@ def simulate_llmflash():
         t += step_kv
 
         # Skipping inactive neurons is this paper's own mechanism [1], so it gets
-        # a FLOP discount that FlexGen, LIA and SemSched do not: attention runs
+        # a FLOP discount that FlexGen, LIA and TierSched do not: attention runs
         # dense, the FFN runs only its active fraction. max(memory, compute) over
         # the step assumes perfect load/compute overlap, which favors this baseline.
         comp_attn = sum(L["flops"] for L in pinned_layers) * BATCH_SIZE

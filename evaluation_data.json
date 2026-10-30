@@ -5,21 +5,21 @@
    "LIA": 31.34999,
    "AimPod": 34.038212,
    "LLMFlash": 43.0339,
-   "SemSched": 54.497756
+   "TierSched": 54.497756
   },
   "48": {
    "FlexGen": 62.167837,
    "LIA": 62.442468,
    "AimPod": 64.375283,
    "LLMFlash": 73.1042,
-   "SemSched": 74.005474
+   "TierSched": 74.005474
   },
   "64": {
    "FlexGen": 62.167837,
    "LIA": 62.442468,
    "AimPod": 64.375283,
    "LLMFlash": 73.1554,
-   "SemSched": 74.005474
+   "TierSched": 74.005474
   }
  },
  "stall": {
@@ -27,7 +27,7 @@
   "LIA": 0.562,
   "AimPod": 0.8170000000000001,
   "LLMFlash": 0.512,
-  "SemSched": 0.0
+  "TierSched": 0.0
  },
  "sharegpt": {
   "cpu": [

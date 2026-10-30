@@ -7,7 +7,7 @@
 #   - Device-side sequential prefetcher with a fixed lookahead window (k = 4).
 #   - LRU eviction on the device cache, with no notion of layer type.
 #
-# Hardware model, shared with FlexGen, LIA, LLMFlash and SemSched:
+# Hardware model, shared with FlexGen, LIA, LLMFlash and TierSched:
 #   - Same compute engine and FLOP accounting, batch-scaled:
 #       decode  FLOPs = 2 * P * B      prefill FLOPs = 2 * P * seq_len * B
 #   - Same tier bandwidths and latencies, growing-KV model and metrics

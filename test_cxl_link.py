@@ -1,6 +1,6 @@
 """
 Verification suite for cxl_link.CXLLink, the two-queue full-duplex link model
-used by semduplex_scheduler.py.
+used by tiersched.py.
 
 Each test states the property under test and the expected numerical result.
 A failure means the queue model is wrong; fix cxl_link.py first.

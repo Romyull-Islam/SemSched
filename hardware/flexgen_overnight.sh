@@ -7,9 +7,9 @@
 # marked EXCLUDED if another user's process on either GPU of the pair exceeds 5%
 # compute activity while it runs. Results go to fg_night/results.txt, one line per run.
 set -u
-cd "$HOME/semsched_hw"
+cd "$HOME/tiersched_hw"
 OUTDIR=fg_night; mkdir -p "$OUTDIR"
-export OFFLOAD_DIR=/raid2/mislamProject/flexgen_offload GENLEN=64
+export OFFLOAD_DIR=${OFFLOAD_DIR:-/raid/flexgen_offload} GENLEN=64
 PAIRS=("0 1 3" "2 3 1" "4 5 7" "6 7 5")          # gpu, partner, NUMA node
 
 others_on() {   # other users' processes with compute activity above 5% on GPUs $1 and $2

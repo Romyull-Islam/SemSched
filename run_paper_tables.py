@@ -7,7 +7,7 @@ reported in the paper comes from this script.
     python run_paper_tables.py --diag         # print simulator output for failed cells
 
 Each cell runs in a temporary directory holding a private copy of the
-simulator, with sim_cfg.py and model_cfg.py (and semduplex_scheduler.py for
+simulator, with sim_cfg.py and model_cfg.py (and tiersched.py for
 some sweeps) rewritten for that cell. The repository itself is never modified.
 """
 import argparse
@@ -27,7 +27,7 @@ SIMS = [
     ("LIA",      "lia_baseline.py"),
     ("AimPod",   "cxlaimpod_baseline.py"),
     ("LLMFlash", "llmflash_baseline.py"),
-    ("SemSched", "semduplex_scheduler.py"),
+    ("TierSched", "tiersched.py"),
 ]
 
 # RTX 5090: 32 GB GDDR7, of which 28 GB is usable for weights after activations
@@ -86,7 +86,7 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
     open(p, "w").write(s)
 
     if not warmup or kv_tier != "cxl":
-        p = os.path.join(td, "semduplex_scheduler.py")
+        p = os.path.join(td, "tiersched.py")
         s = open(p).read()
         if not warmup:
             s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
@@ -125,7 +125,7 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
 # and KV costs still come from the model geometry.
 def _patch_lengths(td, prefill, decode):
     for f, pat, rep in (
-            ("semduplex_scheduler.py", r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("tiersched.py", r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
             ("flexgen_baseline.py",    r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
             ("lia_baseline.py",        r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
             ("cxlaimpod_baseline.py",  r"^PREFILL_TOKENS = \d+",      f"PREFILL_TOKENS = {prefill}"),
@@ -171,13 +171,13 @@ def sharegpt(gpu, quant="fp16", c=64, n=50, seed=20260815):
             got[fut[f]] = f.result()
     for i, (p, d) in enumerate(pairs):
         v = {n_: got.get((i, n_)) for n_, _ in SIMS}
-        if v.get("SemSched") is None:
+        if v.get("TierSched") is None:
             continue
-        base = max((x for k, x in v.items() if k != "SemSched" and x), default=None)
+        base = max((x for k, x in v.items() if k != "TierSched" and x), default=None)
         if not base:
             continue
-        ratios.append(v["SemSched"] / base)
-        wins += v["SemSched"] > base
+        ratios.append(v["TierSched"] / base)
+        wins += v["TierSched"] > base
     ratios.sort()
     q = lambda f: ratios[min(len(ratios) - 1, int(f * len(ratios)))]
     print(f"\n  prompts scored     {len(ratios)}")
@@ -251,9 +251,9 @@ def comparison(gpu, diag=False, metric="decode"):
                 for name, sim in SIMS:
                     r = run(sim, quant, h, c, gpu, diag=diag)
                     tps[name] = r[idx]
-                ours = tps["SemSched"]
+                ours = tps["TierSched"]
                 best = max(v for k, v in tps.items()
-                           if k != "SemSched" and v is not None)
+                           if k != "TierSched" and v is not None)
                 total += 1
                 wins += ours > best
                 print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}"
@@ -261,11 +261,11 @@ def comparison(gpu, diag=False, metric="decode"):
                                 else f"{'--':>10}" for n in names)
                       + f"{ours / best:>8.2f}x")
     print("-" * 78)
-    print(f"SemSched leads {wins}/{total}")
+    print(f"TierSched leads {wins}/{total}")
 
 
 def warmup_ablation(gpu=0):
-    """SemSched with Phase-1 warmup staging on and off, on the reported cells."""
+    """TierSched with Phase-1 warmup staging on and off, on the reported cells."""
     print(f"\n{'=' * 78}\nPhase-1 warmup ablation"
           f"{'  (+RTX 5090)' if gpu else '  (CPU-only)'}\n{'=' * 78}")
     print(f"{'Quant':<6}{'Memory':<11}{'best base':>11}{'warmup ON':>11}"
@@ -275,9 +275,9 @@ def warmup_ablation(gpu=0):
         for c in CXLS:
             for h in GRID:
                 base = max(run(s, quant, h, c, gpu)[0] or 0
-                           for n, s in SIMS if n != "SemSched")
-                on, _, _ = run("semduplex_scheduler.py", quant, h, c, gpu, True)
-                off, _, _ = run("semduplex_scheduler.py", quant, h, c, gpu, False)
+                           for n, s in SIMS if n != "TierSched")
+                on, _, _ = run("tiersched.py", quant, h, c, gpu, True)
+                off, _, _ = run("tiersched.py", quant, h, c, gpu, False)
                 print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}{base:>11.2f}"
                       f"{on:>11.2f}{off:>12.2f}{(on - off) / off * 100:>12.1f}%"
                       f"{on / base:>9.2f}x{off / base:>10.2f}x")
@@ -313,8 +313,8 @@ def model_sweep(gpu):
                 tps = {}
                 for f in cf.as_completed(fut):
                     tps[fut[f]] = f.result()[0]
-            ours = tps.get("SemSched")
-            base = max((v for k, v in tps.items() if k != "SemSched" and v), default=None)
+            ours = tps.get("TierSched")
+            base = max((v for k, v in tps.items() if k != "TierSched" and v), default=None)
             print(f"{label:<13}" + "".join(
                 f"{tps[n]:>10.2f}" if tps.get(n) else f"{'--':>10}" for n in names)
                 + (f"{ours/base:>8.2f}x" if ours and base else f"{'--':>9}"))
@@ -330,14 +330,14 @@ def kv_tier_sweep(gpu):
     """
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
     tiers = ["cxl", "host"] + (["gpu"] if gpu else [])
-    print(f"\n{'=' * 78}\nKV cache tier — SemSched, {tag}, B={BATCH}\n{'=' * 78}")
+    print(f"\n{'=' * 78}\nKV cache tier — TierSched, {tag}, B={BATCH}\n{'=' * 78}")
     print(f"{'Quant':<6}{'Memory':<11}" + "".join(f"{'KV in ' + t:>12}" for t in tiers)
           + f"{'best':>8}")
     print("-" * 78)
     for quant in QUANTS:
         for c in CXLS:
             for h in GRID:
-                got = {t: run("semduplex_scheduler.py", quant, h, c, gpu,
+                got = {t: run("tiersched.py", quant, h, c, gpu,
                               kv_tier=t)[0] for t in tiers}
                 best = max(got, key=lambda t: got[t] or 0)
                 print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}"
@@ -356,7 +356,7 @@ def batch_sweep(gpu, quant, c, h=16):
     1 - (1 - p)^B with p = 0.46, which reaches 1.000 by B = 16. Beyond that every
     policy reads every byte once per step, the step time is pinned to the
     byte-accounting floor sum(bytes(tier) / bw(tier)), and all five policies
-    converge. Returns (B, {policy: tps}, SemSched / best baseline) per batch.
+    converge. Returns (B, {policy: tps}, TierSched / best baseline) per batch.
     """
     names = [n for n, _ in SIMS]
     rows = []
@@ -369,8 +369,8 @@ def batch_sweep(gpu, quant, c, h=16):
             got[(b, name)] = f.result()[0]
     for b in BATCHES:
         tps = {n: got[(b, n)] for n in names}
-        ours = tps["SemSched"]
-        best = max(v for k, v in tps.items() if k != "SemSched" and v is not None)
+        ours = tps["TierSched"]
+        best = max(v for k, v in tps.items() if k != "TierSched" and v is not None)
         rows.append((b, tps, ours / best if best else 0.0))
     return rows
 
@@ -398,7 +398,7 @@ def batch_table(gpu):
 # it places into and added to its staging budget. The rewrites below are the
 # only changes to each baseline: its depth constant or call, and its budget.
 EQ_DEPTHS = [1, 4, 8, 16, 32]
-# The same 15 reserve values SemSched searches (semduplex_scheduler.py).
+# The same 15 reserve values TierSched searches (tiersched.py).
 EQ_RESERVES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
                0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
 EQ_PATCH = {
@@ -494,7 +494,7 @@ def equal_footing(gpu):
                 for kv in ("cxl", "host"):
                     jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
             for k in EQ_DEPTHS:
-                jobs.append(("sem", "semduplex_scheduler.py", quant, c, gpu, k, None))
+                jobs.append(("sem", "tiersched.py", quant, c, gpu, k, None))
     res = {}
     with cf.ProcessPoolExecutor() as ex:
         for job, tps in ex.map(_eq_job, jobs):
@@ -508,7 +508,7 @@ def equal_footing(gpu):
     print(f"\n{'=' * 100}\nEqual footing: every policy at its best setting"
           f"{'  (+RTX 5090)' if gpu else '  (CPU-only)'}\n{'=' * 100}")
     print(f"{'Quant':<6}{'Memory':<10}{'best static baseline':>34}{'dynamic (Belady)':>24}"
-          f"{'SemSched':>18}{'vs static':>11}{'vs dynamic':>11}")
+          f"{'TierSched':>18}{'vs static':>11}{'vs dynamic':>11}")
     print("-" * 100)
     for quant in QUANTS:
         for c in CXLS:

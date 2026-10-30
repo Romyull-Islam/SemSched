@@ -1,11 +1,11 @@
 """
 Robustness of the main result to the assumptions a CMM-H deployment could
 break. Every sweep reruns the twelve configurations of Table III and reports
-SemSched's speedup over the best of the four baselines in each one.
+TierSched's speedup over the best of the four baselines in each one.
 
     python sensitivity.py hints      # device ignores a fraction of prefetch hints
     python sensitivity.py nandbw     # NAND bandwidth 2.5 / 5 / 7.5 GB/s
-    python sensitivity.py nandlat    # NAND latency 0.5 / 1.547 / 5 / 20 us
+    python sensitivity.py nandlat    # NAND latency 0.5 / 1.547 / 5 / 20 / 50 / 100 us
     python sensitivity.py context    # prompts of 2K / 8K / 32K tokens at B=16
     python sensitivity.py mismatch   # plan for 512-token prompts, serve others
     python sensitivity.py passthrough  # NAND reads charged to device DRAM, or not
@@ -61,7 +61,7 @@ def speedups(points, workers=24, **kw):
                 for name, sim in R.SIMS:
                     a = {**kw, **extra}
                     sem = a.pop("sem", {})
-                    if name == "SemSched":
+                    if name == "TierSched":
                         a.update(sem)
                     jobs[ex.submit(cell, sim, q, c, g, **a)] = (label, q, c, g, name)
         res = {}
@@ -71,13 +71,13 @@ def speedups(points, workers=24, **kw):
     for label, _ in points:
         rows = []
         for q, c, g in CONFIGS:
-            base = [res[(label, q, c, g, n)] for n, _ in R.SIMS if n != "SemSched"]
-            sem = res[(label, q, c, g, "SemSched")]
+            base = [res[(label, q, c, g, n)] for n, _ in R.SIMS if n != "TierSched"]
+            sem = res[(label, q, c, g, "TierSched")]
             if sem is None or None in base:
                 rows.append(None)
                 continue
             rows.append({"config": f"{'GPU' if g else 'CPU'} {q} 16H+{c}C",
-                         "semsched": sem, "best_baseline": max(base),
+                         "tiersched": sem, "best_baseline": max(base),
                          "speedup": sem / max(base)})
         out[label] = rows
         sp = [r["speedup"] for r in rows if r]
@@ -88,12 +88,12 @@ def speedups(points, workers=24, **kw):
 
 
 SWEEPS = {
-    "hints": lambda: speedups([(f"drop {p:.0%}", {"sem": {"env": {"SEMSCHED_HINT_DROP": str(p)}}})
+    "hints": lambda: speedups([(f"drop {p:.0%}", {"sem": {"env": {"TIERSCHED_HINT_DROP": str(p)}}})
                                for p in (0.0, 0.1, 0.25, 0.5, 1.0)]),
     "nandbw": lambda: speedups([(f"{b / 1e9:g} GB/s", {"nand_bw": b})
                                 for b in (2.5e9, 5.0e9, 7.5e9)]),
     "nandlat": lambda: speedups([(f"{l * 1e6:g} us", {"nand_lat": l})
-                                 for l in (0.5e-6, 1.547e-6, 5e-6, 20e-6)]),
+                                 for l in (0.5e-6, 1.547e-6, 5e-6, 20e-6, 50e-6, 100e-6)]),
     "context": lambda: speedups([(f"prompt {p}", {"prefill": p})
                                  for p in (2048, 8192, 32768)], batch=16),
     "passthrough": lambda: speedups([(f"pass-through {v}", {"env": {"NAND_PASS_THROUGH": v}})
@@ -102,7 +102,7 @@ SWEEPS = {
     # baselines need no plan, so they run at the served length either way.
     "mismatch": lambda: {
         **speedups([(f"served {p}, planned 512",
-                     {"prefill": p, "sem": {"env": {"SEMSCHED_PLAN_PREFILL": "512"}}})
+                     {"prefill": p, "sem": {"env": {"TIERSCHED_PLAN_PREFILL": "512"}}})
                     for p in (128, 256, 1024, 2048)]),
         **speedups([(f"served {p}, replanned", {"prefill": p}) for p in (128, 256, 1024, 2048)]),
     },

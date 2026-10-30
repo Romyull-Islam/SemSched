@@ -1,4 +1,4 @@
-# SemSched simulator: hybrid-CXL LLM inference with
+# TierSched simulator: hybrid-CXL LLM inference with
 #   - sub-layer placement (attention and MLP placed separately, order set by
 #     PLACEMENT_ORDER) and a per-configuration search over the staging reserve
 #     and the KV-cache tier,
@@ -69,24 +69,24 @@ KV_TIER = "cxl"          # "cxl" | "host" | "gpu"
 # "semantic" | "sequential" | "random". "semantic" is the type and sparsity
 # priority order in fill(); size-desc beats it in the ablation (Sec. V-D).
 import os as _os
-PLACEMENT_ORDER = _os.environ.get("SEMSCHED_PLACEMENT_ORDER", "size-desc")
+PLACEMENT_ORDER = _os.environ.get("TIERSCHED_PLACEMENT_ORDER", "size-desc")
 
 # Fraction of the staging reserve that Phase-1 warmup may pin for the session;
 # the rest is the prefetcher's in-flight budget. Default 0: staging loses this
 # split in every configuration (Sec. V-D).
-STAGE_RESERVE_FRAC = float(_os.environ.get("SEMSCHED_STAGE_FRAC", "0.0"))
+STAGE_RESERVE_FRAC = float(_os.environ.get("TIERSCHED_STAGE_FRAC", "0.0"))
 
 # Fraction of device-cache prefetch hints the CMM-H controller does not follow
 # (Sec. III-F). A NAND read whose hint is dropped is served on demand instead of
 # ahead of use. Decode applies it; the search plans as if every hint is
 # followed, so the plan is not adjusted to the loss.
-HINT_DROP = float(_os.environ.get("SEMSCHED_HINT_DROP", "0.0"))
+HINT_DROP = float(_os.environ.get("TIERSCHED_HINT_DROP", "0.0"))
 
 # Context length the placement is planned for. By default the plan sees the
 # real prompt length; setting it differently tests a plan made for one context
 # length and served at another, as under continuous batching, where the
 # requests in a batch change and the KV volume per step changes with them.
-PLAN_PREFILL = int(_os.environ.get("SEMSCHED_PLAN_PREFILL", "0")) or None
+PLAN_PREFILL = int(_os.environ.get("TIERSCHED_PLAN_PREFILL", "0")) or None
 
 
 def dropped_hints(units):
@@ -403,7 +403,7 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
                 order = list(range(len(layers)))
                 _r.Random(20260814).shuffle(order)
             else:
-                raise SystemExit(f"unknown SEMSCHED_PLACEMENT_ORDER: {PLACEMENT_ORDER}")
+                raise SystemExit(f"unknown TIERSCHED_PLACEMENT_ORDER: {PLACEMENT_ORDER}")
             for i in order:
                 extra = (size_of(i, layers[i]) - layers[i]["bytes"]
                          if ltypes[i] == LayerType.ATTENTION else 0.0)

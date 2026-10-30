@@ -1,11 +1,11 @@
 """
 Lookahead sensitivity: decode throughput against prefetch depth K for every
-policy, at the configuration where SemSched leads most (CPU INT8 16H+48C) and
+policy, at the configuration where TierSched leads most (CPU INT8 16H+48C) and
 one where it ties (+GPU INT8 16H+64C).
 
-Each static baseline is shown at its best fixed reserve (0-20%) for that K, the
-dynamic-replacement baseline at its best KV tier, and SemSched with its own
-search. Runs under the pass-through NAND model. Regenerate with:
+Each static baseline is shown at its best fixed reserve for that K, out of the
+search's own 15 reserve fractions (0-50%); the dynamic-replacement baseline at
+its best KV tier; and TierSched with its own search. Runs under the pass-through NAND model. Regenerate with:
 
     python plot_depth.py --measure     # re-run the sweep, then plot
     python plot_depth.py               # plot from the saved JSON
@@ -29,13 +29,13 @@ OUT = os.path.join(REPO, "figures", "fig_depth.pdf")
 DEPTHS = [1, 2, 4, 8, 16, 32]
 CASES = [("CPU, INT8, 16H+48C", "int8", 48, 0),
          ("+GPU, INT8, 16H+64C", "int8", 64, 28)]
-POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "Dynamic", "SemSched"]
+POLICIES = ["FlexGen", "LIA", "AimPod", "LLMFlash", "Dynamic", "TierSched"]
 STYLE = {"FlexGen":  ("#A9B3BB", "v", "-"),
          "LIA":      ("#8C98A2", "<", "-"),
          "AimPod":   ("#6F7C87", ">", "-"),
          "LLMFlash": ("#4F5B66", "s", "-"),
          "Dynamic":  ("#D55E00", "D", "--"),
-         "SemSched": ("#0072B2", "o", "-")}
+         "TierSched": ("#0072B2", "o", "-")}
 
 
 def measure():
@@ -51,7 +51,7 @@ def measure():
                     jobs.append(("base", files[name], quant, c, gpu, k, frac))
             for kv in ("cxl", "host"):
                 jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
-            jobs.append(("sem", "semduplex_scheduler.py", quant, c, gpu, k, None))
+            jobs.append(("sem", "tiersched.py", quant, c, gpu, k, None))
     with cf.ProcessPoolExecutor() as ex:
         res = dict(ex.map(R._eq_job, jobs))
     name_of = {s: n for n, s in R.SIMS}
@@ -66,7 +66,7 @@ def measure():
                         return False
                     if name == "Dynamic":
                         return j[0] == "dyn"
-                    if name == "SemSched":
+                    if name == "TierSched":
                         return j[0] == "sem"
                     return j[0] == "base" and name_of[j[1]] == name
                 ys.append(max(v or 0.0 for j, v in res.items() if match(j)))
@@ -91,9 +91,9 @@ def plot(data):
         for name in POLICIES:
             colour, marker, dash = STYLE[name]
             ax.plot(d["K"], d[name], color=colour, marker=marker, linestyle=dash,
-                    label={"Dynamic": "Dynamic (Belady)", "SemSched": "TierSched"}.get(name, name),
-                    markerfacecolor="white" if name != "SemSched" else colour,
-                    markeredgewidth=0.9, zorder=4 if name == "SemSched" else 3)
+                    label={"Dynamic": "Dynamic (Belady)"}.get(name, name),
+                    markerfacecolor="white" if name != "TierSched" else colour,
+                    markeredgewidth=0.9, zorder=4 if name == "TierSched" else 3)
         ax.set_xscale("log", base=2)
         ax.set_xticks(d["K"])
         ax.set_xticklabels([str(k) for k in d["K"]])

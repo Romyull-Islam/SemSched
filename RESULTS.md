@@ -1,4 +1,4 @@
-# SemSched: measured results
+# TierSched: measured results
 
 All figures regenerated from this working tree with
 
@@ -31,7 +31,7 @@ somewhere, so a deep queue over a full device is worth nothing.
 | FlexGen | 1 | Algorithm 1, "the weights load of the next layer" |
 | CXLAimPod | 4 | its own PREFETCH_WINDOW |
 | LLM-in-a-Flash | 5 | sliding window, k=5 |
-| SemSched | 32 | PREFETCH_QUEUE_DEPTH |
+| TierSched | 32 | PREFETCH_QUEUE_DEPTH |
 
 **Platforms.** Both the memory tier *and* the compute engine change between
 them; attaching one without the other understates every accelerated row.
@@ -45,9 +45,9 @@ them; attaching one without the other understates every accelerated row.
 
 ## 1. Decode throughput, B=128 (t/s)
 
-### CPU-only: SemSched leads 6/6
+### CPU-only: TierSched leads 6/6
 
-| Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
+| Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | TierSched | ratio |
 |---|---|---|---|---|---|---|---|
 | FP16 | 16H+32C | 4.73 | 4.60 | 4.63 | 4.65 | **4.98** | 1.05x |
 | FP16 | 16H+48C | 5.28 | 5.17 | 5.18 | 5.17 | **5.75** | 1.09x |
@@ -56,9 +56,9 @@ them; attaching one without the other understates every accelerated row.
 | INT8 | 16H+48C | 20.31 | 18.31 | 17.31 | 18.87 | **30.18** | 1.49x |
 | INT8 | 16H+64C | 37.26 | 30.18 | 27.84 | 32.08 | **49.66** | 1.33x |
 
-### +RTX 5090: SemSched leads 6/6
+### +RTX 5090: TierSched leads 6/6
 
-| Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
+| Quant | Memory | FlexGen | LIA | AimPod | LLMFlash | TierSched | ratio |
 |---|---|---|---|---|---|---|---|
 | FP16 | 16H+32C | 6.06 | 6.28 | 6.22 | 6.32 | **6.63** | 1.05x |
 | FP16 | 16H+48C | 7.00 | 7.25 | 7.26 | 7.40 | **8.11** | 1.10x |
@@ -85,7 +85,7 @@ Two mechanisms, and they do not hold equally well.
 **Adaptive prefetch reservation.** Every baseline fills each tier to capacity --
 FlexGen's LP maximises residency by construction, the other three fill greedily
 -- so none has staging room and none can prefetch deeply whatever its queue
-depth. SemSched instead searches how much host and device DRAM to hold back. The
+depth. TierSched instead searches how much host and device DRAM to hold back. The
 reserved bytes stop being resident, costing NAND traffic, and start being
 staging room, letting NAND transfers overlap host and accelerator reads. The
 optimum is interior and configuration-dependent: 1.09 GB at INT8 16H+32C, worth
@@ -111,7 +111,7 @@ cannot help it; that part rests on the reservation mechanism alone.
 
 ## 2. Prefill throughput, B=128 (t/s per sequence)
 
-| Platform | Quant | FlexGen | LIA | AimPod | LLMFlash | SemSched | ratio |
+| Platform | Quant | FlexGen | LIA | AimPod | LLMFlash | TierSched | ratio |
 |---|---|---|---|---|---|---|---|
 | CPU-only | FP16 | 0.77 | 0.77 | 0.74 | 0.77 | 0.76 | 0.99–1.00x |
 | CPU-only | INT8 | 0.77 | 0.77 | 0.76 | 0.77 | 0.77 | 1.00x |
@@ -119,7 +119,7 @@ cannot help it; that part rests on the reservation mechanism alone.
 | +RTX 5090 | INT8 | 7.84 | 7.81–7.83 | 7.53–7.84 | 7.84 | 7.80 | 0.99–1.00x |
 
 Flat across all five policies and all three cache sizes: prefill is compute-bound
-at the `2*P*S*B` floor, so placement cannot move it. SemSched pays at most 4% for staging traffic, and nothing at INT8: an
+at the `2*P*S*B` floor, so placement cannot move it. TierSched pays at most 4% for staging traffic, and nothing at INT8: an
 earlier revision of this file showed a 9% INT8 penalty, which was the phantom
 staging budget since removed. **No policy prefills anomalously slowly**: the 5120 s
 figure previously attributed to LLM-in-a-Flash was a `%.1f` rounding artifact
@@ -131,7 +131,7 @@ figure previously attributed to LLM-in-a-Flash was a `%.1f` rounding artifact
 
 `active_frac = 1 - (1 - 0.46)^B` is LLM-in-a-Flash's own model of how much of an
 MLP sub-layer fires; it saturates at 1.000 by B=16. Regenerate with
-`python run_paper_tables.py --batch-sweep`. SemSched wins every cell at B >= 8
+`python run_paper_tables.py --batch-sweep`. TierSched wins every cell at B >= 8
 and loses every cell at B <= 4, all of them to LLM-in-a-Flash's sparsity
 discount; the paper's batch-size figure plots the medians and the min-max band.
 
@@ -139,7 +139,7 @@ discount; the paper's batch-size figure plots the medians and the min-max band.
 ==============================================================================
 CPU-only   Qwen2.5 72B FP16  16H+32C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.04      0.04      0.04      0.11      0.05    0.44x         0.460
    2        0.09      0.08      0.09      0.13      0.09    0.71x         0.708
@@ -153,7 +153,7 @@ CPU-only   Qwen2.5 72B FP16  16H+32C   batch sweep
 ==============================================================================
 CPU-only   Qwen2.5 72B FP16  16H+48C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.05      0.04      0.05      0.16      0.06    0.36x         0.460
    2        0.10      0.09      0.10      0.16      0.11    0.69x         0.708
@@ -167,7 +167,7 @@ CPU-only   Qwen2.5 72B FP16  16H+48C   batch sweep
 ==============================================================================
 CPU-only   Qwen2.5 72B FP16  16H+64C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.06      0.05      0.06      0.30      0.07    0.24x         0.460
    2        0.11      0.10      0.12      0.22      0.14    0.65x         0.708
@@ -181,7 +181,7 @@ CPU-only   Qwen2.5 72B FP16  16H+64C   batch sweep
 ==============================================================================
 CPU-only   Qwen2.5 72B INT8  16H+32C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.14      0.10      0.14      0.85      0.19    0.22x         0.460
    2        0.28      0.20      0.29      0.71      0.38    0.53x         0.708
@@ -195,7 +195,7 @@ CPU-only   Qwen2.5 72B INT8  16H+32C   batch sweep
 ==============================================================================
 CPU-only   Qwen2.5 72B INT8  16H+48C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.23      0.14      0.25      0.76      0.41    0.54x         0.460
    2        0.46      0.29      0.49      1.15      0.81    0.70x         0.708
@@ -209,7 +209,7 @@ CPU-only   Qwen2.5 72B INT8  16H+48C   batch sweep
 ==============================================================================
 CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.36      0.24      0.38      0.73      0.45    0.62x         0.460
    2        0.73      0.47      0.75      1.12      0.90    0.81x         0.708
@@ -223,7 +223,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B FP16  16H+32C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.06      0.05      0.06      0.33      0.07    0.21x         0.460
    2        0.12      0.10      0.12      0.23      0.13    0.60x         0.708
@@ -237,7 +237,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B FP16  16H+48C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.07      0.06      0.07      0.54      0.09    0.16x         0.460
    2        0.14      0.12      0.14      0.34      0.18    0.52x         0.708
@@ -251,7 +251,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B FP16  16H+64C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.09      0.07      0.09      0.48      0.12    0.26x         0.460
    2        0.17      0.15      0.19      0.68      0.24    0.36x         0.708
@@ -265,7 +265,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B INT8  16H+32C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.61      0.26      0.66      1.51      0.93    0.62x         0.460
    2        1.21      0.52      1.32      2.29      1.87    0.82x         0.708
@@ -279,7 +279,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B INT8  16H+48C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.61      0.55      0.66      1.51      0.93    0.62x         0.460
    2        1.21      1.10      1.32      2.29      1.87    0.82x         0.708
@@ -293,7 +293,7 @@ CPU-only   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
 +RTX 5090 (28 GB)   Qwen2.5 72B INT8  16H+64C   batch sweep
 ==============================================================================
-   B     FlexGen       LIA    AimPod  LLMFlash  SemSched    ratio   active_frac
+   B     FlexGen       LIA    AimPod  LLMFlash  TierSched    ratio   active_frac
 ------------------------------------------------------------------------------
    1        0.61      0.55      0.66      1.51      0.93    0.62x         0.460
    2        1.21      1.10      1.32      2.29      1.87    0.82x         0.708
@@ -331,10 +331,10 @@ are in the simulator or a baseline; one was in the measurement harness.
 
 | # | Defect | Direction | Effect |
 |---|---|---|---|
-| 1 | Staging cache did not reserve KV capacity, though placement did; the same budget applied at one of two sites | favoured SemSched | SemSched over-reported in 4 of 6 accelerated cells and all 6 CPU-only cells |
+| 1 | Staging cache did not reserve KV capacity, though placement did; the same budget applied at one of two sites | favoured TierSched | TierSched over-reported in 4 of 6 accelerated cells and all 6 CPU-only cells |
 | 2 | `ENABLE_PREFILL_WARMUP` declared but never read | neither | every warmup ablation compared a run to itself |
 | 3 | LLM-in-a-Flash charged `dram_window_frac * active_frac` for resident FFN, discounting the same sparsity twice | favoured LLM-in-a-Flash | 0.212 of the FFN read at B=1 where 0.460 fires; inert at B=128 |
-| 4 | Harness set `gpu_hbm_capacity_bytes` but left the compute engine at the EPYC's 14.4 TFLOPS | against SemSched | understated every accelerated cell |
+| 4 | Harness set `gpu_hbm_capacity_bytes` but left the compute engine at the EPYC's 14.4 TFLOPS | against TierSched | understated every accelerated cell |
 | 5 | Prefill throughput was never reported by the harness | neither | the prefill claims had no path back to the simulator |
 
 Defect 1 was found by asking why INT8 16H+32C, 48C and 64C returned identical

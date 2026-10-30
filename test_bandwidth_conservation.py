@@ -54,7 +54,7 @@ def test_tier_ordering_holds():
 def stage_schedule(layer_bytes, n_threads):
     """Phase-1 staging time with per-chunk latency amortized over n_threads.
 
-    semduplex_scheduler.py keeps the latency serial, which is never faster than
+    tiersched.py keeps the latency serial, which is never faster than
     this, so the bounds below also cover it.
     """
     t = 0.0

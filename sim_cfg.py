@@ -22,7 +22,7 @@ cpu_cores = 96                      # 2 sockets x 48 cores
 flops_per_cycle_per_core = 64.0     # AVX-512 FMA, Zen 4
 parallel_efficiency = 0.85          # across 2 sockets; LLMCompass gives 1.00
                                     # for these GEMM shapes at B=128, and a
-                                    # lower value shrinks SemSched's advantage
+                                    # lower value shrinks TierSched's advantage
 
 # Accelerator memory for weights (tiers.GPU_HBM); 0 means no accelerator, as in
 # both CMM-H papers. When nonzero it is a separate tier above host DRAM, not
