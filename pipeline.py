@@ -44,6 +44,17 @@ DEVICE_DRAM, DEVICE_NAND = "CXL Device DRAM", "CXL Device NAND"
 # loads in place would; the unit then ends when both are done.
 STREAM_COMPUTE = os.environ.get("STREAM_COMPUTE", "0") == "1"
 
+# With an accelerator, every byte not already in its memory crosses the GPU's
+# PCIe link, so host DRAM and the device share that link too. GPU_LINK_BPS caps
+# their combined rate (63e9 for PCIe 5.0 x16); 0, the default, leaves it uncapped.
+# It applies only to configurations with an accelerator.
+GPU_LINK_BPS = float(os.environ.get("GPU_LINK_BPS", "0"))
+if GPU_LINK_BPS:
+    from sim_cfg import gpu_hbm_capacity_bytes
+    if not gpu_hbm_capacity_bytes:
+        GPU_LINK_BPS = 0.0
+GPU_TIER = "GPU HBM"
+
 
 def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                      chunk_bytes=256 * 1024, inflight_budget=None, demand=()):
@@ -70,6 +81,7 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
     tier_lat = tier_lat or {}
     tier_free = {}           # when each tier's bus is next idle
     link_free = 0.0          # when the shared CXL host link is next idle
+    gpu_link_free = 0.0      # when the GPU's PCIe link is next idle
     comp_done = [0.0] * n    # when each unit's compute finishes
     prev_comp_end = 0.0
 
@@ -116,11 +128,17 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
             if lat:
                 dur += -(-nbytes // chunk_bytes) * lat
             start = max(issue_at, tier_free.get(tier, 0.0))
+            to_gpu = GPU_LINK_BPS and tier != GPU_TIER
             if tier in SHARED_LINK:
-                # Also wait for the shared host link, and hold it for the time
-                # this transfer occupies it at the link's own rate.
                 start = max(start, link_free)
+            if to_gpu:
+                start = max(start, gpu_link_free)
+            # Hold each shared link for the time this transfer occupies it at
+            # the link's own rate.
+            if tier in SHARED_LINK:
                 link_free = start + nbytes / CXL_HOST_LINK_CEILING
+            if to_gpu:
+                gpu_link_free = start + nbytes / GPU_LINK_BPS
             finish = start + dur
             tier_free[tier] = finish
             if NAND_PASS_THROUGH and tier == DEVICE_NAND and tier_bw.get(DEVICE_DRAM):

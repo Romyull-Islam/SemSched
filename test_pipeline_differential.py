@@ -24,7 +24,7 @@ import math
 import random
 import sys
 
-from pipeline import pipelined_time_s, SHARED_LINK
+from pipeline import pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH, STREAM_COMPUTE
 from tiers import CXL_HOST_LINK_CEILING
 
 TIERS = ["GPU HBM", "Host DRAM", "CXL Device DRAM", "CXL Device NAND"]
@@ -88,9 +88,20 @@ def reference_time_s(units, depth, bw, lat, budget=None):
                 link = begin + nbytes / CXL_HOST_LINK_CEILING
             end = begin + _dur(nbytes, bw[tier], lat.get(tier, 0.0))
             busy[tier] = end
+            if (NAND_PASS_THROUGH and tier == "CXL Device NAND"
+                    and bw.get("CXL Device DRAM")):
+                # The bytes also cross the device DRAM at its own rate, from the
+                # start of the NAND read; they land when both are done.
+                fill = max(begin, busy["CXL Device DRAM"]) + nbytes / bw["CXL Device DRAM"]
+                busy["CXL Device DRAM"] = fill
+                end = max(end, fill)
             arrived = max(arrived, end)
 
-        engine = max(arrived, engine) + comp
+        if STREAM_COMPUTE:
+            # Compute runs alongside the unit's own reads and ends after both.
+            engine = max(max(earliest, engine) + comp, arrived)
+        else:
+            engine = max(arrived, engine) + comp
         finished_compute.append(engine)
 
     return engine

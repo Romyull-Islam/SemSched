@@ -10,6 +10,8 @@ TierSched's speedup over the best of the four baselines in each one.
     python sensitivity.py mismatch   # plan for 512-token prompts, serve others
     python sensitivity.py passthrough  # NAND reads charged to device DRAM, or not
     python sensitivity.py streaming  # a unit computes alongside its own reads, or after them
+    python sensitivity.py gpulink    # accelerator PCIe link uncapped / 63 / 55 GB/s
+    python sensitivity.py headroom   # plan for 12.5-25% more or less context than served
     python sensitivity.py all
 
 Results go to sensitivity.json, keyed by sweep and setting.
@@ -101,6 +103,16 @@ SWEEPS = {
                                      for v in ("1", "0")]),
     "streaming": lambda: speedups([(f"stream compute {v}", {"env": {"STREAM_COMPUTE": v}})
                                    for v in ("0", "1")]),
+    # Cap the accelerator's PCIe link, which host DRAM and the device share;
+    # the CPU-only configurations have no such link and are unchanged.
+    "gpulink": lambda: speedups([(f"gpu link {v}", {"env": {"GPU_LINK_BPS": v}})
+                                 for v in ("0", "63e9", "55e9")]),
+    # Plan for a context near the served one, longer or shorter: the window
+    # Sec. VII re-plans within.
+    "headroom": lambda: speedups([(f"served {s}, planned {p}",
+                                   {"prefill": s, "sem": {"env": {"TIERSCHED_PLAN_PREFILL": str(p)}}})
+                                  for s, p in ((448, 512), (576, 512), (512, 576),
+                                               (448, 576), (512, 640))]),
     # Plan once for 512-token prompts; serve prompts of another length. The
     # baselines need no plan, so they run at the served length either way.
     "mismatch": lambda: {

@@ -22,7 +22,7 @@ machine. All commands use the default pass-through NAND model
 | Fig. 1, reserve curve | `python plot_reserve_curve.py --measure` | 2 min |
 | Fig. 4, one decode step, filled vs reserved | `python plot_overlap.py` | 2 min |
 | Fig. 5, lookahead depth | `python plot_depth.py --measure` | 2 min |
-| Table V, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `streaming`, `mismatch`) | 10 min |
+| Table V, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `streaming`, `gpulink`, `mismatch`, `headroom`) | 12 min |
 | Table VI, mechanism ablation | `python ablation_passthrough.py` | 2 min |
 | Sec. V-G, per-configuration search against the best single reserve | `python fixed_reserve.py` | 6 min |
 | Sec. V-H, KV-cache tier | `python run_paper_tables.py --kv-tier` | 2 min |
@@ -30,6 +30,7 @@ machine. All commands use the default pass-through NAND model
 | Fig. 8, model scale, 7B to 405B | `python run_paper_tables.py --models` | 6 min |
 | Sec. V-K, realistic host | `python realistic_runs.py host` | 5 min |
 | Sec. V-L, 50 ShareGPT prompts | `python run_paper_tables.py --sharegpt` | 8 min |
+| Sec. VII, a plan served at another context length, and plan headroom | `python sensitivity.py mismatch headroom` | 3 min |
 | Sec. VII, re-planning cost under changing context | `python replan_cost.py` | 2 min |
 | All correctness invariants (122 checks) | `python verify_results.py` | 25 min |
 | Invariants without the batch sweep | `python verify_results.py --quick` | 6 min |
@@ -70,6 +71,7 @@ adds the prefetcher. The measured logs and CSVs behind the paper are in
 |---|---|
 | `NAND_PASS_THROUGH=0` | NAND reads are not charged to the device DRAM (Table V, "NAND bypasses device DRAM") |
 | `STREAM_COMPUTE=1` | a sub-layer computes alongside its own reads instead of after them, as a CPU computing on weights in place would (Table V, "Compute overlaps its own reads") |
+| `GPU_LINK_BPS` | caps the accelerator's PCIe link, which host DRAM and the device share, e.g. `63e9`; 0 (default) leaves it uncapped; no effect without an accelerator (Table V, "Accelerator link") |
 | `TIERSCHED_PLACEMENT_ORDER` | `size-desc` (default), `semantic`, `sequential` or `random` (Sec. V-G) |
 | `TIERSCHED_HINT_DROP` | fraction of prefetch hints the device ignores; ignored hints become demand reads (Table V) |
 | `TIERSCHED_PLAN_PREFILL` | plan for this prompt length and serve the configured one (Sec. VII) |
@@ -141,7 +143,9 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
   reported headline number depends on it.
 - Baselines implement their published memory policies, not their whole systems:
   CXLAimPod's eBPF duplex co-scheduler and LIA's AMX compute offload are out of
-  scope. FlexGen's linear program optimizes under its own serial cost model.
+  scope. FlexGen's weights are placed fastest tier first, the optimum of its
+  linear program when capacity binds, and its schedule is timed on the shared
+  engine.
 - Decoder blocks are assumed uniform, and sparsity comes from published
   profiles rather than per-model measurement.
 - NAND latency is charged serially per 256 KB read, with no SSD queue
@@ -150,6 +154,9 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
   weights into its own memory. A CPU computing on weights in place overlaps the
   two; `sensitivity.py streaming` runs that variant, which lowers the CPU-only
   gains (to 1.01-1.27x) and keeps all twelve leads.
+- The accelerator's PCIe link is uncapped by default. `sensitivity.py gpulink`
+  caps it at 63 or 55 GB/s; that slows the baselines more than TierSched and
+  keeps all twelve leads.
 - No physical CMM-H device. The CMM-H numbers are trace-driven simulation
   against documented device specifications; the mechanism and the timing
   engine are checked on real DRAM-over-NVMe servers (`hardware/`).
