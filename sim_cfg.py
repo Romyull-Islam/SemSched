@@ -12,11 +12,11 @@ BATCH_SIZE = 1
 # 2.75 GHz, AVX-512 at 64 FLOP/cycle/core, 85% achieved -> 14.4 TFLOPS, no
 # accelerator. Zeng et al. characterized CMM-H on this host.
 #
-# Above the 3.46 TFLOPS needed at B=128 FP16 (this engine has 4.2x that) the
-# result is unchanged, 13.36 t/s and 1.29x at 16H+48C, on this part, LIA's
-# 40-core Sapphire Rapids with AMX (61.4 TF), CXLAimPod's 86-core Granite Rapids
-# with AMX (132.1 TF) and an RTX 4090 (115.6 TF). Below it, the Xeon 6710E of the
-# CMM-H prototype paper (Sierra Forest, no AMX or AVX-512, 2.2 TF) gives 1.08x.
+# Decode at B=128 FP16 needs about 3.46 TFLOPS to stay memory-bound; this
+# engine has 4.2x that, so faster parts (LIA's 40-core Sapphire Rapids with AMX,
+# 61.4 TF; CXLAimPod's 86-core Granite Rapids with AMX, 132.1 TF; an RTX 4090,
+# 115.6 TF) would not change decode time, while the Xeon 6710E of the CMM-H
+# prototype paper (Sierra Forest, no AMX or AVX-512, 2.2 TF) would slow it.
 cpu_freq_hz = 2.75e9                # EPYC 9454 base clock
 cpu_cores = 96                      # 2 sockets x 48 cores
 flops_per_cycle_per_core = 64.0     # AVX-512 FMA, Zen 4

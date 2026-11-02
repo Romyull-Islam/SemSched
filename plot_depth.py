@@ -4,7 +4,8 @@ policy, at the configuration where TierSched leads most (CPU INT8 16H+48C) and
 one where it ties (+GPU INT8 16H+64C).
 
 Each static baseline is shown at its best fixed reserve for that K, out of the
-search's own 15 reserve fractions (0-50%); the dynamic-replacement baseline at
+search's own 15 reserve fractions (0-50%) for host and device DRAM, chosen
+separately; the dynamic-replacement baseline at
 its best KV tier; and TierSched with its own search. Runs under the pass-through NAND model. Regenerate with:
 
     python plot_depth.py --measure     # re-run the sweep, then plot
@@ -47,8 +48,9 @@ def measure():
     for label, quant, c, gpu in CASES:
         for k in DEPTHS:
             for name in POLICIES[:4]:
-                for frac in R.EQ_RESERVES:
-                    jobs.append(("base", files[name], quant, c, gpu, k, frac))
+                for fh in R.EQ_RESERVES:
+                    for fd in R.EQ_RESERVES:
+                        jobs.append(("base", files[name], quant, c, gpu, k, (fh, fd)))
             for kv in ("cxl", "host"):
                 jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
             jobs.append(("sem", "tiersched.py", quant, c, gpu, k, None))

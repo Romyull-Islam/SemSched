@@ -6,7 +6,8 @@ reads a saved result unless it says so; every command re-runs the simulators.
 Each cell runs in a private temporary tree with `sim_cfg.py` and `model_cfg.py`
 rewritten for that configuration, so a sweep cannot leave the repository
 configured for one experiment. Runtimes are for the whole command on a 32-core
-machine. All commands use the default pass-through NAND model
+machine with `OPENBLAS_NUM_THREADS=1`: every cell is its own process, and
+without it each one starts a full set of BLAS threads. All commands use the default pass-through NAND model
 (`NAND_PASS_THROUGH=1`): every NAND read also occupies the device DRAM.
 
 ## Simulation results
@@ -15,28 +16,29 @@ machine. All commands use the default pass-through NAND model
 |---|---|---|
 | Table II, decode throughput, both platforms | `python run_paper_tables.py` | 1 min |
 | CPU-only only / accelerator only | `python run_paper_tables.py --cpu-only` (or `--gpu-only`) | 30 s |
-| Table III, end-to-end time (prefill + decode) | `python run_paper_tables.py --detail` | 2 min |
+| Table II, end-to-end column (prefill + decode) | `python run_paper_tables.py --detail` | 2 min |
 | Prefill throughput | `python run_paper_tables.py --prefill` | 1 min |
-| Table IV, decode length 16 to 2048 | `python realistic_runs.py decode` | 5 min |
-| Sec. V-D, equal-footing baselines (tuned K and reserve, Belady) | `python run_paper_tables.py --equal-footing` | 2 min |
+| Table III, decode length 16 to 2048 | `python realistic_runs.py decode` | 5 min |
+| Sec. V-C, equal-footing baselines (tuned K, host and device reserves chosen separately, Belady); writes `equal_footing.json` | `python run_paper_tables.py --equal-footing` | 15 min |
+| Sec. V-C, where the lead over the tuned baselines comes from (needs `equal_footing.json`) | `python attribution.py` | 1 min |
 | Fig. 1, reserve curve | `python plot_reserve_curve.py --measure` | 2 min |
 | Fig. 4, one decode step, filled vs reserved | `python plot_overlap.py` | 2 min |
-| Fig. 5, lookahead depth | `python plot_depth.py --measure` | 2 min |
-| Table V, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `streaming`, `gpulink`, `mismatch`, `headroom`) | 12 min |
-| Table VI, mechanism ablation | `python ablation_passthrough.py` | 2 min |
-| Sec. V-G, per-configuration search against the best single reserve | `python fixed_reserve.py` | 6 min |
-| Sec. V-H, KV-cache tier | `python run_paper_tables.py --kv-tier` | 2 min |
-| Fig. 7, batch size, B = 1 to 128 | `python run_paper_tables.py --batch-sweep` | 15 min |
-| Fig. 8, model scale, 7B to 405B | `python run_paper_tables.py --models` | 6 min |
-| Sec. V-K, realistic host | `python realistic_runs.py host` | 5 min |
-| Sec. V-L, 50 ShareGPT prompts | `python run_paper_tables.py --sharegpt` | 8 min |
+| Sec. V-C, throughput against lookahead depth (no longer plotted in the paper) | `python plot_depth.py --measure` | 4 min |
+| Table IV, robustness | `python sensitivity.py all` (or one of `hints`, `nandbw`, `nandlat`, `context`, `passthrough`, `streaming`, `gpulink`, `device`, `staging`, `mismatch`, `headroom`) | 13 min |
+| Table V, mechanism ablation | `python ablation_passthrough.py` | 2 min |
+| Sec. V-F, per-configuration search against the best single reserve | `python fixed_reserve.py` | 6 min |
+| Sec. V-F, KV-cache tier | `python run_paper_tables.py --kv-tier` | 2 min |
+| Fig. 6, batch size, B = 1 to 128 | `python run_paper_tables.py --batch-sweep` | 15 min |
+| Fig. 7, model scale, 7B to 405B | `python run_paper_tables.py --models` | 6 min |
+| Sec. V-H, realistic host | `python realistic_runs.py host` | 5 min |
+| Sec. V-H, 50 ShareGPT prompts | `python run_paper_tables.py --sharegpt` | 8 min |
 | Sec. VII, a plan served at another context length, and plan headroom | `python sensitivity.py mismatch headroom` | 3 min |
 | Sec. VII, re-planning cost under changing context | `python replan_cost.py` | 2 min |
-| All correctness invariants (122 checks) | `python verify_results.py` | 25 min |
+| All correctness invariants (122 checks) | `python verify_results.py` | 7 min |
 | Invariants without the batch sweep | `python verify_results.py --quick` | 6 min |
 | Timing engine vs an independent model | `python test_pipeline_differential.py` | 20 s |
 
-Figs. 7 and 8 are plotted from the harness output:
+Figs. 6 and 7 are plotted from the harness output:
 
 ```bash
 python run_paper_tables.py --batch-sweep > batch.txt
@@ -48,15 +50,15 @@ python plot_sweeps.py                         # writes fig_batch.pdf, fig_models
 `plot_overlap.py --cached`, `plot_depth.py` (without `--measure`) and
 `plot_reserve_curve.py` (without `--measure`) replot from the checked-in JSON.
 
-## Real-hardware results (Sec. V-E)
+## Real-hardware results (Sec. V-D)
 
 These need a GPU server with an NVMe SSD; the scripts are in `hardware/`.
 
 | Paper item | Command |
 |---|---|
-| Fig. 6 benchmark, reserve against throughput | `python hardware/reserve_bench.py` on each machine, writing `hardware/results/<machine>/reserve_bench.csv` |
+| Fig. 5 benchmark, reserve against throughput | `python hardware/reserve_bench.py` on each machine, writing `hardware/results/<machine>/reserve_bench.csv` |
 | Timing-engine prediction of the benchmark | `python hardware/predict.py hardware/results/<machine>/reserve_bench.csv` |
-| Fig. 6 | `python hardware/plot_hw.py` |
+| Fig. 5 | `python hardware/plot_hw.py` |
 | FlexGen with an external prefetcher, one point | `hardware/flexgen_point.sh CPU_PCT BUDGET_GB DEPTH OUT` |
 | The full FlexGen sweep, with GPU-sharing exclusion rules | `hardware/flexgen_overnight.sh`, then `hardware/flexgen_retry.sh` |
 | Plan search for FlexGen before any run | `python hardware/plan_search.py` (scores plans with `io_replay.py`) |
@@ -69,14 +71,17 @@ adds the prefetcher. The measured logs and CSVs behind the paper are in
 
 | Variable | Effect |
 |---|---|
-| `NAND_PASS_THROUGH=0` | NAND reads are not charged to the device DRAM (Table V, "NAND bypasses device DRAM") |
-| `STREAM_COMPUTE=1` | a sub-layer computes alongside its own reads instead of after them, as a CPU computing on weights in place would (Table V, "Compute overlaps its own reads") |
-| `GPU_LINK_BPS` | caps the accelerator's PCIe link, which host DRAM and the device share, e.g. `63e9`; 0 (default) leaves it uncapped; no effect without an accelerator (Table V, "Accelerator link") |
-| `TIERSCHED_PLACEMENT_ORDER` | `size-desc` (default), `semantic`, `sequential` or `random` (Sec. V-G) |
-| `TIERSCHED_HINT_DROP` | fraction of prefetch hints the device ignores; ignored hints become demand reads (Table V) |
+| `NAND_PASS_THROUGH=0` or `2` | NAND bytes cross the device DRAM zero times or twice instead of once (Table IV, "NAND crosses device DRAM 0/2 times") |
+| `STAGE_NAND_ONLY=1` | only NAND bytes count against the in-flight budget, instead of every byte read ahead (Table IV, "Only NAND bytes need staging room") |
+| `DEVICE_SERIAL=1` | the device serves one request at a time instead of serving its DRAM while it reads NAND (Table IV, "Device serves one request at a time") |
+| `STREAM_COMPUTE=1` | a sub-layer computes alongside its own reads instead of after them, as a CPU computing on weights in place would (Table IV, "Compute overlaps its own reads") |
+| `GPU_LINK_BPS` | caps the accelerator's PCIe link, which host DRAM and the device share, e.g. `63e9`; 0 (default) leaves it uncapped; no effect without an accelerator (Table IV, "Accelerator link") |
+| `TIERSCHED_PLACEMENT_ORDER` | `size-desc` (default), `semantic`, `sequential` or `random` (Sec. V-F) |
+| `TIERSCHED_HINT_DROP` | fraction of prefetch hints the device ignores; ignored hints become demand reads (Table IV) |
 | `TIERSCHED_PLAN_PREFILL` | plan for this prompt length and serve the configured one (Sec. VII) |
+| `TIERSCHED_PLAN_DEVICE=default` | plan for the default device while decode runs on the one the switches above describe (Sec. V-E) |
 | `TIERSCHED_STAGE_FRAC` | share of the reserve that Phase-1 warmup may pin; 0 by default, because staging loses this split |
-| `DYN_POLICY` | `belady` (default) or `lru`, CMM-H's default host-agnostic cache (Sec. V-D) |
+| `DYN_POLICY` | `belady` (default) or `lru`, CMM-H's default host-agnostic cache (Sec. V-C) |
 | `DYN_PREFETCH_DEPTH`, `DYN_KV_TIER` | lookahead and KV tier of the dynamic baseline |
 
 ## Ablating the contributions
@@ -108,7 +113,7 @@ _dev_caps = [cxl_dev_dram_capacity_bytes] # the device sizes
 ```
 
 TierSched then loses 9 of 12 and gives up the entire INT8 margin.
-`ablation_passthrough.py` applies this pin and the other Table VI variants, and
+`ablation_passthrough.py` applies this pin and the other Table V variants, and
 `plot_reserve_curve.py` sweeps the reserve one fraction at a time; both assert
 that each patch anchor still matches the file.
 
@@ -138,9 +143,16 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
 ## What this simulator does not model
 
 - The CXL link's Rx/Tx duplexity is modelled, not validated. Tier bandwidths
-  and the independence of the tier buses are reproduced at cycle level in gem5
-  with SimCXL; the bridge model that would validate duplexity is not run. No
-  reported headline number depends on it.
+  and the concurrency of host DRAM and device DRAM are reproduced at cycle level
+  in gem5 with SimCXL; the bridge model that would validate duplexity is not run.
+  No reported headline number depends on it.
+- The device's internal data path is not in the gem5 model: there, device DRAM
+  and NAND are separate memories picked by address. By default the engine lets
+  the device serve its DRAM while it reads NAND, and charges each NAND byte to
+  the device DRAM once. `sensitivity.py device` charges it twice (12/12 leads)
+  and makes the device serve one request at a time, which removes most of the
+  gain (median 1.01x, 8/12 leads; 5/12 if TierSched plans for the default
+  device).
 - Baselines implement their published memory policies, not their whole systems:
   CXLAimPod's eBPF duplex co-scheduler and LIA's AMX compute offload are out of
   scope. FlexGen's weights are placed fastest tier first, the optimum of its

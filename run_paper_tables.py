@@ -12,6 +12,7 @@ some sweeps) rewritten for that cell. The repository itself is never modified.
 """
 import argparse
 import concurrent.futures as cf
+import json
 import os
 import re
 import shutil
@@ -393,7 +394,7 @@ def batch_table(gpu):
                     + f"{ratio:>8.2f}x{af:>14.3f}")
 
 
-# Equal footing (reviewer 4 and reviewer 1). Each baseline gets lookahead K and
+# Equal footing. Each baseline gets lookahead K and
 # a fixed reserve of a fraction of host and device DRAM, taken off the capacity
 # it places into and added to its staging budget. The rewrites below are the
 # only changes to each baseline: its depth constant or call, and its budget.
@@ -459,13 +460,20 @@ def _eq_job(job):
 
 def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites):
     """A baseline with a fixed reserve: it places into (1 - frac) of host and
-    device DRAM, and the reserved bytes are added to its staging budget."""
+    device DRAM, and the reserved bytes are added to its staging budget. frac is
+    one fraction for both tiers, or a (host, device) pair as TierSched searches."""
+    if isinstance(frac, tuple):
+        fh, fd = frac
+        extra = fh * h + fd * c
+    else:
+        fh = fd = frac
+        extra = frac * (h + c)
     with tempfile.TemporaryDirectory() as td:
         for f in DEPS + [s for _, s in SIMS]:
             shutil.copy(os.path.join(REPO, f), td)
-        patch(td, quant, h * (1 - frac), c * (1 - frac), gpu)
+        patch(td, quant, h * (1 - fh), c * (1 - fd), gpu)
         p = os.path.join(td, sim)
-        s = f"EQ_EXTRA = {frac * (h + c) * 1024 ** 3!r}\n" + open(p).read()
+        s = f"EQ_EXTRA = {extra * 1024 ** 3!r}\n" + open(p).read()
         for old, new in rewrites:
             if old.startswith("^"):
                 s, n = re.subn(old, new, s, 1, re.M)
@@ -482,14 +490,17 @@ def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites):
 
 def equal_footing(gpu):
     """Every policy at its best lookahead: baselines also at their best fixed
-    reserve, the dynamic-replacement baseline at its best KV tier."""
+    reserve, with host and device fractions chosen separately from the same 15
+    values TierSched searches, and the dynamic-replacement baseline at its best
+    KV tier. Returns the per-configuration results."""
     jobs = []
     for quant in QUANTS:
         for c in CXLS:
             for sim in EQ_PATCH:
                 for k in EQ_DEPTHS:
-                    for frac in EQ_RESERVES:
-                        jobs.append(("base", sim, quant, c, gpu, k, frac))
+                    for fh in EQ_RESERVES:
+                        for fd in EQ_RESERVES:
+                            jobs.append(("base", sim, quant, c, gpu, k, (fh, fd)))
             for k in DYN_DEPTHS:
                 for kv in ("cxl", "host"):
                     jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
@@ -510,16 +521,23 @@ def equal_footing(gpu):
     print(f"{'Quant':<6}{'Memory':<10}{'best static baseline':>34}{'dynamic (Belady)':>24}"
           f"{'TierSched':>18}{'vs static':>11}{'vs dynamic':>11}")
     print("-" * 100)
+    rows = {}
     for quant in QUANTS:
         for c in CXLS:
             cell = lambda j: j[2] == quant and j[3] == c
             bv, bj = best(lambda j: j[0] == "base" and cell(j))
             dv, dj = best(lambda j: j[0] == "dyn" and cell(j))
             sv, sj = best(lambda j: j[0] == "sem" and cell(j))
-            bdesc = f"{names[bj[1]]} K={bj[5]} r={bj[6]:.0%}"
+            bdesc = f"{names[bj[1]]} K={bj[5]} r={bj[6][0]:.0%}/{bj[6][1]:.0%}"
             ddesc = f"K={dj[5]} KV={dj[6]}"
-            print(f"{quant.upper():<6}{f'16H+{c}C':<10}{bv:>8.2f} ({bdesc:<22}){dv:>9.2f} ({ddesc:<11})"
+            print(f"{quant.upper():<6}{f'16H+{c}C':<10}{bv:>8.2f} ({bdesc:<26}){dv:>9.2f} ({ddesc:<11})"
                   f"{sv:>8.2f} (K={sj[5]:<2}){sv / bv:>10.2f}x{sv / dv:>10.2f}x")
+            rows[f"{'GPU' if gpu else 'CPU'} {quant} 16H+{c}C"] = {
+                "static": bv, "static_policy": names[bj[1]], "static_K": bj[5],
+                "static_host_reserve": bj[6][0], "static_device_reserve": bj[6][1],
+                "dynamic": dv, "dynamic_K": dj[5], "dynamic_kv": dj[6],
+                "tiersched": sv, "tiersched_K": sj[5]}
+    return rows
 
 
 def main():
@@ -547,10 +565,14 @@ def main():
     a = ap.parse_args()
 
     if a.equal_footing:
+        out = os.path.join(REPO, "equal_footing.json")
+        rows = json.load(open(out)) if os.path.exists(out) else {}
         if not a.gpu_only:
-            equal_footing(0)
+            rows.update(equal_footing(0))
         if not a.cpu_only:
-            equal_footing(GPU_GB)
+            rows.update(equal_footing(GPU_GB))
+        json.dump(rows, open(out, "w"), indent=1)
+        print(f"wrote {out}")
         return
     if a.models:
         if not a.gpu_only:

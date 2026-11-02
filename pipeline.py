@@ -33,10 +33,21 @@ SHARED_LINK = {"CXL Device DRAM", "CXL Device NAND"}
 # On CMM-H a NAND read is first copied into the DRAM cache and then returned
 # from it (Soltaniyeh et al., HotStorage'25, Fig. 1b), so NAND bytes also
 # occupy the device DRAM. NAND_PASS_THROUGH=1 charges them there, which caps the
-# device's combined rate at the DRAM rate. This is the default; NAND_PASS_THROUGH=0
-# runs the two tiers in parallel instead.
-NAND_PASS_THROUGH = os.environ.get("NAND_PASS_THROUGH", "1") == "1"
+# device's combined rate at the DRAM rate. This is the default; NAND_PASS_THROUGH=2
+# charges them twice, as if the fill and the read-out each took a pass, and
+# NAND_PASS_THROUGH=0 runs the two tiers in parallel instead.
+NAND_PASS_THROUGH = int(os.environ.get("NAND_PASS_THROUGH", "1"))
 DEVICE_DRAM, DEVICE_NAND = "CXL Device DRAM", "CXL Device NAND"
+
+# By default the device serves its DRAM cache while it reads NAND. DEVICE_SERIAL=1
+# makes it serve one request at a time instead: no cache hit is served while a
+# NAND read is in flight, and no NAND read starts while a hit is being served.
+DEVICE_SERIAL = os.environ.get("DEVICE_SERIAL", "0") == "1"
+
+# Every byte read ahead holds staging room until it is consumed, by default.
+# STAGE_NAND_ONLY=1 counts only NAND bytes against the in-flight budget: on
+# CMM-H they are the only bytes the device reserve stages.
+STAGE_NAND_ONLY = os.environ.get("STAGE_NAND_ONLY", "0") == "1"
 
 # By default a unit computes only once all its bytes have landed, as when a GPU
 # copies weights into its own memory first. STREAM_COMPUTE=1 lets a unit's
@@ -54,6 +65,11 @@ if GPU_LINK_BPS:
     if not gpu_hbm_capacity_bytes:
         GPU_LINK_BPS = 0.0
 GPU_TIER = "GPU HBM"
+
+
+def staged_bytes(by_tier):
+    """Bytes a read issued ahead holds in staging room until it is consumed."""
+    return by_tier.get(DEVICE_NAND, 0.0) if STAGE_NAND_ONLY else sum(by_tier.values())
 
 
 def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
@@ -101,12 +117,12 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
             # but not yet consumed. Start at m = i-1 (room for unit i alone) and
             # walk back while the accumulated bytes still fit.
             m = i - 1
-            acc = sum(units[i][0].values())
+            acc = staged_bytes(units[i][0])
             # m >= 0 is required: a negative m would index units[] from the end.
             # Reaching m < 0 means everything back to unit 0 fits, i.e. issue
             # at t=0.
             while m > j and m >= 0:
-                nxt = sum(units[m][0].values())
+                nxt = staged_bytes(units[m][0])
                 if acc + nxt > inflight_budget:
                     break
                 acc += nxt
@@ -141,11 +157,16 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                 gpu_link_free = start + nbytes / GPU_LINK_BPS
             finish = start + dur
             tier_free[tier] = finish
-            if NAND_PASS_THROUGH and tier == DEVICE_NAND and tier_bw.get(DEVICE_DRAM):
+            if DEVICE_SERIAL and tier in SHARED_LINK:
+                # One request at a time: neither device tier starts another
+                # transfer until this one is done.
+                tier_free[DEVICE_DRAM] = tier_free[DEVICE_NAND] = finish
+            if (NAND_PASS_THROUGH and not DEVICE_SERIAL and tier == DEVICE_NAND
+                    and tier_bw.get(DEVICE_DRAM)):
                 # The cache fill and read-out stream alongside the NAND read but
-                # hold the DRAM for these bytes at the DRAM's own rate.
+                # hold the DRAM for these bytes at the DRAM's own rate, once per pass.
                 d_start = max(start, tier_free.get(DEVICE_DRAM, 0.0))
-                d_finish = d_start + nbytes / tier_bw[DEVICE_DRAM]
+                d_finish = d_start + NAND_PASS_THROUGH * nbytes / tier_bw[DEVICE_DRAM]
                 tier_free[DEVICE_DRAM] = d_finish
                 finish = max(finish, d_finish)
             ready = max(ready, finish)

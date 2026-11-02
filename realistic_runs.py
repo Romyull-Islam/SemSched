@@ -1,5 +1,5 @@
 """
-Realistic-host experiments (reviewer 4), under the pass-through NAND model.
+Realistic-host experiments, under the pass-through NAND model.
 
   host    the measured host bandwidth of the CMM-H test server: 161 GB/s for
           one socket of 8 DDR5-5600 channels (Soltaniyeh et al., HotStorage'25,

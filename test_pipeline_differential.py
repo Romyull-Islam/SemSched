@@ -24,7 +24,8 @@ import math
 import random
 import sys
 
-from pipeline import pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH, STREAM_COMPUTE
+from pipeline import (pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH, STREAM_COMPUTE,
+                      DEVICE_SERIAL, GPU_LINK_BPS, STAGE_NAND_ONLY)
 from tiers import CXL_HOST_LINK_CEILING
 
 TIERS = ["GPU HBM", "Host DRAM", "CXL Device DRAM", "CXL Device NAND"]
@@ -52,6 +53,8 @@ def reference_time_s(units, depth, bw, lat, budget=None):
 
     busy = {t: 0.0 for t in TIERS}      # per-tier bus timelines
     link = 0.0                          # shared CXL host link timeline
+    gpu_link = 0.0                      # accelerator PCIe link timeline
+    device = 0.0                        # the whole device, when it serves one request at a time
     finished_compute = []               # compute completion, per unit
     engine = 0.0                        # the single compute engine
 
@@ -67,10 +70,12 @@ def reference_time_s(units, depth, bw, lat, budget=None):
         # until the bytes held fit the budget. (The engine walks the other
         # direction; the fixpoint is the same.)
         if budget is not None:
-            held = sum(units[i][0].values())
+            def room(by):   # staging room a read-ahead holds
+                return by.get("CXL Device NAND", 0.0) if STAGE_NAND_ONLY else sum(by.values())
+            held = room(units[i][0])
             chosen = i - 1
             for m in range(i - 1, max(back, -1), -1):   # never below unit 0
-                extra = sum(units[m][0].values())
+                extra = room(units[m][0])
                 if held + extra > budget:
                     break
                 held += extra
@@ -82,17 +87,33 @@ def reference_time_s(units, depth, bw, lat, budget=None):
             nbytes = by_tier[tier]
             if nbytes <= 0 or not bw.get(tier):
                 continue
+            on_device = tier in SHARED_LINK
+            to_gpu = GPU_LINK_BPS and tier != "GPU HBM"
             begin = max(earliest, busy[tier])
-            if tier in SHARED_LINK:
+            if DEVICE_SERIAL and on_device:
+                begin = max(begin, device)
+            if on_device:
                 begin = max(begin, link)
+            if to_gpu:
+                begin = max(begin, gpu_link)
+            # Each link is held from the transfer's start for its bytes at the
+            # link's own rate.
+            if on_device:
                 link = begin + nbytes / CXL_HOST_LINK_CEILING
+            if to_gpu:
+                gpu_link = begin + nbytes / GPU_LINK_BPS
             end = begin + _dur(nbytes, bw[tier], lat.get(tier, 0.0))
             busy[tier] = end
-            if (NAND_PASS_THROUGH and tier == "CXL Device NAND"
+            if DEVICE_SERIAL and on_device:
+                # The device is busy until this request is done; its NAND fill
+                # happens inside that time.
+                device = end
+            elif (NAND_PASS_THROUGH and tier == "CXL Device NAND"
                     and bw.get("CXL Device DRAM")):
                 # The bytes also cross the device DRAM at its own rate, from the
-                # start of the NAND read; they land when both are done.
-                fill = max(begin, busy["CXL Device DRAM"]) + nbytes / bw["CXL Device DRAM"]
+                # start of the NAND read, once per pass; they land when both are done.
+                fill = (max(begin, busy["CXL Device DRAM"])
+                        + NAND_PASS_THROUGH * nbytes / bw["CXL Device DRAM"])
                 busy["CXL Device DRAM"] = fill
                 end = max(end, fill)
             arrived = max(arrived, end)
@@ -154,6 +175,14 @@ def bounds(units, depth, bw, lat, budget, got):
     shared = sum(u[0].get(t, 0.0) for u in units for t in SHARED_LINK)
     if got < shared / CXL_HOST_LINK_CEILING - tol:
         problems.append("beats the shared CXL link ceiling")
+
+    # 3b. A device serving one request at a time cannot beat the sum of its
+    # two tiers' occupancy.
+    if DEVICE_SERIAL:
+        dev = sum(_dur(u[0][t], bw[t], lat.get(t, 0.0))
+                  for u in units for t in SHARED_LINK if bw.get(t) and u[0].get(t, 0) > 0)
+        if got < dev - tol:
+            problems.append(f"beats the serial device: {got:.9g} < {dev:.9g}")
 
     # 4. Lookahead never hurts: deeper is never slower.
     if depth > 0:

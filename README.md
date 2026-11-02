@@ -45,9 +45,10 @@ below and nothing else.
 │
 ├── run_paper_tables.py          # The harness: every table and sweep in the paper
 ├── verify_results.py            # 122 invariant checks over the full result grid
-├── sensitivity.py               # Table V: hints ignored, NAND rate and latency, long prompts
+├── sensitivity.py               # Table IV: hints ignored, NAND rate and latency, device data path, long prompts
 ├── realistic_runs.py            # Realistic host and decode-length experiments
-├── ablation_passthrough.py      # Table VI: mechanism ablation
+├── ablation_passthrough.py      # Table V: mechanism ablation
+├── attribution.py               # Where the lead over the tuned baselines comes from
 ├── fixed_reserve.py             # Per-configuration search against one fixed reserve
 ├── replan_cost.py               # Cost of re-planning when the context length changes
 ├── parse_sweeps.py              # Harness output -> sweep_figs.json
@@ -61,8 +62,10 @@ below and nothing else.
 ├── reserve_curve.json           # Measured data behind the motivation figure
 ├── sweep_figs.json              # Measured data behind the sweep figures
 ├── overlap_data.json            # Measured schedules behind the timeline figure
-├── depth_sweep.json             # Measured data behind the lookahead figure
-├── sensitivity.json             # Measured data behind Table V
+├── depth_sweep.json             # Measured data behind the lookahead results
+├── sensitivity.json             # Measured data behind Table IV
+├── equal_footing.json           # Tuned baselines, every policy at its best setting
+├── attribution.json             # The attribution steps against the tuned baselines
 │
 ├── test_pipeline_differential.py # Timing engine vs an independent model + bounds
 ├── test_cxl_link.py             # Unit tests for the link model (23 checks)
@@ -87,7 +90,7 @@ below and nothing else.
 
 ## Requirements
 
-- Python 3.10+. The simulators use only the standard library.
+- Python 3.10+ with `pandas`, which the simulators import.
 - `matplotlib` for the plotting scripts.
 - Optional: `pytest` for `test_bandwidth_conservation.py`;
   `datasets` and `tiktoken` only to re-download ShareGPT.
@@ -103,7 +106,7 @@ for that run, so no sweep can contaminate another or the repository.
 python run_paper_tables.py               # decode throughput + wall clock, both platforms
 python run_paper_tables.py --prefill     # prefill tables
 python run_paper_tables.py --kv-tier     # KV-tier placement table
-python run_paper_tables.py --ablation    # search-disabled ablation
+python run_paper_tables.py --ablation    # Phase-1 warmup ablation (warmup is off by default)
 python run_paper_tables.py --batch-sweep # B = 1..128 grid behind the batch figure
 python run_paper_tables.py --models      # 7B..405B grid behind the model-scale figure
 python run_paper_tables.py --sharegpt    # 50 real ShareGPT prompts, both platforms

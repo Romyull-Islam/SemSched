@@ -32,7 +32,7 @@ OUT = os.path.join(REPO, "figures", "fig_overlap.pdf")
 sys.path.insert(0, REPO)
 
 from pipeline import (pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH,  # noqa: E402
-                      DEVICE_DRAM, DEVICE_NAND)
+                      DEVICE_SERIAL, DEVICE_DRAM, DEVICE_NAND, staged_bytes)
 from tiers import CXL_HOST_LINK_CEILING                     # noqa: E402
 
 CHUNK = 256 * 1024
@@ -99,9 +99,9 @@ def schedule(d):
         j = i - depth - 1
         issue = comp_done[j] if j >= 0 else 0.0
         if budget is not None:
-            m, acc = i - 1, sum(by.values())
+            m, acc = i - 1, staged_bytes(by)
             while m > j and m >= 0:
-                nxt = sum(units[m][0].values())
+                nxt = staged_bytes(units[m][0])
                 if acc + nxt > budget:
                     break
                 acc += nxt
@@ -120,11 +120,14 @@ def schedule(d):
                 link_free = start + nb / CXL_HOST_LINK_CEILING
             end = start + dur
             tier_free[tier] = end
+            if DEVICE_SERIAL and tier in SHARED_LINK:
+                tier_free[DEVICE_DRAM] = tier_free[DEVICE_NAND] = end
             xfer.append((i, tier, start, end))
-            if NAND_PASS_THROUGH and tier == DEVICE_NAND and bw.get(DEVICE_DRAM):
+            if (NAND_PASS_THROUGH and not DEVICE_SERIAL and tier == DEVICE_NAND
+                    and bw.get(DEVICE_DRAM)):
                 # The cache fill and read-out also hold the device DRAM.
                 d0 = max(start, tier_free.get(DEVICE_DRAM, 0.0))
-                d1 = d0 + nb / bw[DEVICE_DRAM]
+                d1 = d0 + NAND_PASS_THROUGH * nb / bw[DEVICE_DRAM]
                 tier_free[DEVICE_DRAM] = d1
                 end = max(end, d1)
             ready = max(ready, end)

@@ -1,0 +1,86 @@
+{
+ "CPU fp16 16H+32C": {
+  "tuned_static": 4.6243,
+  "placement, one reserve fraction": 4.738393,
+  "+ separate host/device reserves": 4.74694,
+  "+ KV tier and device size": 4.74694,
+  "+ residue spreading (full)": 4.74694
+ },
+ "CPU fp16 16H+48C": {
+  "tuned_static": 5.109714,
+  "placement, one reserve fraction": 5.432725,
+  "+ separate host/device reserves": 5.446012,
+  "+ KV tier and device size": 5.446012,
+  "+ residue spreading (full)": 5.446012
+ },
+ "CPU fp16 16H+64C": {
+  "tuned_static": 5.8453,
+  "placement, one reserve fraction": 6.394597,
+  "+ separate host/device reserves": 6.394597,
+  "+ KV tier and device size": 6.394597,
+  "+ residue spreading (full)": 6.39333
+ },
+ "CPU int8 16H+32C": {
+  "tuned_static": 14.1385,
+  "placement, one reserve fraction": 15.388323,
+  "+ separate host/device reserves": 15.549509,
+  "+ KV tier and device size": 15.549509,
+  "+ residue spreading (full)": 15.508172
+ },
+ "CPU int8 16H+48C": {
+  "tuned_static": 22.7037,
+  "placement, one reserve fraction": 26.077039,
+  "+ separate host/device reserves": 26.337234,
+  "+ KV tier and device size": 26.337234,
+  "+ residue spreading (full)": 26.459312
+ },
+ "CPU int8 16H+64C": {
+  "tuned_static": 43.7901,
+  "placement, one reserve fraction": 38.158301,
+  "+ separate host/device reserves": 38.547286,
+  "+ KV tier and device size": 38.547286,
+  "+ residue spreading (full)": 43.854377
+ },
+ "GPU fp16 16H+32C": {
+  "tuned_static": 5.976685,
+  "placement, one reserve fraction": 6.205597,
+  "+ separate host/device reserves": 6.220264,
+  "+ KV tier and device size": 6.220264,
+  "+ residue spreading (full)": 6.220264
+ },
+ "GPU fp16 16H+48C": {
+  "tuned_static": 6.9155,
+  "placement, one reserve fraction": 7.482988,
+  "+ separate host/device reserves": 7.50822,
+  "+ KV tier and device size": 7.50822,
+  "+ residue spreading (full)": 7.50822
+ },
+ "GPU fp16 16H+64C": {
+  "tuned_static": 8.4359,
+  "placement, one reserve fraction": 9.450266,
+  "+ separate host/device reserves": 9.468812,
+  "+ KV tier and device size": 9.468812,
+  "+ residue spreading (full)": 9.468812
+ },
+ "GPU int8 16H+32C": {
+  "tuned_static": 50.283,
+  "placement, one reserve fraction": 43.924992,
+  "+ separate host/device reserves": 44.513159,
+  "+ KV tier and device size": 49.402146,
+  "+ residue spreading (full)": 54.497756
+ },
+ "GPU int8 16H+48C": {
+  "tuned_static": 73.2219,
+  "placement, one reserve fraction": 72.437973,
+  "+ separate host/device reserves": 73.552492,
+  "+ KV tier and device size": 73.552492,
+  "+ residue spreading (full)": 74.005474
+ },
+ "GPU int8 16H+64C": {
+  "tuned_static": 73.4623,
+  "placement, one reserve fraction": 72.437973,
+  "+ separate host/device reserves": 73.552492,
+  "+ KV tier and device size": 73.552492,
+  "+ residue spreading (full)": 74.005474
+ }
+}

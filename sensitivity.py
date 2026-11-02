@@ -1,6 +1,6 @@
 """
 Robustness of the main result to the assumptions a CMM-H deployment could
-break. Every sweep reruns the twelve configurations of Table III and reports
+break. Every sweep reruns the twelve configurations of Table II and reports
 TierSched's speedup over the best of the four baselines in each one.
 
     python sensitivity.py hints      # device ignores a fraction of prefetch hints
@@ -12,6 +12,8 @@ TierSched's speedup over the best of the four baselines in each one.
     python sensitivity.py streaming  # a unit computes alongside its own reads, or after them
     python sensitivity.py gpulink    # accelerator PCIe link uncapped / 63 / 55 GB/s
     python sensitivity.py headroom   # plan for 12.5-25% more or less context than served
+    python sensitivity.py device     # NAND bytes cross device DRAM twice; device serves one request at a time
+    python sensitivity.py staging    # only NAND bytes count against the staging budget
     python sensitivity.py all
 
 Results go to sensitivity.json, keyed by sweep and setting.
@@ -113,6 +115,24 @@ SWEEPS = {
                                    {"prefill": s, "sem": {"env": {"TIERSCHED_PLAN_PREFILL": str(p)}}})
                                   for s, p in ((448, 512), (576, 512), (512, 576),
                                                (448, 576), (512, 640))]),
+    # The device's internal data path, harsher than the default: NAND bytes cross
+    # the device DRAM twice (fill, then read-out), or the device serves one
+    # request at a time. Each is run with TierSched planning for that device and,
+    # to test a plan made for the wrong device, planning for the default one.
+    "device": lambda: speedups([
+        ("pass-through x2", {"env": {"NAND_PASS_THROUGH": "2"}}),
+        ("pass-through x2, planned for x1",
+         {"env": {"NAND_PASS_THROUGH": "2"},
+          "sem": {"env": {"NAND_PASS_THROUGH": "2", "TIERSCHED_PLAN_DEVICE": "default"}}}),
+        ("one request at a time", {"env": {"DEVICE_SERIAL": "1"}}),
+        ("one request at a time, planned for concurrent",
+         {"env": {"DEVICE_SERIAL": "1"},
+          "sem": {"env": {"DEVICE_SERIAL": "1", "TIERSCHED_PLAN_DEVICE": "default"}}}),
+    ]),
+    # Count only NAND bytes against the in-flight budget instead of every byte
+    # read ahead; the plan is made under the same accounting.
+    "staging": lambda: speedups([(f"NAND-only staging {v}", {"env": {"STAGE_NAND_ONLY": v}})
+                                 for v in ("0", "1")]),
     # Plan once for 512-token prompts; serve prompts of another length. The
     # baselines need no plan, so they run at the served length either way.
     "mismatch": lambda: {

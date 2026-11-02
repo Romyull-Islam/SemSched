@@ -29,6 +29,7 @@ from enum import Enum
 from cxl_link import CXLLink   # two-queue full-duplex bus model
 
 from tiers import kv_growth_spill_time_s
+import pipeline as _pipeline
 from pipeline import pipelined_time_s
 from tiers import (
     HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM, transfer_time_s,
@@ -87,6 +88,12 @@ HINT_DROP = float(_os.environ.get("TIERSCHED_HINT_DROP", "0.0"))
 # length and served at another, as under continuous batching, where the
 # requests in a batch change and the KV volume per step changes with them.
 PLAN_PREFILL = int(_os.environ.get("TIERSCHED_PLAN_PREFILL", "0")) or None
+
+# Device the placement is planned for. By default the search sees the device the
+# engine models. "default" plans as if the device had the default data path (one
+# pass-through charge, cache served alongside NAND) while decode runs on the
+# modeled one, which tests a plan made for the wrong device.
+PLAN_DEVICE = _os.environ.get("TIERSCHED_PLAN_DEVICE", "")
 
 
 def dropped_hints(units):
@@ -764,6 +771,9 @@ def run_semantic_duplex_simulation():
         # with the device clamped to each smaller standard size (32, 48 GB), so
         # a larger device's candidates include every smaller device's plan and
         # decode time cannot get worse with more capacity.
+        _served_device = (_pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL)
+        if PLAN_DEVICE == "default":
+            _pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL = 1, False
         _search_t0 = time.perf_counter()
         _cands = []
         _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
@@ -814,6 +824,7 @@ def run_semantic_duplex_simulation():
                 _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
                 _best_devcap = _devcap
         _caps0["cxl"] = _best_devcap
+        _pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL = _served_device
         print(f"Search time: {time.perf_counter() - _search_t0:.2f} s for {len(_cands)} finalists")
         print(f"Search choice: device {_best_devcap / GiB:.0f} GB of "
               f"{cxl_dev_dram_capacity_bytes / GiB:.0f}, KV tier {_best_kv}, "
