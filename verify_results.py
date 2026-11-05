@@ -50,11 +50,12 @@ def check_determinism(gpu):
 # indentation (unindented, the simulator would report a failed run).
 LEDGER = '''
         import collections as _cc, json as _js
-        _t = _cc.Counter()
+        _t, _r = _cc.Counter(), _cc.Counter()
         for _i, _L in enumerate(layers):
             for _k, _f in frac[_i].items():
                 _t[_k] += _L["bytes"] * _f
-        print("LEDGER " + _js.dumps({"tiers": dict(_t), "kv": _kv_mean,
+                _r[_k] += bytes_read(_L, BATCH_SIZE) * _f
+        print("LEDGER " + _js.dumps({"tiers": dict(_t), "reads": dict(_r), "kv": _kv_mean,
                                      "kv_split": _kv_split,
                                      "caps": {"gpu": gpu_hbm_capacity_bytes,
                                               "host": host_dram_capacity_bytes,
@@ -109,8 +110,9 @@ def check_capacity_and_floor(gpu):
                        f"{caps[key]/G:3.0f}G ({100*used/caps[key]:5.1f}%)"
                        + (f"  [KV {100*split.get(key,0.0):.0f}%]"
                           if split.get(key, 0.0) else ""))
-            # floor: with tiers concurrent, a step cannot beat its slowest tier
-            floor = max((v / BW[k] for k, v in tiers.items() if k in BW),
+            # floor: with tiers concurrent, a step cannot beat its slowest
+            # tier's weight reads (an embedding lookup reads B rows of its table)
+            floor = max((v / BW[k] for k, v in led["reads"].items() if k in BW),
                         default=0.0)
             step = R.BATCH / tps
             report("floor", step >= floor * 0.999,
@@ -149,17 +151,18 @@ MODELS = ["Mistral7BCfg", "Llama13BCfg", "Qwen3_20BCfg",
 
 
 def _step_bytes(cfg_name, quant):
-    """Bytes a decode step moves for this model and quant: weights once, plus
-    the KV cache read at the generation midpoint. Throughput is monotone in
-    this, not in parameter count: Llama 13B (full MHA, 54 GB of KV per step)
-    decodes slower than Qwen3 20B (GQA, 11 GB)."""
+    """Bytes a decode step moves for this model and quant: weights once (B rows
+    of the embedding table), plus the KV cache read at the generation midpoint.
+    Throughput is monotone in this, not in parameter count: Llama 13B (full MHA,
+    67 GB of KV per step at FP16) decodes slower than the 22B GQA model (16 GB)."""
     import model_cfg as M
     bpp = {"fp16": 2, "int8": 1}[quant]
     cfg = getattr(M, cfg_name)
     layers = M.build_layers(cfg, sequence_length=512)
-    weights = sum(L["bytes"] for L in layers) * bpp / 4.0   # build is fp32 bytes
-    kv = sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128) * bpp
-             for L in layers if L.get("kv_cache_bytes", 0) > 0) * 128 * 520
+    weights = sum(M.bytes_read(L, R.BATCH) for L in layers) * bpp / 4.0   # build is fp32 bytes
+    kv = (sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128) * bpp
+              for L in layers if L.get("kv_cache_bytes", 0) > 0)
+          * R.BATCH * (512 + R.DECODE / 2))
     return weights + kv
 
 
@@ -191,18 +194,29 @@ def check_model_scale(gpu):
 def check_batch_monotonicity(gpu):
     """Throughput usually rises with batch, since weight bytes are fixed while
     B tokens are produced, but it need not. LLM-in-a-Flash's DRAM window is
-    capacity-capped: from B=1 to B=2 its active set grows 1.54x, the window
-    cannot grow, NAND overflow grows 2.29x against a 2x batch, and throughput
-    falls about 3%. That drop is reported as expected; any other drop fails."""
+    capacity-capped: as B grows its active set grows, the window cannot, and
+    once the active set outgrows the window its NAND overflow can grow faster
+    than the batch (at accelerated FP16 16H+48C: none at B=1, 10.6 GB at B=2,
+    35 GB at B=4), so throughput falls. A drop is reported as expected only for
+    that policy and only where its reported NAND overflow grew by more than the
+    batch did; any other drop fails."""
     print("\n5. BATCH MONOTONICITY — a drop must have a stated reason")
+
+    def overflow(out):
+        m = re.search(r"NAND overflow=([\d.]+)GB/step", out)
+        return float(m.group(1)) if m else None
+
     for quant in ("fp16", "int8"):
         for name, sim in R.SIMS:
-            vals = [(b, R.run(sim, quant, 16, 48, gpu, batch=b)[0])
+            runs = [(b, R.run(sim, quant, 16, 48, gpu, batch=b))
                     for b in (1, 2, 4, 8, 16, 32, 64, 128)]
+            vals = [(b, r[0]) for b, r in runs]
+            nand = {b: overflow(r[2]) for b, r in runs}
             bad = [(b0, v0, b1, v1) for (b0, v0), (b1, v1)
                    in zip(vals, vals[1:]) if v1 < v0 * 0.999]
-            known = (name == "LLMFlash" and bad and
-                     all(b0 == 1 for b0, _, _, _ in bad))   # capacity-capped window
+            known = (name == "LLMFlash" and bad and all(          # capacity-capped window
+                nand[b1] is not None and nand[b0] is not None
+                and nand[b1] > (b1 / b0) * nand[b0] for b0, _, b1, _ in bad))
             report("mono-batch", not bad or known,
                    f"{name:<9} {quant} 16H+48C: "
                    + (" ".join(f"{v:.2f}" for _, v in vals) if not bad

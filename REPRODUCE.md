@@ -98,9 +98,10 @@ TIERSCHED_PLACEMENT_ORDER=random     python run_paper_tables.py   # seeded shuff
 ```
 
 Measured over the twelve configurations: `size-desc` beats `semantic` in all
-twelve, by a median of 2% and at most 11% (accelerated INT8 16H+32C). Every
-order, the random one included, beats every baseline in all twelve, so the gain
-comes from the reserve and residue spreading rather than from the order.
+twelve, by a median of 5% and at most 32% (accelerated INT8 16H+32C). The order
+matters: `semantic` beats every baseline in 8 of the twelve and `random` in 9.
+`size-desc` ranks sub-layers by the bytes each reads per step, which is its size
+except for the embedding table (a step reads B rows of it).
 
 The reserve search has no flag, because it is the search in `tiersched.py`
 itself. Ablate it by pinning the grid to a single point (reserve nothing, KV on
@@ -151,7 +152,7 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
   the device serve its DRAM while it reads NAND, and charges each NAND byte to
   the device DRAM once. `sensitivity.py device` charges it twice (12/12 leads)
   and makes the device serve one request at a time, which removes most of the
-  gain (median 1.01x, 8/12 leads; 5/12 if TierSched plans for the default
+  gain (median 1.02x, 8/12 leads; 5/12 if TierSched plans for the default
   device).
 - Baselines implement their published memory policies, not their whole systems:
   CXLAimPod's eBPF duplex co-scheduler and LIA's AMX compute offload are out of
@@ -165,10 +166,10 @@ at 31.5 GB/s. Platforms are 2x EPYC 9454 (14.4 TFLOPS, no accelerator) and
 - A sub-layer computes once all its bytes have landed, as on a GPU that copies
   weights into its own memory. A CPU computing on weights in place overlaps the
   two; `sensitivity.py streaming` runs that variant, which lowers the CPU-only
-  gains (to 1.01-1.27x) and keeps all twelve leads.
+  gains (to 1.01-1.34x) and keeps all twelve leads.
 - The accelerator's PCIe link is uncapped by default. `sensitivity.py gpulink`
-  caps it at 63 or 55 GB/s; that slows the baselines more than TierSched and
-  keeps all twelve leads.
-- No physical CMM-H device. The CMM-H numbers are trace-driven simulation
-  against documented device specifications; the mechanism and the timing
+  caps it at 63 or 55 GB/s; that raises the median lead but ties accelerated
+  INT8 16H+48C and trails at 16H+64C by 0.6%.
+- No physical CMM-H device. The CMM-H numbers are simulated from
+  documented device specifications; the mechanism and the timing
   engine are checked on real DRAM-over-NVMe servers (`hardware/`).

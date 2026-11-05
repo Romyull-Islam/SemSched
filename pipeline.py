@@ -110,8 +110,8 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
 
         # Prefetched bytes need somewhere to live until they are consumed, so
         # `inflight_budget` limits how far ahead the issue point can move. For
-        # example, TierSched's device cache has 0.02-0.36 GB free against
-        # sub-layers of 0.4-0.9 GB, far from the ~14 GB an unbounded K=32 needs.
+        # example, a filled device has less room free than one INT8 sub-layer
+        # (0.15-0.73 GB), far from the ~14 GB an unbounded K=32 needs.
         if inflight_budget is not None:
             # Issuing unit i's read at comp_done[m] leaves units m+1..i fetched
             # but not yet consumed. Start at m = i-1 (room for unit i alone) and

@@ -14,8 +14,9 @@ import math
 import pandas as pd
 from tiers import (GiB, HOST_DRAM, CXL_DRAM, GPU_HBM, CXL_SSD_NAND, Tier,
                    NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s,
-                   kv_growth_spill_time_s)
-from model_cfg import build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME
+                   kv_growth_spill_time_s, kv_cascade, kv_tail)
+from model_cfg import (build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME,
+                       bytes_read, embedding_last)
 from pipeline import pipelined_time_s
 
 # FlexGen's block schedule overlaps "the weights load of the next layer" with
@@ -100,20 +101,15 @@ _kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
 # (Sec 4.3). What does not fit in one tier goes to the next and is charged that
 # tier's bandwidth; none of it is dropped. Weights are placed after this block
 # and get what the KV reservation leaves in each tier.
-_kv_gpu  = min(_kv_resident, max(0, gpu_hbm_capacity_bytes
-                                 - min(sum(L["bytes"] for L in layers),
-                                       gpu_hbm_capacity_bytes)))
 # If weights alone exceed HBM, no KV fits there; otherwise KV takes what the
 # weights leave. This mirrors the LP's joint capacity constraint per device.
 _wtotal  = sum(L["bytes"] for L in layers)
-_kv_gpu  = min(_kv_resident, max(0, gpu_hbm_capacity_bytes - _wtotal))
-_kv_host = min(_kv_resident - _kv_gpu, host_dram_capacity_bytes)
-_kv_cxl  = min(_kv_resident - _kv_gpu - _kv_host, cxl_dev_dram_capacity_bytes)
-_kv_nand = max(0, _kv_resident - _kv_gpu - _kv_host - _kv_cxl)
-_kv_frac = {"gpu":  _kv_gpu  / _kv_resident if _kv_resident else 0.0,
-            "host": _kv_host / _kv_resident if _kv_resident else 1.0,
-            "cxl":  _kv_cxl  / _kv_resident if _kv_resident else 0.0,
-            "nand": _kv_nand / _kv_resident if _kv_resident else 0.0}
+_kv_split, _kv_took = kv_cascade(
+    _kv_resident, [("gpu", max(0, gpu_hbm_capacity_bytes - _wtotal)),
+                   ("host", host_dram_capacity_bytes),
+                   ("cxl", cxl_dev_dram_capacity_bytes)])
+_kv_gpu, _kv_host, _kv_cxl = (_kv_took.get(k, 0.0) for k in ("gpu", "host", "cxl"))
+_kv_frac = {k: _kv_split.get(k, 0.0) for k in ("gpu", "host", "cxl", "nand")}
 
 def kv_time_s(n):
     return (gpu_time_s(n * _kv_frac["gpu"]) + dram_time_s(n * _kv_frac["host"])
@@ -157,11 +153,13 @@ for n in HOT_LAYERS_BY_NAME:
 # independent percentages for weights (wg, wc, wd), cache (cg, cc, cd) and
 # activations (hg, hc, hd) (Sec 4.3, Eq. 1), so a layer may be split across
 # tiers. Each tier is filled to capacity in order, which is the LP optimum when
-# capacity is the only binding constraint.
+# capacity is the only binding constraint. The embedding table comes last: a
+# step reads B rows of it, so its bytes are worth the least in a fast tier.
 frac_gpu  = [0.0] * len(layers)
 frac_host = [0.0] * len(layers)
 frac_cxl  = [0.0] * len(layers)
-for i, L in enumerate(layers):
+for i in embedding_last(layers):
+    L = layers[i]
     if placement[i] in (PL_GPU_HBM, PL_HOST_DRAM, PL_CXL_DEV_DRAM):
         frac_gpu[i]  = 1.0 if placement[i] == PL_GPU_HBM  else 0.0
         frac_cxl[i]  = 1.0 if placement[i] == PL_CXL_DEV_DRAM else 0.0
@@ -186,7 +184,7 @@ for i, L in enumerate(layers):
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s   = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
-    b = L["bytes"]
+    b = bytes_read(L, PREFILL_TOKENS * BATCH_SIZE)
     fg, fh, fc = frac_gpu[i], frac_host[i], frac_cxl[i]
     fd = max(0.0, 1.0 - fg - fh - fc)
     mem_time = (gpu_time_s(b * fg) + dram_time_s(b * fh)
@@ -209,7 +207,7 @@ for token_step in range(TOKENS):
 
     for i, L in enumerate(layers):
         comp_s   = compute_time_s(L["flops"] * BATCH_SIZE)
-        b = L["bytes"]
+        b = bytes_read(L, BATCH_SIZE)
         fg, fh, fc = frac_gpu[i], frac_host[i], frac_cxl[i]
         fd = max(0.0, 1.0 - fg - fh - fc)
         mem_time = (gpu_time_s(b * fg) if fg > 0 else 0.0) \
@@ -245,7 +243,8 @@ for token_step in range(TOKENS):
         _by = {"GPU HBM": b*fg, "Host DRAM": b*fh,
                "CXL Device DRAM": b*fc, "CXL Device NAND": b*fd}
         if kv_inc_l > 0:
-            for _t, _f in (("Host DRAM", _kv_frac["host"]),
+            for _t, _f in (("GPU HBM", _kv_frac["gpu"]),
+                           ("Host DRAM", _kv_frac["host"]),
                            ("CXL Device DRAM", _kv_frac["cxl"]),
                            ("CXL Device NAND", _kv_frac["nand"])):
                 _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
@@ -260,8 +259,7 @@ for token_step in range(TOKENS):
                                     inflight_budget=max(0.0, _FLEXGEN_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident,
-        GPU_HBM if _kv_frac["gpu"] >= 0.5 else HOST_DRAM)
+        _kv_resident, kv_tail(_kv_split))
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0

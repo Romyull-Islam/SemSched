@@ -78,7 +78,7 @@ print("wrote figures/fig_batch.pdf")
 
 # Model scale: speedup per model at 16H+48C, both platforms and quants.
 fig, ax = plt.subplots(figsize=(3.45, 2.05))
-MODELS = ["Mistral 7B", "Llama 13B", "Qwen3 20B", "Qwen2.5 72B", "Llama 405B"]
+MODELS = ["Mistral 7B", "Llama 13B", "Qwen3 22B", "Qwen2.5 72B", "Llama 405B"]
 X = range(len(MODELS))
 for (plat, quant), (c, m, ls) in STYLE.items():
     r = D["models"][f"{plat}|{quant}"]
@@ -86,7 +86,7 @@ for (plat, quant), (c, m, ls) in STYLE.items():
             label=LBL[(plat, quant)], markerfacecolor="white",
             markeredgewidth=0.9, zorder=3, clip_on=False)
 ax.set_xticks(list(X))
-ax.set_xticklabels(["7B", "13B", "20B", "72B", "405B"])
+ax.set_xticklabels(["7B", "13B", "22B", "72B", "405B"])
 ax.set_xlabel("model (16H$+$48C)")
 ax.set_ylabel("speedup vs. best baseline")
 deco(ax)

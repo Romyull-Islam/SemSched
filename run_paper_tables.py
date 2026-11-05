@@ -287,7 +287,7 @@ def warmup_ablation(gpu=0):
 MODELS = [
     ("Mistral7BCfg",     "Mistral 7B"),
     ("Llama13BCfg",      "Llama 13B"),
-    ("Qwen3_20BCfg",     "Qwen3 20B"),
+    ("Qwen3_20BCfg",     "Qwen3 22B"),
     ("Qwen2_5_72BCfg",   "Qwen2.5 72B"),
     ("Llama3_1_405BCfg", "Llama 405B"),
 ]

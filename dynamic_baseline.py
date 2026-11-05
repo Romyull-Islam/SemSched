@@ -6,18 +6,22 @@
 # fetched. On CMM-H this is what the host's prefetch and eviction hints
 # (Soltaniyeh et al., HotStorage'25) would implement.
 #
-# GPU HBM and host DRAM are filled statically in model order, as in the other
-# baselines; everything else is device-class and goes through the cache.
+# The unit is the sub-layer (attention or MLP), the granularity TierSched
+# places at, so the cache can keep part of a block. GPU HBM and host DRAM are
+# filled statically in model order with the embedding table last, as in the
+# other baselines; everything else is device-class and goes through the cache,
+# except an embedding table that did not fit, whose B looked-up rows per step
+# are read from NAND.
 #
 #   DYN_PREFETCH_DEPTH  lookahead K (default 32)
 #   DYN_KV_TIER         "cxl" or "host" (default "cxl")
 
 import os
 
-from tiers import kv_growth_spill_time_s
+from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
 from tiers import (GiB, HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM,
                    transfer_time_s)
-from model_cfg import build_layers
+from model_cfg import decomposed_build_layers, DEFAULT_MODEL_CFG, bytes_read, embedding_last
 from pipeline import pipelined_time_s
 from sim_cfg import (
     gpu_hbm_capacity_bytes,
@@ -55,34 +59,36 @@ def compute_time_s(flops):
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core * parallel_efficiency)
 
 
-layers = build_layers(sequence_length=PREFILL_TOKENS)
+layers = decomposed_build_layers(DEFAULT_MODEL_CFG(), sequence_length=PREFILL_TOKENS)
 kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 
-# KV is reserved at the generation mean on its tier, as in the other baselines.
+# KV is reserved at the generation mean on its tier, as in the other baselines,
+# spilling to the other DRAM tier and then to NAND.
 _kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
-if KV_TIER == "host":
-    _kv_host = min(_kv_resident, host_dram_capacity_bytes)
-    _kv_dev = _kv_resident - _kv_host
-else:
-    _kv_dev = min(_kv_resident, cxl_dev_dram_capacity_bytes)
-    _kv_host = _kv_resident - _kv_dev
-_kv_dev_frac = (_kv_dev / _kv_resident) if _kv_resident else 0.0
+_kv_order = ([("host", host_dram_capacity_bytes), ("cxl", cxl_dev_dram_capacity_bytes)]
+             if KV_TIER == "host" else
+             [("cxl", cxl_dev_dram_capacity_bytes), ("host", host_dram_capacity_bytes)])
+_kv_split, _kv_took = kv_cascade(_kv_resident, _kv_order)
+_kv_host, _kv_dev = _kv_took.get("host", 0.0), _kv_took.get("cxl", 0.0)
 
 gpu_free = gpu_hbm_capacity_bytes
 host_free = max(0, host_dram_capacity_bytes - _kv_host)
 cache_cap = max(0, cxl_dev_dram_capacity_bytes - _kv_dev)
 
-placement = []
-for L in layers:
+placement = [None] * len(layers)
+for i in embedding_last(layers):
+    L = layers[i]
     if L["bytes"] <= gpu_free:
-        placement.append(PL_GPU_HBM)
+        placement[i] = PL_GPU_HBM
         gpu_free -= L["bytes"]
     elif L["bytes"] <= host_free:
-        placement.append(PL_HOST_DRAM)
+        placement[i] = PL_HOST_DRAM
         host_free -= L["bytes"]
+    elif L["kind"] == "Embedding":
+        placement[i] = PL_CXL_DEV_NAND
     else:
-        placement.append(PL_DEVICE_CLASS)
+        placement[i] = PL_DEVICE_CLASS
 
 dev_idx = [i for i, p in enumerate(placement) if p == PL_DEVICE_CLASS]
 n_dev = len(dev_idx)
@@ -146,9 +152,10 @@ for i, L in enumerate(layers):
     comp_s = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
     p = placement[i]
     tier = (PL_CXL_DEV_DRAM if i in _hits else PL_CXL_DEV_NAND) if p == PL_DEVICE_CLASS else p
-    mem = transfer_time_s(L["bytes"], {PL_GPU_HBM: GPU_HBM, PL_HOST_DRAM: HOST_DRAM,
-                                       PL_CXL_DEV_DRAM: CXL_DRAM,
-                                       PL_CXL_DEV_NAND: CXL_SSD_NAND}[tier])
+    mem = transfer_time_s(bytes_read(L, PREFILL_TOKENS * BATCH_SIZE),
+                          {PL_GPU_HBM: GPU_HBM, PL_HOST_DRAM: HOST_DRAM,
+                           PL_CXL_DEV_DRAM: CXL_DRAM,
+                           PL_CXL_DEV_NAND: CXL_SSD_NAND}[tier])
     prefill_latency += max(comp_s, mem)
 
 
@@ -160,12 +167,13 @@ for token_step in range(TOKENS):
     for i, L in enumerate(layers):
         p = placement[i]
         tier = (PL_CXL_DEV_DRAM if i in _hits else PL_CXL_DEV_NAND) if p == PL_DEVICE_CLASS else p
-        _by = {tier: float(L["bytes"])}
+        _by = {tier: float(bytes_read(L, BATCH_SIZE))}
         kv_scaled = kv_inc[L["name"]] * BATCH_SIZE
         if kv_scaled > 0:
             kv_read = (PREFILL_TOKENS + token_step) * kv_scaled
-            for _t, _f in ((PL_HOST_DRAM, 1.0 - _kv_dev_frac),
-                           (PL_CXL_DEV_DRAM, _kv_dev_frac)):
+            for _t, _f in ((PL_HOST_DRAM, _kv_split.get("host", 0.0)),
+                           (PL_CXL_DEV_DRAM, _kv_split.get("cxl", 0.0)),
+                           (PL_CXL_DEV_NAND, _kv_split.get("nand", 0.0))):
                 if _f > 0:
                     _by[_t] = _by.get(_t, 0.0) + kv_read * _f
         units.append((_by, compute_time_s(L["flops"] * BATCH_SIZE)))
@@ -175,7 +183,7 @@ for token_step in range(TOKENS):
                             inflight_budget=cache_cap + host_free)
     step += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, CXL_DRAM if KV_TIER == "cxl" else HOST_DRAM)
+        _kv_resident, kv_tail(_kv_split))
     per_token_latency += step
 
 decode_tps = BATCH_SIZE / (per_token_latency / TOKENS)

@@ -69,13 +69,45 @@ assert HOST_DRAM.bw_Bps       <= HOST_DRAM_CEILING,      "host DRAM exceeds DDR5
 assert NVME_STREAM_BW         <= NAND_LINK_CEILING_BPS,  "NVMe exceeds PCIe Gen4 x4"
 
 
+KV_TIER_OF = {"gpu": GPU_HBM, "host": HOST_DRAM, "cxl": CXL_DEVICE_DRAM,
+              "nand": CXL_DEVICE_NAND}
+
+
+def kv_cascade(kv_bytes, tiers):
+    """Place a KV cache of kv_bytes over `tiers`, [(key, free bytes)], in order.
+
+    What none of them has room for is read from the device NAND, as in FlexGen's
+    cascade; every policy places its cache with this function. Returns
+    ({key: fraction of the cache}, {key: bytes taken}), with the NAND share under
+    "nand". Keys keep cascade order, so the last one is the tier the cache grows
+    into (kv_tail).
+    """
+    split, took, rem = {}, {}, float(kv_bytes)
+    if kv_bytes <= 0:
+        return split, took
+    for key, free in tiers:
+        take = min(rem, max(0.0, float(free)))
+        if take > 0:
+            split[key], took[key] = take / kv_bytes, take
+            rem -= take
+    if rem > 0:
+        split["nand"], took["nand"] = rem / kv_bytes, rem
+    return split, took
+
+
+def kv_tail(split, tier_of=KV_TIER_OF):
+    """Tier the cache grows into past its reservation: the last one it filled."""
+    return tier_of[list(split)[-1]] if split else HOST_DRAM
+
+
 def kv_growth_spill_time_s(kv_now, kv_reserved, kv_tier, nand=CXL_DEVICE_NAND):
     """Extra time per decode step once the KV cache outgrows its reservation.
 
     Placement reserves KV at the generation mean, PREFILL + TOKENS/2, so past the
-    midpoint the excess displaces weights from that tier. Those weights are then
-    read from NAND on every later step, so the cost charged is the bandwidth
-    difference on the excess bytes.
+    midpoint the excess displaces weights from the tier the cache grows into
+    (kv_tail). Those weights are then read from NAND on every later step, so the
+    cost charged is the bandwidth difference on the excess bytes; a cache that
+    already overflows to NAND displaces nothing.
 
     The excess is 0.31 GB at FP16 B=128 with 16 decode steps, but 10 GB at 512,
     so generation-length sweeps need it. All five policies call it.

@@ -5,8 +5,10 @@ At decode step t attention reads (NUM_PREFILL_TOKENS + t) x per-token KV bytes
 x BATCH_SIZE from the unified DRAM pool.
 
 Mechanisms modeled:
-  1. Selective persistence: non-FFN layers (attention, embeddings) stay in the
-     DRAM pool; only what does not fit is read from NAND.
+  1. Selective persistence: attention, norms and the output head stay in the
+     DRAM pool; only what does not fit is read from NAND. The embedding table is
+     placed after the FFN window, as in every policy, since a step reads B rows
+     of it.
   2. Sparsity: active fraction from the per-layer sparsity that
      decomposed_build_layers sets.
   3. Sliding window (k=5), used as the prefetch depth of the decode pipeline.
@@ -20,7 +22,7 @@ Mechanisms modeled:
  10. KV writes: one token's increment per sequence per step, not the full cache.
 """
 
-from model_cfg import decomposed_build_layers, DEFAULT_MODEL_CFG, BYTES_PER_PARAM
+from model_cfg import decomposed_build_layers, DEFAULT_MODEL_CFG, BYTES_PER_PARAM, bytes_read
 from sim_cfg import (
     host_dram_capacity_bytes,
     cxl_dev_dram_capacity_bytes,
@@ -36,7 +38,7 @@ def compute_time_s(flops):
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
-from tiers import kv_growth_spill_time_s
+from tiers import kv_growth_spill_time_s, kv_cascade
 from pipeline import pipelined_time_s
 from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
@@ -160,11 +162,18 @@ def simulate_llmflash():
     # Pool capacity includes accelerator memory when attached, matching the pool
     # bandwidth above.
     from sim_cfg import gpu_hbm_capacity_bytes as _gcap
+    # What the pool cannot hold is read from NAND.
+    _kv_split, _kv_took = kv_cascade(
+        _kv_resident, [("pool", _gcap + host_dram_capacity_bytes
+                        + cxl_dev_dram_capacity_bytes)])
+    kv_nand_frac = _kv_split.get("nand", 0.0)
     total_dram = max(0, _gcap + host_dram_capacity_bytes
-                        + cxl_dev_dram_capacity_bytes - _kv_resident)
+                        + cxl_dev_dram_capacity_bytes - _kv_took.get("pool", 0.0))
 
-    # Selective persistence: everything except the FFNs is pinned in the pool.
-    pinned_layers = [L for L in layers if L.get("kind") != "MLP"]
+    # Selective persistence: everything except the FFNs and the embedding table
+    # is pinned in the pool.
+    emb_layers    = [L for L in layers if L.get("kind") == "Embedding"]
+    pinned_layers = [L for L in layers if L.get("kind") not in ("MLP", "Embedding")]
     ffn_layers    = [L for L in layers if L.get("kind") == "MLP"]
 
     total_pinned_bytes = sum(L["bytes"] for L in pinned_layers)
@@ -226,6 +235,13 @@ def simulate_llmflash():
     ffn_dram_bytes     = total_ffn_bytes * dram_window_frac
     dram_rewrite_bytes = ffn_dram_bytes * DRAM_REWRITE_FRAC
 
+    # The embedding table takes what the pool has left after the FFN window; a
+    # step looks up B rows of it, from the pool or from NAND.
+    emb_bytes     = sum(L["bytes"] for L in emb_layers)
+    emb_pool_frac = (min(1.0, max(0.0, dram_remaining - ffn_dram_bytes) / emb_bytes)
+                     if emb_bytes else 1.0)
+    emb_step      = sum(bytes_read(L, BATCH_SIZE) for L in emb_layers)
+
     def nand_bundled(n_bytes):
         """Transfer from CXL NAND, divided by the bundling factor (1.0 here)."""
         return transfer_time_s(n_bytes, CXL_SSD_NAND) / BUNDLING_THROUGHPUT_BOOST
@@ -250,10 +266,16 @@ def simulate_llmflash():
             if pinned_dram_frac < 1.0:
                 t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
 
-        # Growing KV: attention reads every cached position from the pool.
+        # Embedding lookups
+        t += transfer_time_s(emb_step * emb_pool_frac, DRAM_POOL)
+        t += nand_bundled(emb_step * (1.0 - emb_pool_frac))
+
+        # Growing KV: attention reads every cached position from the pool, and
+        # from NAND for what the pool cannot hold.
         kv_positions_cached = NUM_PREFILL_TOKENS + token_step
         kv_read_bytes_total = BATCH_SIZE * kv_per_seq_bytes * kv_positions_cached
-        t += transfer_time_s(kv_read_bytes_total, DRAM_POOL)
+        t += transfer_time_s(kv_read_bytes_total * (1.0 - kv_nand_frac), DRAM_POOL)
+        t += nand_bundled(kv_read_bytes_total * kv_nand_frac)
 
         # Active FFN neurons resident in DRAM
         t += transfer_time_s(ffn_dram_bytes, DRAM_POOL)
@@ -282,6 +304,10 @@ def simulate_llmflash():
         # the prefetch depth, and pool space left after the resident set is the
         # staging room.
         _units, _nl = [], max(1, len(ffn_layers))
+        _by = pool_bytes(emb_step * emb_pool_frac)
+        _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) \
+            + emb_step * (1.0 - emb_pool_frac)
+        _units.append((_by, 0.0))
         for _L in pinned_layers:
             _by = pool_bytes(_L["bytes"] * pinned_dram_frac)
             _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) \
@@ -293,9 +319,12 @@ def simulate_llmflash():
                             "CXL Device NAND": _by.get("CXL Device NAND", 0.0)
                                                + ffn_nand_bytes / _nl},
                            compute_time_s(_L["flops"] * BATCH_SIZE * active_frac_batch)))
-        _units.append((pool_bytes(kv_read_bytes_total), 0.0))
+        _by = pool_bytes(kv_read_bytes_total * (1.0 - kv_nand_frac))
+        _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) \
+            + kv_read_bytes_total * kv_nand_frac
+        _units.append((_by, 0.0))
         _window = max(0.0, total_dram - total_pinned_bytes * pinned_dram_frac
-                      - ffn_dram_bytes - dram_rewrite_bytes)
+                      - ffn_dram_bytes - dram_rewrite_bytes - emb_bytes * emb_pool_frac)
         t = pipelined_time_s(_units, WINDOW_SIZE_K,
                              {"GPU HBM": GPU_HBM.bw_Bps,
                               "Host DRAM": HOST_DRAM.bw_Bps,
@@ -310,7 +339,7 @@ def simulate_llmflash():
 
         t += kv_growth_spill_time_s(
             kv_per_seq_bytes * BATCH_SIZE * (NUM_PREFILL_TOKENS + token_step + 1),
-            _kv_resident, DRAM_POOL)
+            _kv_resident, CXL_SSD_NAND if kv_nand_frac else DRAM_POOL)
         total_decode_time += t
 
         # Write stall as % of this token's total step time
@@ -341,6 +370,11 @@ def simulate_llmflash():
         weight_t += transfer_time_s(L["bytes"] * pinned_dram_frac, DRAM_POOL)
         if pinned_dram_frac < 1.0:
             weight_t += nand_bundled(L["bytes"] * (1.0 - pinned_dram_frac))
+
+    # Embedding lookups for every prompt position
+    _emb_pf = sum(bytes_read(L, BATCH_SIZE * NUM_PREFILL_TOKENS) for L in emb_layers)
+    weight_t += transfer_time_s(_emb_pf * emb_pool_frac, DRAM_POOL)
+    weight_t += nand_bundled(_emb_pf * (1.0 - emb_pool_frac))
 
     # FFN: full load from NAND, since sparsity collapses during prefill (this
     # baseline's own assumption)

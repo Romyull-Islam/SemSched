@@ -18,12 +18,13 @@
 
 import math
 
-from tiers import kv_growth_spill_time_s
+from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
 from tiers import GPU_HBM as _GPU
 from pipeline import pipelined_time_s
 from tiers import (HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, transfer_time_s,
                    Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S)
-from model_cfg import build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG
+from model_cfg import (build_layers, BYTES_PER_PARAM, DEFAULT_MODEL_CFG,
+                       bytes_read, embedding_last)
 from sim_cfg import (TOKENS, BATCH_SIZE, cpu_freq_hz, cpu_cores,
                      flops_per_cycle_per_core, parallel_efficiency,
                      host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes,
@@ -68,14 +69,20 @@ placement = [None] * len(layers)
 _n_attn = sum(1 for L in layers if L.get("kv_cache_bytes", 0) > 0)
 _kv_resident = int(kv_inc_per_tok * _n_attn * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
+# What the device DRAM cannot hold is read from NAND.
+_kv_split, _kv_took = kv_cascade(_kv_resident,
+                                 [("cxl", cxl_dev_dram_capacity_bytes)])
+_kv_cxl_frac = _kv_split.get("cxl", 0.0)
+_kv_nand_frac = _kv_split.get("nand", 0.0)
 
 # With an accelerator attached, run_paper_tables.py gives every policy its HBM and
 # its compute engine, so HBM heads the cascade here too. On the CPU-only platform
 # gpu_hbm_capacity_bytes is 0 and nothing is placed there.
 gpu_free  = gpu_hbm_capacity_bytes
 host_free = host_dram_capacity_bytes
-cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_resident)
-for i, L in enumerate(layers):
+cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_took.get("cxl", 0.0))
+for i in embedding_last(layers):
+    L = layers[i]
     if L["bytes"] <= gpu_free:
         placement[i] = PL_GPU_HBM
         gpu_free -= L["bytes"]
@@ -117,6 +124,7 @@ class CXLPrefetcher:
 def run_phase(is_prefill, token_step=0):
     """One prefill token or one decode step, across all layers."""
     pf = CXLPrefetcher()
+    rows = BATCH_SIZE * (PREFILL_TOKENS if is_prefill else 1)   # embedding lookups
     units = []
     elapsed = 0.0
     read_stall = 0.0
@@ -126,37 +134,41 @@ def run_phase(is_prefill, token_step=0):
         for k in range(1, PREFETCH_WINDOW + 1):
             j = i + k
             if j < len(layers) and placement[j] == PL_CXL_DEV_NAND:
-                pf.schedule(j, layers[j]["bytes"], elapsed)
+                pf.schedule(j, bytes_read(layers[j], rows), elapsed)
 
         # Batch-scaled FLOPs; prefill additionally scales with sequence length.
         flops = L["flops"] * BATCH_SIZE * (PREFILL_TOKENS if is_prefill else 1)
         comp = compute_time_s(flops)
 
+        b = bytes_read(L, rows)
         if placement[i] == PL_HOST_DRAM:
-            mem = dram_time_s(L["bytes"])
+            mem = dram_time_s(b)
         elif placement[i] == PL_CXL_DEV_DRAM:
-            mem = cxl_time_s(L["bytes"])
+            mem = cxl_time_s(b)
         else:
-            arrival = pf.schedule(i, L["bytes"], elapsed)
+            arrival = pf.schedule(i, b, elapsed)
             wait = max(0.0, arrival - elapsed)
             read_stall += wait
-            mem = wait + cxl_time_s(L["bytes"])
+            mem = wait + cxl_time_s(b)
 
-        _by = {placement[i]: L["bytes"]}
+        _by = {placement[i]: b}
         # Growing KV: attention reads all cached positions so far. CXLAimPod
-        # pools device memory, so KV is served from the CXL DRAM tier.
+        # pools device memory, so KV is served from the CXL DRAM tier, and from
+        # NAND for what it cannot hold.
         kv_bytes = L.get("kv_cache_bytes", 0)
         _kvb = 0.0
         if kv_bytes > 0 and not is_prefill:
             positions = PREFILL_TOKENS + token_step
             _kvb = positions * kv_inc_per_tok * BATCH_SIZE
-            mem += cxl_time_s(_kvb)
+            mem += cxl_time_s(_kvb * _kv_cxl_frac) + nand_time_s(_kvb * _kv_nand_frac)
             # No duplex scheduling in this baseline: the KV write is serialized.
             w = cxl_time_s(kv_inc_per_tok * BATCH_SIZE)
             kv_write += w
             elapsed += w
 
-        _by["CXL Device DRAM"] = _by.get("CXL Device DRAM", 0.0) + _kvb
+        _by["CXL Device DRAM"] = _by.get("CXL Device DRAM", 0.0) + _kvb * _kv_cxl_frac
+        if _kv_nand_frac:
+            _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) + _kvb * _kv_nand_frac
         units.append((_by, comp))
         elapsed += max(comp, mem)
 
@@ -188,7 +200,7 @@ for t in range(TOKENS):
     step, rs, kw = run_phase(is_prefill=False, token_step=t)
     step += kv_growth_spill_time_s(
         kv_inc_per_tok * _n_attn * BATCH_SIZE * (PREFILL_TOKENS + t + 1),
-        _kv_resident, CXL_DRAM)
+        _kv_resident, kv_tail(_kv_split))
     total_dec += step
     total_read_stall += rs
     total_kv_write += kw

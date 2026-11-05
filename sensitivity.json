@@ -3,371 +3,371 @@
   "drop 0%": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "drop 10%": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.725992,
-    "best_baseline": 4.546815,
-    "speedup": 1.0394071454413694
+    "tiersched": 5.068412,
+    "best_baseline": 4.84679,
+    "speedup": 1.045725521427584
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.419703,
-    "best_baseline": 5.055148,
-    "speedup": 1.0721155938461149
+    "tiersched": 5.862983,
+    "best_baseline": 5.425801,
+    "speedup": 1.0805746469507451
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.348539,
-    "best_baseline": 5.69145,
-    "speedup": 1.1154519498546065
+    "tiersched": 6.972763,
+    "best_baseline": 6.161921,
+    "speedup": 1.131589158640625
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.19805,
-    "best_baseline": 13.136323,
-    "speedup": 1.1569485616332666
+    "tiersched": 16.990753,
+    "best_baseline": 14.409847,
+    "speedup": 1.1791071064113312
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 25.80348,
-    "best_baseline": 18.611694,
-    "speedup": 1.3864122201880174
+    "tiersched": 30.899253,
+    "best_baseline": 21.293573,
+    "speedup": 1.4511070077342119
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 42.76734,
-    "best_baseline": 31.966284,
-    "speedup": 1.3378890083063766
+    "tiersched": 45.071456,
+    "best_baseline": 40.687534,
+    "speedup": 1.1077460727897641
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.217052,
-    "best_baseline": 5.976685,
-    "speedup": 1.0402174449548538
+    "tiersched": 6.77906,
+    "best_baseline": 6.501729,
+    "speedup": 1.042654961472556
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.503542,
-    "best_baseline": 6.8873,
-    "speedup": 1.0894751208746534
+    "tiersched": 8.315318,
+    "best_baseline": 7.613,
+    "speedup": 1.0922524628924208
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.461374,
-    "best_baseline": 8.1927,
-    "speedup": 1.15485419947026
+    "tiersched": 10.732886,
+    "best_baseline": 9.2445,
+    "speedup": 1.1610023257071773
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.945558,
-    "best_baseline": 43.0339,
-    "speedup": 1.2535595890681532
+    "tiersched": 77.411066,
+    "best_baseline": 61.2301,
+    "speedup": 1.2642648958600429
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.869307,
-    "best_baseline": 73.1042,
-    "speedup": 1.0104659786988983
+    "tiersched": 81.304721,
+    "best_baseline": 79.2701,
+    "speedup": 1.025666941255278
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.869307,
-    "best_baseline": 73.1554,
-    "speedup": 1.0097587737884013
+    "tiersched": 81.304721,
+    "best_baseline": 79.3183,
+    "speedup": 1.025043665837518
    }
   ],
   "drop 25%": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.69313,
-    "best_baseline": 4.546815,
-    "speedup": 1.0321796686251805
+    "tiersched": 5.038175,
+    "best_baseline": 4.84679,
+    "speedup": 1.0394869594102487
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.381327,
-    "best_baseline": 5.055148,
-    "speedup": 1.0645241247140538
+    "tiersched": 5.810302,
+    "best_baseline": 5.425801,
+    "speedup": 1.0708652971238717
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.285868,
-    "best_baseline": 5.69145,
-    "speedup": 1.1044405204297676
+    "tiersched": 6.896812,
+    "best_baseline": 6.161921,
+    "speedup": 1.1192632946770982
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 14.760068,
-    "best_baseline": 13.136323,
-    "speedup": 1.1236072681830371
+    "tiersched": 16.530294,
+    "best_baseline": 14.409847,
+    "speedup": 1.1471526380536867
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 24.772491,
-    "best_baseline": 18.611694,
-    "speedup": 1.3310175312360066
+    "tiersched": 29.690717,
+    "best_baseline": 21.293573,
+    "speedup": 1.3943511030300082
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 41.187881,
-    "best_baseline": 31.966284,
-    "speedup": 1.288478854783371
+    "tiersched": 42.918198,
+    "best_baseline": 40.687534,
+    "speedup": 1.0548242614064542
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.202345,
-    "best_baseline": 5.976685,
-    "speedup": 1.0377567163067822
+    "tiersched": 6.770076,
+    "best_baseline": 6.501729,
+    "speedup": 1.0412731751815556
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.49677,
-    "best_baseline": 6.8873,
-    "speedup": 1.0884918618326485
+    "tiersched": 8.286728,
+    "best_baseline": 7.613,
+    "speedup": 1.088497044529095
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.451722,
-    "best_baseline": 8.1927,
-    "speedup": 1.1536760774836134
+    "tiersched": 10.66731,
+    "best_baseline": 9.2445,
+    "speedup": 1.1539088106441668
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.585683,
-    "best_baseline": 43.0339,
-    "speedup": 1.2451969958567548
+    "tiersched": 76.282405,
+    "best_baseline": 61.2301,
+    "speedup": 1.24583178861377
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.665994,
-    "best_baseline": 73.1042,
-    "speedup": 1.0076848389011848
+    "tiersched": 80.951081,
+    "best_baseline": 79.2701,
+    "speedup": 1.0212057383553195
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.665994,
-    "best_baseline": 73.1554,
-    "speedup": 1.0069795804547579
+    "tiersched": 80.951081,
+    "best_baseline": 79.3183,
+    "speedup": 1.0205851739132081
    }
   ],
   "drop 50%": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.643184,
-    "best_baseline": 4.546815,
-    "speedup": 1.02119483638547
+    "tiersched": 4.97443,
+    "best_baseline": 4.84679,
+    "speedup": 1.0263349557129564
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.320564,
-    "best_baseline": 5.055148,
-    "speedup": 1.0525041007701457
+    "tiersched": 5.722382,
+    "best_baseline": 5.425801,
+    "speedup": 1.054661238036559
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.191707,
-    "best_baseline": 5.69145,
-    "speedup": 1.0878962303103779
+    "tiersched": 6.771123,
+    "best_baseline": 6.161921,
+    "speedup": 1.0988655972707213
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 14.390437,
-    "best_baseline": 13.136323,
-    "speedup": 1.0954691811399582
+    "tiersched": 15.932557,
+    "best_baseline": 14.409847,
+    "speedup": 1.1056714897805646
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 23.325472,
-    "best_baseline": 18.611694,
-    "speedup": 1.2532696916250612
+    "tiersched": 27.708195,
+    "best_baseline": 21.293573,
+    "speedup": 1.3012468597919196
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 39.469975,
-    "best_baseline": 31.966284,
-    "speedup": 1.2347376692267389
+    "tiersched": 40.129596,
+    "best_baseline": 40.687534,
+    "speedup": 0.9862872495541263
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.194051,
-    "best_baseline": 5.976685,
-    "speedup": 1.0363689905022602
+    "tiersched": 6.75917,
+    "best_baseline": 6.501729,
+    "speedup": 1.0395957752161002
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.472475,
-    "best_baseline": 6.8873,
-    "speedup": 1.0849643546818057
+    "tiersched": 8.247197,
+    "best_baseline": 7.613,
+    "speedup": 1.0833044791803492
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.413293,
-    "best_baseline": 8.1927,
-    "speedup": 1.1489854382560083
+    "tiersched": 10.599292,
+    "best_baseline": 9.2445,
+    "speedup": 1.1465511385147926
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.057901,
-    "best_baseline": 43.0339,
-    "speedup": 1.232932664713168
+    "tiersched": 75.627345,
+    "best_baseline": 61.2301,
+    "speedup": 1.2351334556043516
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.396511,
-    "best_baseline": 73.1042,
-    "speedup": 1.0039985527507311
+    "tiersched": 80.59046,
+    "best_baseline": 79.2701,
+    "speedup": 1.0166564694632654
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.396511,
-    "best_baseline": 73.1554,
-    "speedup": 1.0032958742621871
+    "tiersched": 80.59046,
+    "best_baseline": 79.3183,
+    "speedup": 1.016038669512584
    }
   ],
   "drop 100%": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.540283,
-    "best_baseline": 4.546815,
-    "speedup": 0.9985633899773798
+    "tiersched": 4.845619,
+    "best_baseline": 4.84679,
+    "speedup": 0.9997583967945795
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.191527,
-    "best_baseline": 5.055148,
-    "speedup": 1.0269782407953238
+    "tiersched": 5.551145,
+    "best_baseline": 5.425801,
+    "speedup": 1.0231014738653335
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 5.976205,
-    "best_baseline": 5.69145,
-    "speedup": 1.0500320656423232
+    "tiersched": 6.524161,
+    "best_baseline": 6.161921,
+    "speedup": 1.0587868620840806
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 13.360494,
-    "best_baseline": 13.136323,
-    "speedup": 1.0170649732044499
+    "tiersched": 14.79313,
+    "best_baseline": 14.409847,
+    "speedup": 1.0265986863011107
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 20.830858,
-    "best_baseline": 18.611694,
-    "speedup": 1.119234928319797
+    "tiersched": 24.881821,
+    "best_baseline": 21.293573,
+    "speedup": 1.1685131940985198
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 35.436143,
-    "best_baseline": 31.966284,
-    "speedup": 1.108547462069723
+    "tiersched": 35.38729,
+    "best_baseline": 40.687534,
+    "speedup": 0.8697329752154555
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.178957,
-    "best_baseline": 5.976685,
-    "speedup": 1.0338435102402084
+    "tiersched": 6.728227,
+    "best_baseline": 6.501729,
+    "speedup": 1.0348365796236663
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.450979,
-    "best_baseline": 6.8873,
-    "speedup": 1.0818432477168123
+    "tiersched": 8.169866,
+    "best_baseline": 7.613,
+    "speedup": 1.073146722711152
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.382491,
-    "best_baseline": 8.1927,
-    "speedup": 1.1452257497528286
+    "tiersched": 10.503741,
+    "best_baseline": 9.2445,
+    "speedup": 1.1362151549570014
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 51.135592,
-    "best_baseline": 43.0339,
-    "speedup": 1.188263020548916
+    "tiersched": 74.30203,
+    "best_baseline": 61.2301,
+    "speedup": 1.2134886273254495
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 72.753647,
-    "best_baseline": 73.1042,
-    "speedup": 0.99520474883796
+    "tiersched": 79.591002,
+    "best_baseline": 79.2701,
+    "speedup": 1.0040482098546615
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 72.753647,
-    "best_baseline": 73.1554,
-    "speedup": 0.994508224956736
+    "tiersched": 79.591002,
+    "best_baseline": 79.3183,
+    "speedup": 1.0034380716682028
    }
   ]
  },
@@ -375,223 +375,223 @@
   "2.5 GB/s": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 2.415151,
-    "best_baseline": 2.366984,
-    "speedup": 1.0203495249651031
+    "tiersched": 2.587278,
+    "best_baseline": 2.519585,
+    "speedup": 1.0268667260679833
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 2.776483,
-    "best_baseline": 2.65805,
-    "speedup": 1.0445563476985007
+    "tiersched": 3.009512,
+    "best_baseline": 2.8644,
+    "speedup": 1.0506605222734255
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 3.264955,
-    "best_baseline": 3.0628,
-    "speedup": 1.0660033302860128
+    "tiersched": 3.594676,
+    "best_baseline": 3.344,
+    "speedup": 1.0749629186602871
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 7.888215,
-    "best_baseline": 7.158046,
-    "speedup": 1.1020067487691474
+    "tiersched": 8.885181,
+    "best_baseline": 7.908816,
+    "speedup": 1.1234527393228013
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 13.586726,
-    "best_baseline": 11.054092,
-    "speedup": 1.2291128027521392
+    "tiersched": 17.203702,
+    "best_baseline": 13.0075,
+    "speedup": 1.3225986546223332
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 37.314707,
-    "best_baseline": 24.5901,
-    "speedup": 1.5174686967519448
+    "tiersched": 44.04461,
+    "best_baseline": 35.797839,
+    "speedup": 1.2303706377359815
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 3.157061,
-    "best_baseline": 3.1138,
-    "speedup": 1.0138933136360717
+    "tiersched": 3.446014,
+    "best_baseline": 3.398976,
+    "speedup": 1.0138388738255286
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 3.805777,
-    "best_baseline": 3.6863,
-    "speedup": 1.0324110897105498
+    "tiersched": 4.23894,
+    "best_baseline": 4.0921,
+    "speedup": 1.0358837760563036
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 4.799906,
-    "best_baseline": 4.5188,
-    "speedup": 1.062208108347349
+    "tiersched": 5.506919,
+    "best_baseline": 5.1455,
+    "speedup": 1.0702398212029929
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 29.145024,
-    "best_baseline": 27.8191,
-    "speedup": 1.0476623614710756
+    "tiersched": 48.94824,
+    "best_baseline": 44.4274,
+    "speedup": 1.1017579241639168
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 68.36813,
-    "best_baseline": 67.8616,
-    "speedup": 1.0074641623539675
+    "tiersched": 74.844951,
+    "best_baseline": 73.1429,
+    "speedup": 1.0232702148807333
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 68.36813,
-    "best_baseline": 67.9057,
-    "speedup": 1.0068098848844795
+    "tiersched": 74.844951,
+    "best_baseline": 73.1839,
+    "speedup": 1.022696945639683
    }
   ],
   "5 GB/s": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "7.5 GB/s": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 7.000307,
-    "best_baseline": 6.635471,
-    "speedup": 1.0549826832187195
+    "tiersched": 7.483017,
+    "best_baseline": 7.06968,
+    "speedup": 1.0584661540550633
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 8.053165,
-    "best_baseline": 7.270768,
-    "speedup": 1.1076085772507114
+    "tiersched": 8.509018,
+    "best_baseline": 7.789409,
+    "speedup": 1.0923830036399422
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 9.465168,
-    "best_baseline": 8.040596,
-    "speedup": 1.1771724384610294
+    "tiersched": 9.85752,
+    "best_baseline": 8.672294,
+    "speedup": 1.1366681065010018
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 22.903755,
-    "best_baseline": 18.204293,
-    "speedup": 1.2581513052992501
+    "tiersched": 23.610939,
+    "best_baseline": 19.848256,
+    "speedup": 1.1895724742768332
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 38.084497,
-    "best_baseline": 24.105213,
-    "speedup": 1.579927835526697
+    "tiersched": 37.101506,
+    "best_baseline": 27.103469,
+    "speedup": 1.3688840347337088
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 44.727568,
-    "best_baseline": 35.732216,
-    "speedup": 1.2517434686950284
+    "tiersched": 47.334212,
+    "best_baseline": 42.628433,
+    "speedup": 1.1103906165164457
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 9.205843,
-    "best_baseline": 8.63655,
-    "speedup": 1.065916714428794
+    "tiersched": 9.988369,
+    "best_baseline": 9.345368,
+    "speedup": 1.0688042461249252
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 11.111346,
-    "best_baseline": 9.693,
-    "speedup": 1.1463268337975858
+    "tiersched": 11.845282,
+    "best_baseline": 10.6744,
+    "speedup": 1.1096906617702165
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 14.011579,
-    "best_baseline": 11.2383,
-    "speedup": 1.2467703300321222
+    "tiersched": 14.367721,
+    "best_baseline": 12.5868,
+    "speedup": 1.1414911653478246
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 72.649914,
-    "best_baseline": 52.6284,
-    "speedup": 1.3804317440773421
+    "tiersched": 80.692449,
+    "best_baseline": 70.0628,
+    "speedup": 1.1517160176298977
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 76.152484,
-    "best_baseline": 75.0365,
-    "speedup": 1.0148725486929693
+    "tiersched": 84.072032,
+    "best_baseline": 81.5472,
+    "speedup": 1.0309616026056074
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 76.152484,
-    "best_baseline": 75.0904,
-    "speedup": 1.0141440716789363
+    "tiersched": 84.072032,
+    "best_baseline": 81.5982,
+    "speedup": 1.0303172373900402
    }
   ]
  },
@@ -599,445 +599,445 @@
   "0.5 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.83929,
-    "best_baseline": 4.6333,
-    "speedup": 1.0444585932272894
+    "tiersched": 5.188944,
+    "best_baseline": 4.938813,
+    "speedup": 1.0506459750551398
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.551345,
-    "best_baseline": 5.148034,
-    "speedup": 1.0783427226782107
+    "tiersched": 6.007598,
+    "best_baseline": 5.524974,
+    "speedup": 1.0873531712547424
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.518335,
-    "best_baseline": 5.791428,
-    "speedup": 1.1255142945746714
+    "tiersched": 7.175065,
+    "best_baseline": 6.269009,
+    "speedup": 1.144529382554723
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.808759,
-    "best_baseline": 13.35537,
-    "speedup": 1.1837005638930258
+    "tiersched": 17.563094,
+    "best_baseline": 14.64581,
+    "speedup": 1.199188983060684
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.963516,
-    "best_baseline": 18.861814,
-    "speedup": 1.4295293125040889
+    "tiersched": 32.010672,
+    "best_baseline": 21.560777,
+    "speedup": 1.4846715403623902
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.872507,
-    "best_baseline": 32.147588,
-    "speedup": 1.3647215772455463
+    "tiersched": 46.557917,
+    "best_baseline": 40.763738,
+    "speedup": 1.1421405220492784
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.341844,
-    "best_baseline": 6.087468,
-    "speedup": 1.0417868315693815
+    "tiersched": 6.918359,
+    "best_baseline": 6.620603,
+    "speedup": 1.044974151146051
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.65454,
-    "best_baseline": 7.0068,
-    "speedup": 1.0924444825027115
+    "tiersched": 8.480005,
+    "best_baseline": 7.7436,
+    "speedup": 1.0950985329820755
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.65251,
-    "best_baseline": 8.325,
-    "speedup": 1.1594606606606608
+    "tiersched": 10.919325,
+    "best_baseline": 9.3902,
+    "speedup": 1.1628426444591171
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 55.371743,
-    "best_baseline": 43.4697,
-    "speedup": 1.273800900397288
+    "tiersched": 78.443734,
+    "best_baseline": 61.6178,
+    "speedup": 1.2730693728111033
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "1.547 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "5 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.465872,
-    "best_baseline": 4.283143,
-    "speedup": 1.0426623626621851
+    "tiersched": 4.791068,
+    "best_baseline": 4.566195,
+    "speedup": 1.049247349270016
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.125286,
-    "best_baseline": 4.771232,
-    "speedup": 1.0742059912408366
+    "tiersched": 5.564456,
+    "best_baseline": 5.122551,
+    "speedup": 1.0862665886586587
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.013889,
-    "best_baseline": 5.38487,
-    "speedup": 1.1168122907331095
+    "tiersched": 6.63179,
+    "best_baseline": 5.833293,
+    "speedup": 1.136886146469927
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 14.59307,
-    "best_baseline": 12.462219,
-    "speedup": 1.1709848783751915
+    "tiersched": 16.267431,
+    "best_baseline": 13.682813,
+    "speedup": 1.1888952220570432
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 24.922335,
-    "best_baseline": 17.831842,
-    "speedup": 1.3976309906738742
+    "tiersched": 30.995131,
+    "best_baseline": 20.457432,
+    "speedup": 1.51510370412083
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.794691,
-    "best_baseline": 31.382574,
-    "speedup": 1.3955098456869726
+    "tiersched": 46.557917,
+    "best_baseline": 40.438221,
+    "speedup": 1.1513344516317867
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.850371,
-    "best_baseline": 5.638281,
-    "speedup": 1.0376160748284804
+    "tiersched": 6.388457,
+    "best_baseline": 6.138247,
+    "speedup": 1.040762452211519
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.062951,
-    "best_baseline": 6.5206,
-    "speedup": 1.0831750145692114
+    "tiersched": 7.840911,
+    "best_baseline": 7.2119,
+    "speedup": 1.0872184861132295
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 8.909606,
-    "best_baseline": 7.7846,
-    "speedup": 1.1445168666341237
+    "tiersched": 10.187726,
+    "best_baseline": 8.7942,
+    "speedup": 1.15845966659844
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 51.801217,
-    "best_baseline": 41.6566,
-    "speedup": 1.2435296447621746
+    "tiersched": 78.422988,
+    "best_baseline": 59.9852,
+    "speedup": 1.3073722851636738
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "20 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 3.552201,
-    "best_baseline": 3.425501,
-    "speedup": 1.036987290326291
+    "tiersched": 3.809676,
+    "best_baseline": 3.648609,
+    "speedup": 1.0441447685953744
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 4.081197,
-    "best_baseline": 3.835465,
-    "speedup": 1.0640683724137752
+    "tiersched": 4.431479,
+    "best_baseline": 4.121814,
+    "speedup": 1.075128329420008
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 4.79532,
-    "best_baseline": 4.363751,
-    "speedup": 1.0988986310172144
+    "tiersched": 5.29325,
+    "best_baseline": 4.736057,
+    "speedup": 1.1176491330235256
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 11.616749,
-    "best_baseline": 10.190548,
-    "speedup": 1.1399533175252206
+    "tiersched": 13.102477,
+    "best_baseline": 11.223013,
+    "speedup": 1.167465189606392
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 19.952679,
-    "best_baseline": 15.085898,
-    "speedup": 1.3226046603258221
+    "tiersched": 25.485563,
+    "best_baseline": 17.476336,
+    "speedup": 1.4582898268836213
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.45895,
-    "best_baseline": 29.076161,
-    "speedup": 1.4946591470586506
+    "tiersched": 46.379252,
+    "best_baseline": 39.38974,
+    "speedup": 1.1774449894820325
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 4.64934,
-    "best_baseline": 4.525239,
-    "speedup": 1.0274241868772014
+    "tiersched": 5.081618,
+    "best_baseline": 4.938825,
+    "speedup": 1.0289123425106175
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 5.616125,
-    "best_baseline": 5.2956,
-    "speedup": 1.0605266636452904
+    "tiersched": 6.260609,
+    "best_baseline": 5.8687,
+    "speedup": 1.0667795252781707
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 7.090532,
-    "best_baseline": 6.3997,
-    "speedup": 1.1079475600418769
+    "tiersched": 8.145795,
+    "best_baseline": 7.2586,
+    "speedup": 1.1222267379384454
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 42.626621,
-    "best_baseline": 36.572,
-    "speedup": 1.1655534561959968
+    "tiersched": 67.645694,
+    "best_baseline": 55.1173,
+    "speedup": 1.2273042039432267
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.848568,
-    "best_baseline": 73.1042,
-    "speedup": 1.010182287748173
+    "tiersched": 81.273149,
+    "best_baseline": 79.2701,
+    "speedup": 1.0252686574130725
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.848568,
-    "best_baseline": 73.1554,
-    "speedup": 1.0094752813872934
+    "tiersched": 81.273149,
+    "best_baseline": 79.3183,
+    "speedup": 1.0246456240237123
    }
   ],
   "50 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 2.520758,
-    "best_baseline": 2.467092,
-    "speedup": 1.0217527356093732
+    "tiersched": 2.701767,
+    "best_baseline": 2.626362,
+    "speedup": 1.028710817472991
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 2.899759,
-    "best_baseline": 2.769908,
-    "speedup": 1.0468791743263675
+    "tiersched": 3.145278,
+    "best_baseline": 2.9846,
+    "speedup": 1.0538356898746901
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 3.412893,
-    "best_baseline": 3.1901,
-    "speedup": 1.0698388765242468
+    "tiersched": 3.76114,
+    "best_baseline": 3.4844,
+    "speedup": 1.0794225691654231
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 8.257251,
-    "best_baseline": 7.46796,
-    "speedup": 1.1056903090000483
+    "tiersched": 9.310241,
+    "best_baseline": 8.254972,
+    "speedup": 1.1278343524363255
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 14.294021,
-    "best_baseline": 11.533719,
-    "speedup": 1.2393245405059723
+    "tiersched": 18.187214,
+    "best_baseline": 13.532401,
+    "speedup": 1.3439753965316281
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 40.087372,
-    "best_baseline": 25.4833,
-    "speedup": 1.5730840197305687
+    "tiersched": 46.238664,
+    "best_baseline": 37.447845,
+    "speedup": 1.234748327974547
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 3.297829,
-    "best_baseline": 3.2508,
-    "speedup": 1.0144669004552727
+    "tiersched": 3.603002,
+    "best_baseline": 3.55106,
+    "speedup": 1.0146271817429162
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 3.98393,
-    "best_baseline": 3.8493,
-    "speedup": 1.0349751902943392
+    "tiersched": 4.441928,
+    "best_baseline": 4.276,
+    "speedup": 1.0388044901777362
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 5.034674,
-    "best_baseline": 4.7203,
-    "speedup": 1.066600427938902
+    "tiersched": 5.785706,
+    "best_baseline": 5.3797,
+    "speedup": 1.075470007621243
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 31.072088,
-    "best_baseline": 29.3959,
-    "speedup": 1.0570211492078827
+    "tiersched": 53.062504,
+    "best_baseline": 47.4208,
+    "speedup": 1.1189710844186516
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.692347,
-    "best_baseline": 73.1042,
-    "speedup": 1.0080453243452496
+    "tiersched": 81.273149,
+    "best_baseline": 79.2701,
+    "speedup": 1.0252686574130725
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.692347,
-    "best_baseline": 73.1554,
-    "speedup": 1.0073398136022769
+    "tiersched": 81.273149,
+    "best_baseline": 79.3183,
+    "speedup": 1.0246456240237123
    }
   ],
   "100 us": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 1.698687,
-    "best_baseline": 1.682516,
-    "speedup": 1.009611201319928
+    "tiersched": 1.819751,
+    "best_baseline": 1.795004,
+    "speedup": 1.0137865988042365
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 1.956029,
-    "best_baseline": 1.9066,
-    "speedup": 1.025925207175076
+    "tiersched": 2.119836,
+    "best_baseline": 2.0591,
+    "speedup": 1.0294963819144285
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 2.305264,
-    "best_baseline": 2.2177,
-    "speedup": 1.0394841502457504
+    "tiersched": 2.537179,
+    "best_baseline": 2.4274,
+    "speedup": 1.045224932026036
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 5.571873,
-    "best_baseline": 5.2267,
-    "speedup": 1.0660403313754376
+    "tiersched": 6.299631,
+    "best_baseline": 5.8253,
+    "speedup": 1.0814260209774602
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 9.724583,
-    "best_baseline": 8.4959,
-    "speedup": 1.1446206993961794
+    "tiersched": 12.318374,
+    "best_baseline": 10.2026,
+    "speedup": 1.2073759629898262
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 28.622707,
-    "best_baseline": 22.7479,
-    "speedup": 1.2582571138434755
+    "tiersched": 45.745746,
+    "best_baseline": 34.604534,
+    "speedup": 1.3219581572749974
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 2.23671,
-    "best_baseline": 2.215,
-    "speedup": 1.0098013544018059
+    "tiersched": 2.445003,
+    "best_baseline": 2.4205,
+    "speedup": 1.010123115058872
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 2.683906,
-    "best_baseline": 2.6453,
-    "speedup": 1.014594185914641
+    "tiersched": 2.992891,
+    "best_baseline": 2.9442,
+    "speedup": 1.0165379389987095
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 3.394375,
-    "best_baseline": 3.284,
-    "speedup": 1.0336099269183923
+    "tiersched": 3.901655,
+    "best_baseline": 3.7584,
+    "speedup": 1.0381159535972755
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 21.832561,
-    "best_baseline": 22.1517,
-    "speedup": 0.9855930244631336
+    "tiersched": 39.36085,
+    "best_baseline": 38.468,
+    "speedup": 1.0232102006862847
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.692347,
-    "best_baseline": 73.1042,
-    "speedup": 1.0080453243452496
+    "tiersched": 81.273149,
+    "best_baseline": 79.2701,
+    "speedup": 1.0252686574130725
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.692347,
-    "best_baseline": 73.1554,
-    "speedup": 1.0073398136022769
+    "tiersched": 81.273149,
+    "best_baseline": 79.3183,
+    "speedup": 1.0246456240237123
    }
   ]
  },
@@ -1045,223 +1045,223 @@
   "prompt 2048": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 0.681848,
-    "best_baseline": 0.6556,
-    "speedup": 1.0400366076876144
+    "tiersched": 0.738298,
+    "best_baseline": 0.7073,
+    "speedup": 1.0438258164852254
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 0.802496,
-    "best_baseline": 0.7461,
-    "speedup": 1.0755877228253585
+    "tiersched": 0.882092,
+    "best_baseline": 0.8142,
+    "speedup": 1.083384917710636
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 0.975019,
-    "best_baseline": 0.8662,
-    "speedup": 1.1256280304779496
+    "tiersched": 1.095026,
+    "best_baseline": 0.9596,
+    "speedup": 1.1411275531471448
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 2.46991,
-    "best_baseline": 2.1264,
-    "speedup": 1.1615453348382243
+    "tiersched": 2.850829,
+    "best_baseline": 2.4139,
+    "speedup": 1.181005426902523
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 4.937056,
-    "best_baseline": 3.5186,
-    "speedup": 1.4031307906553743
+    "tiersched": 6.247818,
+    "best_baseline": 4.3864,
+    "speedup": 1.424361207368229
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 6.379155,
-    "best_baseline": 6.3602,
-    "speedup": 1.0029802521933273
+    "tiersched": 6.845796,
+    "best_baseline": 6.7746,
+    "speedup": 1.010509255158976
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 0.933102,
-    "best_baseline": 0.8897,
-    "speedup": 1.0487827357536248
+    "tiersched": 1.037831,
+    "best_baseline": 0.9862,
+    "speedup": 1.0523534779963497
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 1.175547,
-    "best_baseline": 1.0648,
-    "speedup": 1.1040073253193088
+    "tiersched": 1.341695,
+    "best_baseline": 1.2067,
+    "speedup": 1.1118712190270987
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 1.588207,
-    "best_baseline": 1.3267,
-    "speedup": 1.1971108766111405
+    "tiersched": 1.881978,
+    "best_baseline": 1.5554,
+    "speedup": 1.20996399639964
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 11.992293,
-    "best_baseline": 11.7671,
-    "speedup": 1.0191375105166098
+    "tiersched": 12.995988,
+    "best_baseline": 13.22,
+    "speedup": 0.9830550680786687
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 11.992293,
-    "best_baseline": 11.9067,
-    "speedup": 1.007188641689133
+    "tiersched": 13.592525,
+    "best_baseline": 13.2217,
+    "speedup": 1.0280466959619414
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 11.992293,
-    "best_baseline": 11.9067,
-    "speedup": 1.007188641689133
+    "tiersched": 13.592525,
+    "best_baseline": 13.2217,
+    "speedup": 1.0280466959619414
    }
   ],
   "prompt 8192": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 0.566348,
-    "best_baseline": 0.565911,
-    "speedup": 1.0007722062303082
+    "tiersched": 0.565748,
+    "best_baseline": 0.562466,
+    "speedup": 1.0058350193611703
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 0.600477,
-    "best_baseline": 0.589604,
-    "speedup": 1.018441191036696
+    "tiersched": 0.642565,
+    "best_baseline": 0.622843,
+    "speedup": 1.0316644804549462
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 0.691385,
-    "best_baseline": 0.650923,
-    "speedup": 1.0621609622029027
+    "tiersched": 0.742249,
+    "best_baseline": 0.699082,
+    "speedup": 1.0617481211073951
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 1.628986,
-    "best_baseline": 1.470294,
-    "speedup": 1.1079321550655856
+    "tiersched": 1.795061,
+    "best_baseline": 1.600864,
+    "speedup": 1.1213076188858015
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 2.535962,
-    "best_baseline": 2.0124,
-    "speedup": 1.2601679586563308
+    "tiersched": 2.804851,
+    "best_baseline": 2.2692,
+    "speedup": 1.236052793936189
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 4.712368,
-    "best_baseline": 3.217,
-    "speedup": 1.4648330742928193
+    "tiersched": 5.411122,
+    "best_baseline": 3.9295,
+    "speedup": 1.3770510243033465
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 0.729746,
-    "best_baseline": 0.714169,
-    "speedup": 1.0218113639768738
+    "tiersched": 0.728302,
+    "best_baseline": 0.71452,
+    "speedup": 1.019288473380731
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 0.787549,
-    "best_baseline": 0.752321,
-    "speedup": 1.0468257565587031
+    "tiersched": 0.859002,
+    "best_baseline": 0.8154,
+    "speedup": 1.0534731420161885
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 0.952153,
-    "best_baseline": 0.864754,
-    "speedup": 1.1010680494105838
+    "tiersched": 1.056155,
+    "best_baseline": 0.951206,
+    "speedup": 1.1103325672882636
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 4.307883,
-    "best_baseline": 3.5485,
-    "speedup": 1.2140011272368607
+    "tiersched": 5.679888,
+    "best_baseline": 4.4086,
+    "speedup": 1.28836546749535
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 8.182219,
-    "best_baseline": 8.0668,
-    "speedup": 1.0143079040015868
+    "tiersched": 8.900038,
+    "best_baseline": 8.7305,
+    "speedup": 1.019419048164481
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 8.182219,
-    "best_baseline": 8.1166,
-    "speedup": 1.0080845427888525
+    "tiersched": 8.900038,
+    "best_baseline": 8.7305,
+    "speedup": 1.019419048164481
    }
   ],
   "prompt 32768": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 0.566348,
-    "best_baseline": 0.560365,
-    "speedup": 1.0106769694752527
+    "tiersched": 0.293672,
+    "best_baseline": 0.293672,
+    "speedup": 1.0
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 0.566348,
-    "best_baseline": 0.560365,
-    "speedup": 1.0106769694752527
+    "tiersched": 0.314062,
+    "best_baseline": 0.314062,
+    "speedup": 1.0
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 0.566348,
-    "best_baseline": 0.560365,
-    "speedup": 1.0106769694752527
+    "tiersched": 0.337496,
+    "best_baseline": 0.337496,
+    "speedup": 1.0
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 1.273974,
-    "best_baseline": 1.226853,
-    "speedup": 1.038408024433245
+    "tiersched": 0.726823,
+    "best_baseline": 0.726823,
+    "speedup": 1.0
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 1.273974,
-    "best_baseline": 1.226853,
-    "speedup": 1.038408024433245
+    "tiersched": 0.865974,
+    "best_baseline": 0.865974,
+    "speedup": 1.0
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 1.273974,
-    "best_baseline": 1.226853,
-    "speedup": 1.038408024433245
+    "tiersched": 1.049178,
+    "best_baseline": 1.071022,
+    "speedup": 0.9796045272646127
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 0.729746,
-    "best_baseline": 0.676252,
-    "speedup": 1.079103647752613
+    "tiersched": 0.332287,
+    "best_baseline": 0.33038,
+    "speedup": 1.005772141170773
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 0.729746,
-    "best_baseline": 0.676252,
-    "speedup": 1.079103647752613
+    "tiersched": 0.358633,
+    "best_baseline": 0.355495,
+    "speedup": 1.0088271283703005
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 0.729746,
-    "best_baseline": 0.676252,
-    "speedup": 1.079103647752613
+    "tiersched": 0.389516,
+    "best_baseline": 0.384742,
+    "speedup": 1.012408315182642
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 2.52909,
-    "best_baseline": 1.955706,
-    "speedup": 1.293185172004381
+    "tiersched": 1.020266,
+    "best_baseline": 0.988151,
+    "speedup": 1.032500093609175
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 2.52909,
-    "best_baseline": 1.955706,
-    "speedup": 1.293185172004381
+    "tiersched": 1.31565,
+    "best_baseline": 1.241624,
+    "speedup": 1.0596203037312422
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 2.52909,
-    "best_baseline": 1.955706,
-    "speedup": 1.293185172004381
+    "tiersched": 1.767153,
+    "best_baseline": 1.638082,
+    "speedup": 1.0787939797885575
    }
   ]
  },
@@ -1269,593 +1269,593 @@
   "served 128, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.786066,
-    "best_baseline": 5.048581,
-    "speedup": 0.9480022208220488
+    "tiersched": 5.138915,
+    "best_baseline": 5.416861,
+    "speedup": 0.9486887331980643
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.497572,
-    "best_baseline": 5.690487,
-    "speedup": 0.9660986836451784
+    "tiersched": 5.981701,
+    "best_baseline": 6.164325,
+    "speedup": 0.9703740474423397
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.464506,
-    "best_baseline": 6.523788,
-    "speedup": 0.9909129481215515
+    "tiersched": 7.150798,
+    "best_baseline": 7.1811,
+    "speedup": 0.9957803122084361
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.732432,
-    "best_baseline": 15.418024,
-    "speedup": 1.0203922370337468
+    "tiersched": 17.550399,
+    "best_baseline": 17.200288,
+    "speedup": 1.0203549498706068
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 27.138541,
-    "best_baseline": 23.577981,
-    "speedup": 1.1510120819929408
+    "tiersched": 32.729438,
+    "best_baseline": 28.007988,
+    "speedup": 1.1685751222115635
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 45.696377,
-    "best_baseline": 49.0739,
-    "speedup": 0.9311747588840503
+    "tiersched": 48.639419,
+    "best_baseline": 52.2569,
+    "speedup": 0.9307750555429043
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.287618,
-    "best_baseline": 7.0455,
-    "speedup": 0.8924303456106736
+    "tiersched": 6.875592,
+    "best_baseline": 7.8026,
+    "speedup": 0.8811924230384743
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.606574,
-    "best_baseline": 8.4167,
-    "speedup": 0.9037477871374766
+    "tiersched": 8.479482,
+    "best_baseline": 9.5264,
+    "speedup": 0.8901035018474975
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.625776,
-    "best_baseline": 10.4587,
-    "speedup": 0.9203606566781722
+    "tiersched": 11.012929,
+    "best_baseline": 12.2359,
+    "speedup": 0.9000505888410333
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 58.274809,
-    "best_baseline": 83.3594,
-    "speedup": 0.699079036077515
+    "tiersched": 84.711847,
+    "best_baseline": 98.0875,
+    "speedup": 0.8636354989167835
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 93.866041,
-    "best_baseline": 89.0818,
-    "speedup": 1.0537061554660996
+    "tiersched": 108.599585,
+    "best_baseline": 98.1802,
+    "speedup": 1.1061251148398556
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 93.866041,
-    "best_baseline": 89.0816,
-    "speedup": 1.0537085211760902
+    "tiersched": 108.599585,
+    "best_baseline": 98.1799,
+    "speedup": 1.1061284947326286
    }
   ],
   "served 256, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.786066,
-    "best_baseline": 4.865824,
-    "speedup": 0.9836085316690452
+    "tiersched": 5.138422,
+    "best_baseline": 5.206686,
+    "speedup": 0.9868891652002828
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.497572,
-    "best_baseline": 5.459366,
-    "speedup": 1.006998248514571
+    "tiersched": 5.978365,
+    "best_baseline": 5.893594,
+    "speedup": 1.0143835832600616
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.464506,
-    "best_baseline": 6.221817,
-    "speedup": 1.039006129559902
+    "tiersched": 7.130962,
+    "best_baseline": 6.789291,
+    "speedup": 1.0503249897522435
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.732432,
-    "best_baseline": 14.576541,
-    "speedup": 1.0792980309937728
+    "tiersched": 17.550399,
+    "best_baseline": 16.154774,
+    "speedup": 1.0863908712062453
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 27.123452,
-    "best_baseline": 21.665337,
-    "speedup": 1.2519284606558392
+    "tiersched": 32.729438,
+    "best_baseline": 25.337789,
+    "speedup": 1.2917243094888824
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 45.696377,
-    "best_baseline": 47.1213,
-    "speedup": 0.9697605329224788
+    "tiersched": 48.639419,
+    "best_baseline": 49.9166,
+    "speedup": 0.9744137020550276
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.287618,
-    "best_baseline": 6.6358,
-    "speedup": 0.9475297628017723
+    "tiersched": 6.873367,
+    "best_baseline": 7.3032,
+    "speedup": 0.9411445667652535
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.606574,
-    "best_baseline": 7.8366,
-    "speedup": 0.9706472194574178
+    "tiersched": 8.478812,
+    "best_baseline": 8.79,
+    "speedup": 0.964597497155859
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.625776,
-    "best_baseline": 9.5758,
-    "speedup": 1.0052189895361223
+    "tiersched": 11.012383,
+    "best_baseline": 11.0446,
+    "speedup": 0.9970830088912228
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 58.004998,
-    "best_baseline": 69.0898,
-    "speedup": 0.8395595008235659
+    "tiersched": 84.711847,
+    "best_baseline": 84.8464,
+    "speedup": 0.9984141578193064
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 89.999035,
-    "best_baseline": 83.0564,
-    "speedup": 1.0835894043083978
+    "tiersched": 101.699232,
+    "best_baseline": 90.9736,
+    "speedup": 1.117898291372442
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 89.999035,
-    "best_baseline": 83.0562,
-    "speedup": 1.0835920136004296
+    "tiersched": 101.699232,
+    "best_baseline": 90.9734,
+    "speedup": 1.1179007490101502
    }
   ],
   "served 1024, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 3.99781,
-    "best_baseline": 4.323334,
-    "speedup": 0.9247053315797483
+    "tiersched": 4.239061,
+    "best_baseline": 4.207034,
+    "speedup": 1.0076127266858315
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 4.391176,
-    "best_baseline": 4.407498,
-    "speedup": 0.9962967651942212
+    "tiersched": 4.684264,
+    "best_baseline": 4.70513,
+    "speedup": 0.9955652659969013
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 5.492749,
-    "best_baseline": 4.862291,
-    "speedup": 1.1296627454012933
+    "tiersched": 5.559552,
+    "best_baseline": 5.226481,
+    "speedup": 1.063727582669869
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 12.388078,
-    "best_baseline": 10.92108,
-    "speedup": 1.1343271910836656
+    "tiersched": 13.52643,
+    "best_baseline": 11.884302,
+    "speedup": 1.1381762260837869
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 19.125455,
-    "best_baseline": 14.357773,
-    "speedup": 1.3320627788167425
+    "tiersched": 20.470598,
+    "best_baseline": 16.054428,
+    "speedup": 1.2750748889963566
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 27.404388,
-    "best_baseline": 20.950599,
-    "speedup": 1.308047946505014
+    "tiersched": 28.436243,
+    "best_baseline": 24.731615,
+    "speedup": 1.149793210026923
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.192475,
-    "best_baseline": 5.628274,
-    "speedup": 0.9225696901039288
+    "tiersched": 5.588704,
+    "best_baseline": 5.473922,
+    "speedup": 1.0209688775251091
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 5.87617,
-    "best_baseline": 5.717337,
-    "speedup": 1.0277809406722047
+    "tiersched": 5.850252,
+    "best_baseline": 6.14587,
+    "speedup": 0.9518997310388928
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 6.767212,
-    "best_baseline": 6.516327,
-    "speedup": 1.0385009837597161
+    "tiersched": 6.732128,
+    "best_baseline": 7.09208,
+    "speedup": 0.9492459193917723
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 30.22678,
-    "best_baseline": 24.531,
-    "speedup": 1.232187028657617
+    "tiersched": 36.577081,
+    "best_baseline": 29.5342,
+    "speedup": 1.2384652707708352
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 33.779664,
-    "best_baseline": 55.8296,
-    "speedup": 0.6050493644948199
+    "tiersched": 35.252732,
+    "best_baseline": 63.0759,
+    "speedup": 0.5588938405952195
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 33.779664,
-    "best_baseline": 59.0337,
-    "speedup": 0.5722098394645769
+    "tiersched": 35.252732,
+    "best_baseline": 63.0758,
+    "speedup": 0.5588947266622064
    }
   ],
   "served 2048, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 3.280643,
-    "best_baseline": 4.323334,
-    "speedup": 0.7588224735817312
+    "tiersched": 3.441363,
+    "best_baseline": 3.294124,
+    "speedup": 1.04469746736917
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 3.540942,
-    "best_baseline": 4.323334,
-    "speedup": 0.8190304057007856
+    "tiersched": 3.729089,
+    "best_baseline": 3.623956,
+    "speedup": 1.02901056193839
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 4.184818,
-    "best_baseline": 4.323334,
-    "speedup": 0.967960837631328
+    "tiersched": 4.036128,
+    "best_baseline": 4.027187,
+    "speedup": 1.0022201601266592
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 9.098508,
-    "best_baseline": 9.154948,
-    "speedup": 0.9938350277904365
+    "tiersched": 9.695961,
+    "best_baseline": 8.470335,
+    "speedup": 1.1446962841493282
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 12.04535,
-    "best_baseline": 9.697713,
-    "speedup": 1.2420815093208057
+    "tiersched": 12.749365,
+    "best_baseline": 10.370186,
+    "speedup": 1.2294249109900246
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 15.226292,
-    "best_baseline": 11.939184,
-    "speedup": 1.27532099346153
+    "tiersched": 15.539592,
+    "best_baseline": 12.98543,
+    "speedup": 1.1966944490863993
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 4.0442,
-    "best_baseline": 5.551678,
-    "speedup": 0.7284644390398722
+    "tiersched": 4.280572,
+    "best_baseline": 4.0232,
+    "speedup": 1.0639719626168225
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 4.447208,
-    "best_baseline": 5.551678,
-    "speedup": 0.8010565454264458
+    "tiersched": 4.204252,
+    "best_baseline": 4.507868,
+    "speedup": 0.9326475398126121
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 4.939427,
-    "best_baseline": 5.551678,
-    "speedup": 0.8897178474688194
+    "tiersched": 4.641167,
+    "best_baseline": 5.125306,
+    "speedup": 0.9055394936419406
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 15.768864,
-    "best_baseline": 17.155343,
-    "speedup": 0.9191809222351311
+    "tiersched": 16.93012,
+    "best_baseline": 15.418502,
+    "speedup": 1.098039225859944
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 15.752685,
-    "best_baseline": 19.165377,
-    "speedup": 0.821934522863808
+    "tiersched": 16.065747,
+    "best_baseline": 21.978036,
+    "speedup": 0.7309910221277279
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 15.752685,
-    "best_baseline": 33.7,
-    "speedup": 0.46743872403560827
+    "tiersched": 16.065747,
+    "best_baseline": 43.2424,
+    "speedup": 0.3715276441640612
    }
   ],
   "served 128, replanned": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 5.40254,
-    "best_baseline": 5.048581,
-    "speedup": 1.070110591471148
+    "tiersched": 5.871474,
+    "best_baseline": 5.416861,
+    "speedup": 1.0839255428559087
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 6.344079,
-    "best_baseline": 5.690487,
-    "speedup": 1.114856953367963
+    "tiersched": 6.997345,
+    "best_baseline": 6.164325,
+    "speedup": 1.1351356393441294
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 7.694266,
-    "best_baseline": 6.523788,
-    "speedup": 1.1794169277113236
+    "tiersched": 8.639416,
+    "best_baseline": 7.1811,
+    "speedup": 1.2030769659244407
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 19.480481,
-    "best_baseline": 15.418024,
-    "speedup": 1.2634875260279788
+    "tiersched": 22.082591,
+    "best_baseline": 17.200288,
+    "speedup": 1.283850072742968
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 38.387842,
-    "best_baseline": 23.577981,
-    "speedup": 1.6281225266913226
+    "tiersched": 48.108703,
+    "best_baseline": 28.007988,
+    "speedup": 1.7176779353090268
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 49.206918,
-    "best_baseline": 49.0739,
-    "speedup": 1.0027105650865327
+    "tiersched": 52.592041,
+    "best_baseline": 52.2569,
+    "speedup": 1.0064133348897466
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 7.423501,
-    "best_baseline": 7.0455,
-    "speedup": 1.053651408700589
+    "tiersched": 8.258714,
+    "best_baseline": 7.8026,
+    "speedup": 1.0584566682900571
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 9.330367,
-    "best_baseline": 8.4167,
-    "speedup": 1.1085540651324153
+    "tiersched": 10.652062,
+    "best_baseline": 9.5264,
+    "speedup": 1.1181623698354048
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 12.541985,
-    "best_baseline": 10.4587,
-    "speedup": 1.1991915821277979
+    "tiersched": 14.891267,
+    "best_baseline": 12.2359,
+    "speedup": 1.2170144411118102
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 89.675572,
-    "best_baseline": 83.3594,
-    "speedup": 1.0757703630304443
+    "tiersched": 98.454527,
+    "best_baseline": 98.0875,
+    "speedup": 1.0037418325474703
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 90.096955,
-    "best_baseline": 89.0818,
-    "speedup": 1.0113957620973082
+    "tiersched": 101.460533,
+    "best_baseline": 98.1802,
+    "speedup": 1.033411349742616
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 90.096955,
-    "best_baseline": 89.0816,
-    "speedup": 1.0113980328148573
+    "tiersched": 101.460533,
+    "best_baseline": 98.1799,
+    "speedup": 1.033414507450099
    }
   ],
   "served 256, replanned": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 5.166237,
-    "best_baseline": 4.865824,
-    "speedup": 1.0617393888476032
+    "tiersched": 5.585647,
+    "best_baseline": 5.206686,
+    "speedup": 1.0727835325579456
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 6.007843,
-    "best_baseline": 5.459366,
-    "speedup": 1.1004653287579547
+    "tiersched": 6.594261,
+    "best_baseline": 5.893594,
+    "speedup": 1.1188862008479037
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 7.195307,
-    "best_baseline": 6.221817,
-    "speedup": 1.156463939714074
+    "tiersched": 8.018191,
+    "best_baseline": 6.789291,
+    "speedup": 1.1810056455084925
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 17.941697,
-    "best_baseline": 14.576541,
-    "speedup": 1.2308610801424014
+    "tiersched": 20.314877,
+    "best_baseline": 16.154774,
+    "speedup": 1.25751539452053
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 33.484114,
-    "best_baseline": 21.665337,
-    "speedup": 1.5455154932508088
+    "tiersched": 43.568469,
+    "best_baseline": 25.337789,
+    "speedup": 1.7195055574896452
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 47.320439,
-    "best_baseline": 47.1213,
-    "speedup": 1.0042260930831706
+    "tiersched": 50.502077,
+    "best_baseline": 49.9166,
+    "speedup": 1.011729104145715
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.977262,
-    "best_baseline": 6.6358,
-    "speedup": 1.0514575484493203
+    "tiersched": 7.701632,
+    "best_baseline": 7.3032,
+    "speedup": 1.054555811151276
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 8.639667,
-    "best_baseline": 7.8366,
-    "speedup": 1.1024764566265983
+    "tiersched": 9.779122,
+    "best_baseline": 8.79,
+    "speedup": 1.1125281001137657
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 11.342022,
-    "best_baseline": 9.5758,
-    "speedup": 1.184446417009545
+    "tiersched": 13.187051,
+    "best_baseline": 11.0446,
+    "speedup": 1.1939817648443583
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 81.678476,
-    "best_baseline": 69.0898,
-    "speedup": 1.1822074459616327
+    "tiersched": 89.554556,
+    "best_baseline": 84.8464,
+    "speedup": 1.0554903449056177
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 84.07574,
-    "best_baseline": 83.0564,
-    "speedup": 1.0122728651855848
+    "tiersched": 93.870517,
+    "best_baseline": 90.9736,
+    "speedup": 1.0318434908588865
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 84.07574,
-    "best_baseline": 83.0562,
-    "speedup": 1.0122753027468148
+    "tiersched": 93.870517,
+    "best_baseline": 90.9734,
+    "speedup": 1.0318457593098642
    }
   ],
   "served 1024, replanned": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.47859,
-    "best_baseline": 4.323334,
-    "speedup": 1.0359111741077602
+    "tiersched": 4.349307,
+    "best_baseline": 4.207034,
+    "speedup": 1.0338178869008425
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 4.590674,
-    "best_baseline": 4.407498,
-    "speedup": 1.0415600869245998
+    "tiersched": 4.910689,
+    "best_baseline": 4.70513,
+    "speedup": 1.043688272162512
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 5.240045,
-    "best_baseline": 4.862291,
-    "speedup": 1.077690537238516
+    "tiersched": 5.619457,
+    "best_baseline": 5.226481,
+    "speedup": 1.0751894056440654
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 12.244496,
-    "best_baseline": 10.92108,
-    "speedup": 1.1211799565610727
+    "tiersched": 13.244243,
+    "best_baseline": 11.884302,
+    "speedup": 1.1144317099986185
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 18.432452,
-    "best_baseline": 14.357773,
-    "speedup": 1.283796031599051
+    "tiersched": 19.805,
+    "best_baseline": 16.054428,
+    "speedup": 1.2336160466134327
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 32.458571,
-    "best_baseline": 20.950599,
-    "speedup": 1.5492908341188716
+    "tiersched": 40.546499,
+    "best_baseline": 24.731615,
+    "speedup": 1.639460221259307
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.758391,
-    "best_baseline": 5.628274,
-    "speedup": 1.023118455142731
+    "tiersched": 5.551722,
+    "best_baseline": 5.473922,
+    "speedup": 1.014212844099715
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 5.949083,
-    "best_baseline": 5.717337,
-    "speedup": 1.040533905907593
+    "tiersched": 6.467247,
+    "best_baseline": 6.14587,
+    "speedup": 1.052291538870819
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 7.114023,
-    "best_baseline": 6.516327,
-    "speedup": 1.0917228371136072
+    "tiersched": 7.806923,
+    "best_baseline": 7.09208,
+    "speedup": 1.1007945482848474
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 29.685717,
-    "best_baseline": 24.531,
-    "speedup": 1.2101307325424973
+    "tiersched": 37.453219,
+    "best_baseline": 29.5342,
+    "speedup": 1.268130472469205
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 59.642926,
-    "best_baseline": 55.8296,
-    "speedup": 1.068302943241578
+    "tiersched": 64.479335,
+    "best_baseline": 63.0759,
+    "speedup": 1.0222499401514684
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 59.642926,
-    "best_baseline": 59.0337,
-    "speedup": 1.0103199697799732
+    "tiersched": 64.479335,
+    "best_baseline": 63.0758,
+    "speedup": 1.0222515608204732
    }
   ],
   "served 2048, replanned": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.456527,
-    "best_baseline": 4.323334,
-    "speedup": 1.0308079366525926
+    "tiersched": 3.332402,
+    "best_baseline": 3.294124,
+    "speedup": 1.0116200847326937
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 4.456527,
-    "best_baseline": 4.323334,
-    "speedup": 1.0308079366525926
+    "tiersched": 3.670337,
+    "best_baseline": 3.623956,
+    "speedup": 1.0127984445727265
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 4.456527,
-    "best_baseline": 4.323334,
-    "speedup": 1.0308079366525926
+    "tiersched": 4.084545,
+    "best_baseline": 4.027187,
+    "speedup": 1.0142426959562594
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 10.084418,
-    "best_baseline": 9.154948,
-    "speedup": 1.1015265187743284
+    "tiersched": 9.176701,
+    "best_baseline": 8.470335,
+    "speedup": 1.0833929236565023
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 11.180447,
-    "best_baseline": 9.697713,
-    "speedup": 1.152895223853294
+    "tiersched": 12.059168,
+    "best_baseline": 10.370186,
+    "speedup": 1.1628690170070237
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 16.104398,
-    "best_baseline": 11.939184,
-    "speedup": 1.348869235954484
+    "tiersched": 16.777954,
+    "best_baseline": 12.98543,
+    "speedup": 1.2920599471869627
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.758006,
-    "best_baseline": 5.551678,
-    "speedup": 1.03716497966921
+    "tiersched": 4.058473,
+    "best_baseline": 4.0232,
+    "speedup": 1.0087673990853052
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 5.758006,
-    "best_baseline": 5.551678,
-    "speedup": 1.03716497966921
+    "tiersched": 4.568658,
+    "best_baseline": 4.507868,
+    "speedup": 1.0134853105725368
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 5.758006,
-    "best_baseline": 5.551678,
-    "speedup": 1.03716497966921
+    "tiersched": 5.228666,
+    "best_baseline": 5.125306,
+    "speedup": 1.0201666007844215
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 20.156273,
-    "best_baseline": 17.155343,
-    "speedup": 1.174926843491267
+    "tiersched": 16.670433,
+    "best_baseline": 15.418502,
+    "speedup": 1.0811966687814418
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 24.990299,
-    "best_baseline": 19.165377,
-    "speedup": 1.3039294243990087
+    "tiersched": 29.308415,
+    "best_baseline": 21.978036,
+    "speedup": 1.3335320317065638
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 43.039828,
-    "best_baseline": 33.7,
-    "speedup": 1.2771462314540059
+    "tiersched": 45.400821,
+    "best_baseline": 43.2424,
+    "speedup": 1.0499144589569496
    }
   ]
  },
@@ -1863,149 +1863,149 @@
   "pass-through 1": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "pass-through 0": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.091561,
+    "best_baseline": 4.846792,
+    "speedup": 1.0505012387575121
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.904697,
+    "best_baseline": 5.425803,
+    "speedup": 1.0882623272536802
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161924,
+    "speedup": 1.1423668970925314
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.291509,
+    "best_baseline": 14.409856,
+    "speedup": 1.1999779178917542
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.461461,
-    "best_baseline": 18.611694,
-    "speedup": 1.4217653159352395
+    "tiersched": 33.001498,
+    "best_baseline": 21.293593,
+    "speedup": 1.5498322899287122
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 46.982086,
-    "best_baseline": 31.966284,
-    "speedup": 1.4697387409809661
+    "tiersched": 52.069532,
+    "best_baseline": 40.687606,
+    "speedup": 1.2797393879600585
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.789034,
+    "best_baseline": 6.501729,
+    "speedup": 1.0441890149527917
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.333936,
+    "best_baseline": 7.613,
+    "speedup": 1.094698016550637
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.845974,
+    "best_baseline": 9.2445,
+    "speedup": 1.1732353291146087
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.914491,
-    "best_baseline": 43.0339,
-    "speedup": 1.276075163998615
+    "tiersched": 83.485043,
+    "best_baseline": 61.2301,
+    "speedup": 1.3634640969065868
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 78.25702,
-    "best_baseline": 73.1042,
-    "speedup": 1.0704859638707487
+    "tiersched": 85.65292,
+    "best_baseline": 79.2701,
+    "speedup": 1.0805198933772002
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 78.25702,
-    "best_baseline": 73.1554,
-    "speedup": 1.0697367521741388
+    "tiersched": 85.65292,
+    "best_baseline": 79.3183,
+    "speedup": 1.079863285017455
    }
   ]
  },
@@ -2013,149 +2013,149 @@
   "stream compute 0": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "stream compute 1": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.762292,
-    "best_baseline": 4.717328,
-    "speedup": 1.0095316670793297
+    "tiersched": 5.09857,
+    "best_baseline": 4.997842,
+    "speedup": 1.0201542985952736
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.48404,
-    "best_baseline": 5.223628,
-    "speedup": 1.0498527077349307
+    "tiersched": 5.913928,
+    "best_baseline": 5.589823,
+    "speedup": 1.0579812634496657
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.460093,
-    "best_baseline": 5.879,
-    "speedup": 1.0988421500255146
+    "tiersched": 7.08063,
+    "best_baseline": 6.4057,
+    "speedup": 1.1053639727118034
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.698893,
-    "best_baseline": 14.0857,
-    "speedup": 1.114527002562883
+    "tiersched": 17.438415,
+    "best_baseline": 15.614,
+    "speedup": 1.1168448187524016
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.537094,
-    "best_baseline": 20.9344,
-    "speedup": 1.2676309805869765
+    "tiersched": 32.819995,
+    "best_baseline": 24.5151,
+    "speedup": 1.338766515331367
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.936159,
-    "best_baseline": 40.8466,
-    "speedup": 1.0756380947251425
+    "tiersched": 46.694817,
+    "best_baseline": 46.4099,
+    "speedup": 1.0061391427260131
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.226694,
-    "best_baseline": 6.012487,
-    "speedup": 1.0356270208983405
+    "tiersched": 6.790701,
+    "best_baseline": 6.542409,
+    "speedup": 1.0379511583577241
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.520409,
-    "best_baseline": 6.9349,
-    "speedup": 1.0844293356789572
+    "tiersched": 8.334781,
+    "best_baseline": 7.6688,
+    "speedup": 1.0868429219695388
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.493442,
-    "best_baseline": 8.2601,
-    "speedup": 1.1493132044406242
+    "tiersched": 10.767065,
+    "best_baseline": 9.3269,
+    "speedup": 1.1544098253438977
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.673044,
-    "best_baseline": 44.9617,
-    "speedup": 1.2159914771905866
+    "tiersched": 78.557596,
+    "best_baseline": 65.0385,
+    "speedup": 1.2078629734695605
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.050961,
-    "best_baseline": 73.1555,
-    "speedup": 1.0122405150672198
+    "tiersched": 81.528794,
+    "best_baseline": 79.3185,
+    "speedup": 1.0278660589900213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.050961,
-    "best_baseline": 73.1554,
-    "speedup": 1.0122418987525186
+    "tiersched": 81.528794,
+    "best_baseline": 79.3183,
+    "speedup": 1.0278686507401193
    }
   ]
  },
@@ -2163,223 +2163,223 @@
   "gpu link 0": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "gpu link 63e9": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.488521,
+    "speedup": 1.0460485525129686
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.81337,
-    "speedup": 1.1019833063520694
+    "tiersched": 8.329954,
+    "best_baseline": 7.4915,
+    "speedup": 1.1119207101381567
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.073104,
-    "speedup": 1.1728836888512768
+    "tiersched": 10.762583,
+    "best_baseline": 9.0659,
+    "speedup": 1.1871499795938627
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.650038,
-    "best_baseline": 39.4203,
-    "speedup": 1.3609748784255828
+    "tiersched": 76.951865,
+    "best_baseline": 54.1653,
+    "speedup": 1.4206856603766618
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.552492,
-    "best_baseline": 71.1262,
-    "speedup": 1.0341124930053904
+    "tiersched": 76.951865,
+    "best_baseline": 77.112,
+    "speedup": 0.9979233452640316
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.552492,
-    "best_baseline": 71.4783,
-    "speedup": 1.0290184853305129
+    "tiersched": 76.951865,
+    "best_baseline": 77.4325,
+    "speedup": 0.9937928518386981
    }
   ],
   "gpu link 55e9": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.485752,
+    "speedup": 1.0464951481339404
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.81337,
-    "speedup": 1.1019833063520694
+    "tiersched": 8.329954,
+    "best_baseline": 7.485673,
+    "speedup": 1.1127862518173048
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.069322,
-    "speedup": 1.1734334061771237
+    "tiersched": 10.762583,
+    "best_baseline": 9.0405,
+    "speedup": 1.190485371384326
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.512036,
-    "best_baseline": 38.9446,
-    "speedup": 1.3740553504208541
+    "tiersched": 76.644116,
+    "best_baseline": 53.2712,
+    "speedup": 1.4387533226208533
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 71.954776,
-    "best_baseline": 70.8474,
-    "speedup": 1.0156304395080131
+    "tiersched": 76.644116,
+    "best_baseline": 76.7887,
+    "speedup": 0.9981171187948226
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 71.954776,
-    "best_baseline": 71.1665,
-    "speedup": 1.0110765036920462
+    "tiersched": 76.644116,
+    "best_baseline": 77.0791,
+    "speedup": 0.9943566543978848
    }
   ]
  },
@@ -2387,371 +2387,371 @@
   "served 448, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.776148,
-    "best_baseline": 4.622754,
-    "speedup": 1.0331823843535695
+    "tiersched": 5.124896,
+    "best_baseline": 4.930471,
+    "speedup": 1.03943335231056
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.484491,
-    "best_baseline": 5.151628,
-    "speedup": 1.0646131669445078
+    "tiersched": 5.948752,
+    "best_baseline": 5.53401,
+    "speedup": 1.0749442086299084
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.446425,
-    "best_baseline": 5.812765,
-    "speedup": 1.109011804193013
+    "tiersched": 7.103596,
+    "best_baseline": 6.310914,
+    "speedup": 1.125604944069908
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.675323,
-    "best_baseline": 13.520836,
-    "speedup": 1.1593456943047014
+    "tiersched": 17.479359,
+    "best_baseline": 14.830264,
+    "speedup": 1.1786276360285965
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.949614,
-    "best_baseline": 19.393081,
-    "speedup": 1.3896509791301341
+    "tiersched": 32.483239,
+    "best_baseline": 22.200165,
+    "speedup": 1.4631980888430334
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 45.217879,
-    "best_baseline": 34.282222,
-    "speedup": 1.3189891542035987
+    "tiersched": 48.097666,
+    "best_baseline": 44.227732,
+    "speedup": 1.0875001684463492
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.270512,
-    "best_baseline": 6.1034,
-    "speedup": 1.0273801487695384
+    "tiersched": 6.848616,
+    "best_baseline": 6.6635,
+    "speedup": 1.0277805957829969
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.581553,
-    "best_baseline": 7.1024,
-    "speedup": 1.0674635334534806
+    "tiersched": 8.44081,
+    "best_baseline": 7.8767,
+    "speedup": 1.0716175555753045
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.585743,
-    "best_baseline": 8.4996,
-    "speedup": 1.1277875429431976
+    "tiersched": 10.948363,
+    "best_baseline": 9.6371,
+    "speedup": 1.1360640649157943
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 56.876321,
-    "best_baseline": 47.5136,
-    "speedup": 1.1970534962621229
+    "tiersched": 82.988176,
+    "best_baseline": 70.7166,
+    "speedup": 1.1735317591626293
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 80.25799,
-    "best_baseline": 75.3575,
-    "speedup": 1.065029890853598
+    "tiersched": 89.104284,
+    "best_baseline": 81.926,
+    "speedup": 1.087619119693382
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 80.25799,
-    "best_baseline": 75.4021,
-    "speedup": 1.0643999305059144
+    "tiersched": 89.104284,
+    "best_baseline": 81.9442,
+    "speedup": 1.0873775569228818
    }
   ],
   "served 576, planned 512": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.628643,
-    "best_baseline": 4.476746,
-    "speedup": 1.0339302252126878
+    "tiersched": 5.032027,
+    "best_baseline": 4.763517,
+    "speedup": 1.0563680154809987
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.260647,
-    "best_baseline": 4.963856,
-    "speedup": 1.0597904129370392
+    "tiersched": 5.719395,
+    "best_baseline": 5.318768,
+    "speedup": 1.0753232703513294
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.306933,
-    "best_baseline": 5.571702,
-    "speedup": 1.1319580623658623
+    "tiersched": 6.934586,
+    "best_baseline": 6.025835,
+    "speedup": 1.1508091409738237
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.224211,
-    "best_baseline": 12.825026,
-    "speedup": 1.1870705759193003
+    "tiersched": 16.861406,
+    "best_baseline": 14.03531,
+    "speedup": 1.2013561510219581
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 25.655013,
-    "best_baseline": 18.031893,
-    "speedup": 1.422757610640214
+    "tiersched": 30.6595,
+    "best_baseline": 20.465007,
+    "speedup": 1.4981426588322204
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 41.760006,
-    "best_baseline": 30.136582,
-    "speedup": 1.3856915160451837
+    "tiersched": 44.204287,
+    "best_baseline": 37.8366,
+    "speedup": 1.1682943763445977
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.084387,
-    "best_baseline": 5.857886,
-    "speedup": 1.038665996572825
+    "tiersched": 6.686596,
+    "best_baseline": 6.310457,
+    "speedup": 1.0596056672282212
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.246938,
-    "best_baseline": 6.696624,
-    "speedup": 1.0821778257223342
+    "tiersched": 8.151887,
+    "best_baseline": 7.3664,
+    "speedup": 1.1066310545178106
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 8.958685,
-    "best_baseline": 7.9071,
-    "speedup": 1.1329925004110228
+    "tiersched": 10.467171,
+    "best_baseline": 8.8825,
+    "speedup": 1.1784037151702786
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 50.466113,
-    "best_baseline": 39.3261,
-    "speedup": 1.2832727628724945
+    "tiersched": 71.873617,
+    "best_baseline": 53.9877,
+    "speedup": 1.3312961470853546
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 66.70043,
-    "best_baseline": 70.9905,
-    "speedup": 0.9395683929539868
+    "tiersched": 72.698757,
+    "best_baseline": 76.7984,
+    "speedup": 0.946618119648326
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 66.70043,
-    "best_baseline": 71.0387,
-    "speedup": 0.9389308925979781
+    "tiersched": 72.698757,
+    "best_baseline": 76.8567,
+    "speedup": 0.9459000581601864
    }
   ],
   "served 512, planned 576": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.679983,
-    "best_baseline": 4.546815,
-    "speedup": 1.0292881940435228
+    "tiersched": 5.010078,
+    "best_baseline": 4.84679,
+    "speedup": 1.0336899267350141
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.354594,
-    "best_baseline": 5.055148,
-    "speedup": 1.0592358522440886
+    "tiersched": 5.799933,
+    "best_baseline": 5.425801,
+    "speedup": 1.0689542428850598
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.282049,
-    "best_baseline": 5.69145,
-    "speedup": 1.1037695139200028
+    "tiersched": 6.902404,
+    "best_baseline": 6.161921,
+    "speedup": 1.1201708038775569
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.180476,
-    "best_baseline": 13.136323,
-    "speedup": 1.1556107443460395
+    "tiersched": 16.82669,
+    "best_baseline": 14.409847,
+    "speedup": 1.1677216281338727
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 25.872618,
-    "best_baseline": 18.611694,
-    "speedup": 1.3901269814558523
+    "tiersched": 30.462076,
+    "best_baseline": 21.293573,
+    "speedup": 1.430576071005087
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 44.494494,
-    "best_baseline": 31.966284,
-    "speedup": 1.3919194986817987
+    "tiersched": 47.215711,
+    "best_baseline": 40.687534,
+    "speedup": 1.1604466124685757
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.10294,
-    "best_baseline": 5.976685,
-    "speedup": 1.021124586622852
+    "tiersched": 6.656085,
+    "best_baseline": 6.501729,
+    "speedup": 1.0237407618804166
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.331439,
-    "best_baseline": 6.8873,
-    "speedup": 1.0644866638595676
+    "tiersched": 8.109367,
+    "best_baseline": 7.613,
+    "speedup": 1.0651999211874426
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.189372,
-    "best_baseline": 8.1927,
-    "speedup": 1.1216536672891722
+    "tiersched": 10.428803,
+    "best_baseline": 9.2445,
+    "speedup": 1.1281089296338362
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 51.118775,
-    "best_baseline": 43.0339,
-    "speedup": 1.1878722356096008
+    "tiersched": 79.726859,
+    "best_baseline": 61.2301,
+    "speedup": 1.3020860491816935
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 77.615959,
-    "best_baseline": 73.1042,
-    "speedup": 1.0617168233836085
+    "tiersched": 85.811376,
+    "best_baseline": 79.2701,
+    "speedup": 1.0825188311860334
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 77.615959,
-    "best_baseline": 73.1554,
-    "speedup": 1.0609737490328808
+    "tiersched": 85.811376,
+    "best_baseline": 79.3183,
+    "speedup": 1.0818610081154034
    }
   ],
   "served 448, planned 576": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.689505,
-    "best_baseline": 4.622754,
-    "speedup": 1.0144396608601713
+    "tiersched": 5.021208,
+    "best_baseline": 4.930471,
+    "speedup": 1.0184033127869527
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.367063,
-    "best_baseline": 5.151628,
-    "speedup": 1.0418188192159838
+    "tiersched": 5.814565,
+    "best_baseline": 5.53401,
+    "speedup": 1.0506965112097737
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.299218,
-    "best_baseline": 5.812765,
-    "speedup": 1.0836870233013032
+    "tiersched": 6.923137,
+    "best_baseline": 6.310914,
+    "speedup": 1.0970101953536364
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.23403,
-    "best_baseline": 13.520836,
-    "speedup": 1.1267076976601151
+    "tiersched": 16.892513,
+    "best_baseline": 14.830264,
+    "speedup": 1.139056796291691
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.018653,
-    "best_baseline": 19.393081,
-    "speedup": 1.341646177830124
+    "tiersched": 30.678489,
+    "best_baseline": 22.200165,
+    "speedup": 1.381903648013427
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 44.957727,
-    "best_baseline": 34.282222,
-    "speedup": 1.3114006145809336
+    "tiersched": 47.737669,
+    "best_baseline": 44.227732,
+    "speedup": 1.0793605469075374
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.119143,
-    "best_baseline": 6.1034,
-    "speedup": 1.0025793819838125
+    "tiersched": 6.676678,
+    "best_baseline": 6.6635,
+    "speedup": 1.0019776393787048
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.354835,
-    "best_baseline": 7.1024,
-    "speedup": 1.0355422110835772
+    "tiersched": 8.142954,
+    "best_baseline": 7.8767,
+    "speedup": 1.0338027346477585
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.226157,
-    "best_baseline": 8.4996,
-    "speedup": 1.085481316767848
+    "tiersched": 10.486875,
+    "best_baseline": 9.6371,
+    "speedup": 1.088177460024281
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 51.817783,
-    "best_baseline": 47.5136,
-    "speedup": 1.0905884420460668
+    "tiersched": 81.296113,
+    "best_baseline": 70.7166,
+    "speedup": 1.149604378604175
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 81.576379,
-    "best_baseline": 75.3575,
-    "speedup": 1.0825250174169792
+    "tiersched": 90.586842,
+    "best_baseline": 81.926,
+    "speedup": 1.1057154261162512
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 81.576379,
-    "best_baseline": 75.4021,
-    "speedup": 1.0818847087813204
+    "tiersched": 90.586842,
+    "best_baseline": 81.9442,
+    "speedup": 1.1054698441134334
    }
   ],
   "served 512, planned 640": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.59766,
-    "best_baseline": 4.546815,
-    "speedup": 1.0111825530618688
+    "tiersched": 4.92039,
+    "best_baseline": 4.84679,
+    "speedup": 1.0151853082143025
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.242824,
-    "best_baseline": 5.055148,
-    "speedup": 1.0371257181787754
+    "tiersched": 5.668809,
+    "best_baseline": 5.425801,
+    "speedup": 1.0447874885201283
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.122553,
-    "best_baseline": 5.69145,
-    "speedup": 1.0757457238489314
+    "tiersched": 6.68824,
+    "best_baseline": 6.161921,
+    "speedup": 1.0854147594556958
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 14.72042,
-    "best_baseline": 13.136323,
-    "speedup": 1.1205890719952607
+    "tiersched": 16.317649,
+    "best_baseline": 14.409847,
+    "speedup": 1.1323957152355608
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 24.836897,
-    "best_baseline": 18.611694,
-    "speedup": 1.3344780437503432
+    "tiersched": 28.771847,
+    "best_baseline": 21.293573,
+    "speedup": 1.3511986457134273
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 44.390027,
-    "best_baseline": 31.966284,
-    "speedup": 1.388651461646277
+    "tiersched": 46.92025,
+    "best_baseline": 40.687534,
+    "speedup": 1.1531849042510172
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.95946,
-    "best_baseline": 5.976685,
-    "speedup": 0.9971179675689785
+    "tiersched": 6.488345,
+    "best_baseline": 6.501729,
+    "speedup": 0.9979414706457312
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.117474,
-    "best_baseline": 6.8873,
-    "speedup": 1.033420063014534
+    "tiersched": 7.869667,
+    "best_baseline": 7.613,
+    "speedup": 1.0337143044791803
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 8.861109,
-    "best_baseline": 8.1927,
-    "speedup": 1.081585924054341
+    "tiersched": 10.039658,
+    "best_baseline": 9.2445,
+    "speedup": 1.086014170587917
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 48.966181,
-    "best_baseline": 43.0339,
-    "speedup": 1.1378513451023495
+    "tiersched": 72.132096,
+    "best_baseline": 61.2301,
+    "speedup": 1.1780496193865435
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 79.027206,
-    "best_baseline": 73.1042,
-    "speedup": 1.0810214187420149
+    "tiersched": 87.574289,
+    "best_baseline": 79.2701,
+    "speedup": 1.1047581496680337
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 79.027206,
-    "best_baseline": 73.1554,
-    "speedup": 1.0802648334914444
+    "tiersched": 87.574289,
+    "best_baseline": 79.3183,
+    "speedup": 1.1040868122488758
    }
   ]
  },
@@ -2759,297 +2759,297 @@
   "pass-through x2": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.08192,
+    "best_baseline": 4.846776,
+    "speedup": 1.0485155493053526
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.852542,
+    "best_baseline": 5.425783,
+    "speedup": 1.0786539011973018
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 6.921737,
+    "best_baseline": 6.161898,
+    "speedup": 1.1233124923521942
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 16.869767,
+    "best_baseline": 14.409784,
+    "speedup": 1.1707161606308603
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.254598,
-    "best_baseline": 18.611694,
-    "speedup": 1.410650637174671
+    "tiersched": 29.175687,
+    "best_baseline": 21.293436,
+    "speedup": 1.370172808183705
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 40.539751,
-    "best_baseline": 31.966284,
-    "speedup": 1.2682034295885003
+    "tiersched": 44.761755,
+    "best_baseline": 40.687032,
+    "speedup": 1.100147953775542
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.773702,
+    "best_baseline": 6.501729,
+    "speedup": 1.0418308729877852
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.189655,
+    "best_baseline": 7.613,
+    "speedup": 1.0757460922106923
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.319769,
+    "best_baseline": 9.2445,
+    "speedup": 1.1163144572448482
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.652913,
-    "best_baseline": 43.0339,
-    "speedup": 1.2467592525892377
+    "tiersched": 70.23878,
+    "best_baseline": 61.2301,
+    "speedup": 1.1471282914775578
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.552492,
-    "best_baseline": 73.1042,
-    "speedup": 1.0061322331685456
+    "tiersched": 81.139758,
+    "best_baseline": 79.2701,
+    "speedup": 1.023585917010323
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.552492,
-    "best_baseline": 73.1554,
-    "speedup": 1.0054280613597903
+    "tiersched": 81.139758,
+    "best_baseline": 79.3183,
+    "speedup": 1.022963906185584
    }
   ],
   "pass-through x2, planned for x1": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.08192,
+    "best_baseline": 4.846776,
+    "speedup": 1.0485155493053526
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.852542,
+    "best_baseline": 5.425783,
+    "speedup": 1.0786539011973018
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 6.921737,
+    "best_baseline": 6.161898,
+    "speedup": 1.1233124923521942
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 16.782719,
+    "best_baseline": 14.409784,
+    "speedup": 1.1646752650837793
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.230473,
-    "best_baseline": 18.611694,
-    "speedup": 1.4093544091150434
+    "tiersched": 28.934911,
+    "best_baseline": 21.293436,
+    "speedup": 1.3588652859970556
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 39.004968,
-    "best_baseline": 31.966284,
-    "speedup": 1.2201908736092064
+    "tiersched": 41.041669,
+    "best_baseline": 40.687032,
+    "speedup": 1.0087162170000505
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.773702,
+    "best_baseline": 6.501729,
+    "speedup": 1.0418308729877852
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.170812,
+    "best_baseline": 7.613,
+    "speedup": 1.0732709838434256
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.319769,
+    "best_baseline": 9.2445,
+    "speedup": 1.1163144572448482
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 53.652913,
-    "best_baseline": 43.0339,
-    "speedup": 1.2467592525892377
+    "tiersched": 70.057867,
+    "best_baseline": 61.2301,
+    "speedup": 1.144173649887882
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 66.176331,
-    "best_baseline": 73.1042,
-    "speedup": 0.9052329551516876
+    "tiersched": 75.666342,
+    "best_baseline": 79.2701,
+    "speedup": 0.9545382432972837
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 66.176331,
-    "best_baseline": 73.1554,
-    "speedup": 0.9045994007277659
+    "tiersched": 75.666342,
+    "best_baseline": 79.3183,
+    "speedup": 0.953958191237079
    }
   ],
   "one request at a time": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.561507,
-    "best_baseline": 4.493262,
-    "speedup": 1.0151882974996784
+    "tiersched": 4.862043,
+    "best_baseline": 4.785054,
+    "speedup": 1.0160894735984172
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.079345,
-    "best_baseline": 4.996267,
-    "speedup": 1.0166280144756075
+    "tiersched": 5.454798,
+    "best_baseline": 5.359688,
+    "speedup": 1.01774543592836
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 5.738101,
-    "best_baseline": 5.626088,
-    "speedup": 1.0199095712687039
+    "tiersched": 6.221894,
+    "best_baseline": 6.091172,
+    "speedup": 1.021460894553626
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 13.500938,
-    "best_baseline": 13.134201,
-    "speedup": 1.0279222923419553
+    "tiersched": 14.903576,
+    "best_baseline": 14.40778,
+    "speedup": 1.0344116859085855
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 19.388793,
-    "best_baseline": 18.611202,
-    "speedup": 1.0417808049152333
+    "tiersched": 22.473866,
+    "best_baseline": 21.276178,
+    "speedup": 1.0562924412457915
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 34.076726,
-    "best_baseline": 31.923325,
-    "speedup": 1.0674554107380732
+    "tiersched": 42.890591,
+    "best_baseline": 40.658837,
+    "speedup": 1.0548897648007
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.928293,
-    "best_baseline": 5.9308,
-    "speedup": 0.9995772914278007
+    "tiersched": 6.448628,
+    "best_baseline": 6.4466,
+    "speedup": 1.0003145844321037
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 6.836364,
-    "best_baseline": 6.841,
-    "speedup": 0.9993223212980558
+    "tiersched": 7.537742,
+    "best_baseline": 7.5366,
+    "speedup": 1.000151527213863
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 8.072944,
-    "best_baseline": 8.0807,
-    "speedup": 0.9990401821624364
+    "tiersched": 9.069496,
+    "best_baseline": 9.0694,
+    "speedup": 1.0000105850442145
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 39.570882,
-    "best_baseline": 40.9851,
-    "speedup": 0.9654943381863164
+    "tiersched": 54.426535,
+    "best_baseline": 56.7072,
+    "speedup": 0.9597817384741267
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 73.552492,
-    "best_baseline": 73.1042,
-    "speedup": 1.0061322331685456
+    "tiersched": 81.139758,
+    "best_baseline": 79.2701,
+    "speedup": 1.023585917010323
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 73.552492,
-    "best_baseline": 73.1554,
-    "speedup": 1.0054280613597903
+    "tiersched": 81.139758,
+    "best_baseline": 79.3183,
+    "speedup": 1.022963906185584
    }
   ],
   "one request at a time, planned for concurrent": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.527752,
-    "best_baseline": 4.493262,
-    "speedup": 1.0076759378821
+    "tiersched": 4.849033,
+    "best_baseline": 4.785054,
+    "speedup": 1.0133705910110942
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.038948,
-    "best_baseline": 4.996267,
-    "speedup": 1.0085425778886519
+    "tiersched": 5.440914,
+    "best_baseline": 5.359688,
+    "speedup": 1.0151549866335503
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 5.663792,
-    "best_baseline": 5.626088,
-    "speedup": 1.0067016370877953
+    "tiersched": 6.221894,
+    "best_baseline": 6.091172,
+    "speedup": 1.021460894553626
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 13.426332,
-    "best_baseline": 13.134201,
-    "speedup": 1.0222420077171044
+    "tiersched": 14.687818,
+    "best_baseline": 14.40778,
+    "speedup": 1.0194365821799056
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 19.015415,
-    "best_baseline": 18.611202,
-    "speedup": 1.0217188013971372
+    "tiersched": 21.743661,
+    "best_baseline": 21.276178,
+    "speedup": 1.0219721324008475
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 27.798832,
-    "best_baseline": 31.923325,
-    "speedup": 0.8708000184817841
+    "tiersched": 28.867708,
+    "best_baseline": 40.658837,
+    "speedup": 0.7099983700960262
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 5.841368,
-    "best_baseline": 5.9308,
-    "speedup": 0.98492075268092
+    "tiersched": 6.363969,
+    "best_baseline": 6.4466,
+    "speedup": 0.9871822355970589
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 6.721029,
-    "best_baseline": 6.841,
-    "speedup": 0.982462944014033
+    "tiersched": 7.374302,
+    "best_baseline": 7.5366,
+    "speedup": 0.9784653557307008
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 7.912601,
-    "best_baseline": 8.0807,
-    "speedup": 0.9791974705161682
+    "tiersched": 8.83392,
+    "best_baseline": 9.0694,
+    "speedup": 0.9740357686285753
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 37.213284,
-    "best_baseline": 40.9851,
-    "speedup": 0.9079710431351882
+    "tiersched": 50.382418,
+    "best_baseline": 56.7072,
+    "speedup": 0.8884659796286891
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 48.073663,
-    "best_baseline": 73.1042,
-    "speedup": 0.657604665669004
+    "tiersched": 60.374875,
+    "best_baseline": 79.2701,
+    "speedup": 0.7616349039549591
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 48.073663,
-    "best_baseline": 73.1554,
-    "speedup": 0.657144421327749
+    "tiersched": 60.374875,
+    "best_baseline": 79.3183,
+    "speedup": 0.7611720750444728
    }
   ]
  },
@@ -3057,149 +3057,149 @@
   "NAND-only staging 0": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.74694,
-    "best_baseline": 4.546815,
-    "speedup": 1.0440143265120752
+    "tiersched": 5.090487,
+    "best_baseline": 4.84679,
+    "speedup": 1.0502800822812624
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.446012,
-    "best_baseline": 5.055148,
-    "speedup": 1.0773199914226053
+    "tiersched": 5.898175,
+    "best_baseline": 5.425801,
+    "speedup": 1.0870606938957033
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.39333,
-    "best_baseline": 5.69145,
-    "speedup": 1.123321824842527
+    "tiersched": 7.039178,
+    "best_baseline": 6.161921,
+    "speedup": 1.1423674532666028
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.508172,
-    "best_baseline": 13.136323,
-    "speedup": 1.1805565377769716
+    "tiersched": 17.271775,
+    "best_baseline": 14.409847,
+    "speedup": 1.1986091871759639
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 26.459312,
-    "best_baseline": 18.611694,
-    "speedup": 1.4216498508948192
+    "tiersched": 31.773567,
+    "best_baseline": 21.293573,
+    "speedup": 1.4921670026913756
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.854377,
-    "best_baseline": 31.966284,
-    "speedup": 1.3718947438494884
+    "tiersched": 46.557917,
+    "best_baseline": 40.687534,
+    "speedup": 1.144279645947577
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.220264,
-    "best_baseline": 5.976685,
-    "speedup": 1.0407548666192046
+    "tiersched": 6.787308,
+    "best_baseline": 6.501729,
+    "speedup": 1.0439235471057007
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.50822,
-    "best_baseline": 6.8873,
-    "speedup": 1.0901543420498598
+    "tiersched": 8.329954,
+    "best_baseline": 7.613,
+    "speedup": 1.094174963877578
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.468812,
-    "best_baseline": 8.1927,
-    "speedup": 1.155762080876878
+    "tiersched": 10.762583,
+    "best_baseline": 9.2445,
+    "speedup": 1.164214722267294
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 54.497756,
-    "best_baseline": 43.0339,
-    "speedup": 1.2663912868691891
+    "tiersched": 78.425472,
+    "best_baseline": 61.2301,
+    "speedup": 1.2808320090935668
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1042,
-    "speedup": 1.0123286213377618
+    "tiersched": 81.463074,
+    "best_baseline": 79.2701,
+    "speedup": 1.0276645797091213
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ],
   "NAND-only staging 1": [
    {
     "config": "CPU fp16 16H+32C",
-    "tiersched": 4.798407,
-    "best_baseline": 4.558592,
-    "speedup": 1.0526072524147807
+    "tiersched": 5.125036,
+    "best_baseline": 4.84679,
+    "speedup": 1.057408305290718
    },
    {
     "config": "CPU fp16 16H+48C",
-    "tiersched": 5.530929,
-    "best_baseline": 5.05885,
-    "speedup": 1.093317453571464
+    "tiersched": 5.942867,
+    "best_baseline": 5.425801,
+    "speedup": 1.095297634395364
    },
    {
     "config": "CPU fp16 16H+64C",
-    "tiersched": 6.527063,
-    "best_baseline": 5.69145,
-    "speedup": 1.1468190004304704
+    "tiersched": 7.080632,
+    "best_baseline": 6.161921,
+    "speedup": 1.1490949007622784
    },
    {
     "config": "CPU int8 16H+32C",
-    "tiersched": 15.893904,
-    "best_baseline": 13.136323,
-    "speedup": 1.2099203102725167
+    "tiersched": 17.796054,
+    "best_baseline": 14.409847,
+    "speedup": 1.2349925713992662
    },
    {
     "config": "CPU int8 16H+48C",
-    "tiersched": 28.327663,
-    "best_baseline": 18.611694,
-    "speedup": 1.5220357158246853
+    "tiersched": 33.773502,
+    "best_baseline": 21.293573,
+    "speedup": 1.5860890044146185
    },
    {
     "config": "CPU int8 16H+64C",
-    "tiersched": 43.969283,
-    "best_baseline": 32.866687,
-    "speedup": 1.3378069715392975
+    "tiersched": 46.620797,
+    "best_baseline": 46.4099,
+    "speedup": 1.0045442244003975
    },
    {
     "config": "GPU fp16 16H+32C",
-    "tiersched": 6.300138,
-    "best_baseline": 6.058602,
-    "speedup": 1.0398666226961268
+    "tiersched": 6.887844,
+    "best_baseline": 6.530618,
+    "speedup": 1.0547001830454639
    },
    {
     "config": "GPU fp16 16H+48C",
-    "tiersched": 7.631417,
-    "best_baseline": 6.925405,
-    "speedup": 1.1019452291959821
+    "tiersched": 8.50365,
+    "best_baseline": 7.6226,
+    "speedup": 1.1155839214966021
    },
    {
     "config": "GPU fp16 16H+64C",
-    "tiersched": 9.681295,
-    "best_baseline": 8.208,
-    "speedup": 1.1794950048732944
+    "tiersched": 11.069974,
+    "best_baseline": 9.2585,
+    "speedup": 1.19565523572933
    },
    {
     "config": "GPU int8 16H+32C",
-    "tiersched": 67.181655,
-    "best_baseline": 43.4613,
-    "speedup": 1.5457810741970444
+    "tiersched": 81.328625,
+    "best_baseline": 61.8532,
+    "speedup": 1.3148652777867595
    },
    {
     "config": "GPU int8 16H+48C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1555,
-    "speedup": 1.0116187299656212
+    "tiersched": 81.463074,
+    "best_baseline": 79.3185,
+    "speedup": 1.0270375007091663
    },
    {
     "config": "GPU int8 16H+64C",
-    "tiersched": 74.005474,
-    "best_baseline": 73.1554,
-    "speedup": 1.011620112800969
+    "tiersched": 81.463074,
+    "best_baseline": 79.3183,
+    "speedup": 1.027040090370066
    }
   ]
  }

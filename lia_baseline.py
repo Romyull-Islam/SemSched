@@ -12,12 +12,12 @@
 
 import math
 import pandas as pd
-from tiers import kv_growth_spill_time_s
+from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
 from tiers import (
     GiB, HOST_DRAM, CXL_DRAM, CXL_SSD_NAND,
     transfer_time_s, Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S
 )
-from model_cfg import build_layers, BYTES_PER_PARAM
+from model_cfg import build_layers, BYTES_PER_PARAM, bytes_read, embedding_last
 from tiers import GPU_HBM
 from pipeline import pipelined_time_s
 
@@ -65,32 +65,40 @@ layers = build_layers(sequence_length=PREFILL_TOKENS)
 kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 
 
-# Placement: GPU HBM, then CXL device DRAM, then NAND. LIA is single-GPU
+# Placement: GPU HBM, then CXL device DRAM, then NAND, in model order with the
+# embedding table last (model_cfg.embedding_last). LIA is single-GPU
 # inference (Sapphire Rapids with an A100 or H100), so CXL is the tier below the
 # GPU. Host DRAM holds only the KV cache.
-placement = []
 gpu_free  = gpu_hbm_capacity_bytes
 
 # KV is reserved at the generation mean, PREFILL_TOKENS + TOKENS/2. What does not
-# fit in host DRAM (e.g. 20.31 GiB of KV against a 16 GiB host at FP16 B=128)
-# goes to CXL device DRAM, where it displaces weights and is read at 27 GB/s
-# instead of 38.4 GB/s.
+# fit in host DRAM (e.g. 25 GiB of KV against a 16 GiB host at FP16 B=128 with
+# 256 decode tokens) goes to CXL device DRAM, where it displaces weights and is
+# read at 27 GB/s instead of 38.4 GB/s; what does not fit there either is read
+# from NAND.
 _kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
                    * (PREFILL_TOKENS + TOKENS / 2.0))
-_kv_in_host  = min(_kv_resident, host_dram_capacity_bytes)
-_kv_in_cxl   = max(0, _kv_resident - host_dram_capacity_bytes)
-_kv_cxl_frac = (_kv_in_cxl / _kv_resident) if _kv_resident else 0.0
+_kv_split, _kv_took = kv_cascade(_kv_resident,
+                                 [("host", host_dram_capacity_bytes),
+                                  ("cxl", cxl_dev_dram_capacity_bytes)])
+_kv_in_host  = _kv_took.get("host", 0.0)
+_kv_in_cxl   = _kv_took.get("cxl", 0.0)
+_kv_cxl_frac  = _kv_split.get("cxl", 0.0)
+_kv_nand_frac = _kv_split.get("nand", 0.0)
+_kv_host_frac = 1.0 - _kv_cxl_frac - _kv_nand_frac
 
 cxl_free  = max(0, cxl_dev_dram_capacity_bytes - _kv_in_cxl)
-for L in layers:
+placement = [None] * len(layers)
+for i in embedding_last(layers):
+    L = layers[i]
     if L["bytes"] <= gpu_free:
-        placement.append(PL_GPU_HBM)
+        placement[i] = PL_GPU_HBM
         gpu_free -= L["bytes"]
     elif L["bytes"] <= cxl_free:
-        placement.append(PL_CXL_DEV_DRAM)
+        placement[i] = PL_CXL_DEV_DRAM
         cxl_free -= L["bytes"]
     else:
-        placement.append(PL_CXL_DEV_NAND)
+        placement[i] = PL_CXL_DEV_NAND
 
 # Staging for the next-layer prefetch. pipeline.py moves the issue point earlier
 # than unit i-1 only if the in-flight bytes fit in this budget, and the cascade
@@ -107,12 +115,13 @@ _LIA_STAGING = min(_LIA_DOUBLE_BUF, gpu_free + cxl_free + _LIA_HOST_FREE)
 prefill_latency = 0.0
 for i, L in enumerate(layers):
     comp_s = compute_time_s(L["flops"] * PREFILL_TOKENS * BATCH_SIZE)
+    b = bytes_read(L, PREFILL_TOKENS * BATCH_SIZE)
     if placement[i] == PL_CXL_DEV_DRAM:
-        mem_time = cxl_time_s(L["bytes"])
+        mem_time = cxl_time_s(b)
     elif placement[i] == PL_CXL_DEV_NAND:
-        mem_time = nand_time_s(L["bytes"])
+        mem_time = nand_time_s(b)
     else:
-        mem_time = dram_time_s(L["bytes"])
+        mem_time = dram_time_s(b)
     prefill_latency += max(comp_s, mem_time)
 
 
@@ -131,7 +140,7 @@ for token_step in range(TOKENS):
     step_write_stall_s = 0.0
 
     for i, L in enumerate(layers):
-        weight_sz = L["bytes"]
+        weight_sz = bytes_read(L, BATCH_SIZE)
         kv_scaled = kv_inc[L["name"]] * BATCH_SIZE
         comp_s    = compute_time_s(L["flops"] * BATCH_SIZE)
 
@@ -148,10 +157,11 @@ for token_step in range(TOKENS):
         if kv_scaled > 0:
             kv_positions_cached = PREFILL_TOKENS + token_step
             kv_read_bytes = kv_positions_cached * kv_inc[L["name"]] * BATCH_SIZE
-            # The share that did not fit in host DRAM is read from device DRAM.
-            kv_read_time  = (dram_time_s(kv_read_bytes * (1.0 - _kv_cxl_frac))
-                             + (cxl_time_s(kv_read_bytes * _kv_cxl_frac)
-                                if _kv_cxl_frac > 0 else 0.0))
+            # The share that did not fit in host DRAM is read from device DRAM,
+            # and what did not fit there from NAND.
+            kv_read_time  = (dram_time_s(kv_read_bytes * _kv_host_frac)
+                             + cxl_time_s(kv_read_bytes * _kv_cxl_frac)
+                             + nand_time_s(kv_read_bytes * _kv_nand_frac))
 
         read_stall = max(0.0, weight_mem_time - comp_s)
         total_read_stall_s += read_stall
@@ -161,9 +171,9 @@ for token_step in range(TOKENS):
         # the max of compute, weight read, and KV read + write (which share DDR).
         kv_write_time = 0.0
         if kv_scaled > 0:
-            kv_write_time           = (dram_time_s(kv_scaled * (1.0 - _kv_cxl_frac))
-                                       + (cxl_time_s(kv_scaled * _kv_cxl_frac)
-                                          if _kv_cxl_frac > 0 else 0.0))
+            kv_write_time           = (dram_time_s(kv_scaled * _kv_host_frac)
+                                       + cxl_time_s(kv_scaled * _kv_cxl_frac)
+                                       + nand_time_s(kv_scaled * _kv_nand_frac))
             total_kv_write_stall_s += kv_write_time
             step_write_stall_s     += kv_write_time
             if token_step == 0:
@@ -173,8 +183,9 @@ for token_step in range(TOKENS):
         ltime        = max(comp_s, weight_mem_time, kv_total_ddr_time)
         _by = {placement[i]: weight_sz}
         if kv_scaled > 0:
-            for _t, _f in (("Host DRAM", 1.0 - _kv_cxl_frac),
-                           ("CXL Device DRAM", _kv_cxl_frac)):
+            for _t, _f in (("Host DRAM", _kv_host_frac),
+                           ("CXL Device DRAM", _kv_cxl_frac),
+                           ("CXL Device NAND", _kv_nand_frac)):
                 _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
         units.append((_by, comp_s))
         step_time_s += 0.0
@@ -183,7 +194,7 @@ for token_step in range(TOKENS):
                                     inflight_budget=max(0.0, _LIA_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, HOST_DRAM)
+        _kv_resident, kv_tail(_kv_split))
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0
