@@ -100,19 +100,67 @@ def kv_tail(split, tier_of=KV_TIER_OF):
     return tier_of[list(split)[-1]] if split else HOST_DRAM
 
 
-def kv_growth_spill_time_s(kv_now, kv_reserved, kv_tier, nand=CXL_DEVICE_NAND):
+def kv_step_split(kv_split, kv_reserved, kv_now):
+    """Share of a step's KV reads on each tier, {key: fraction}: the reserved
+    bytes where kv_cascade put them, and what the cache has grown past its
+    reservation on its last tier (kv_tail), in free room or in place of weights
+    (kv_growth_spill_time_s charges those)."""
+    if not kv_split or kv_now <= 0:
+        return dict(kv_split)
+    ex = max(0.0, 1.0 - kv_reserved / kv_now)
+    out = {k: f * (1.0 - ex) for k, f in kv_split.items()}
+    tail = list(kv_split)[-1]
+    out[tail] = out.get(tail, 0.0) + ex
+    return out
+
+
+def kv_reserve_level(script):
+    """Where a baseline reserves its KV cache: at kv(PREFILL + level x TOKENS).
+
+    A policy can reserve the cache at the generation mean (level 0.5, more room
+    for weights early on) or at its peak (level 1.0, FlexGen's preallocation).
+    Which is faster depends on the configuration, so unless KV_RESERVE_LEVEL is
+    set, the calling script runs itself at both levels, prints the faster run's
+    output and exits; TierSched searches the level instead.
+    """
+    import os
+    import re
+    import subprocess
+    import sys
+    v = os.environ.get("KV_RESERVE_LEVEL")
+    if v:
+        return float(v)
+    best = None
+    for lvl in ("0.5", "1.0"):
+        r = subprocess.run([sys.executable, script], capture_output=True, text=True,
+                           env={**os.environ, "KV_RESERVE_LEVEL": lvl})
+        m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
+        t = float(m.group(1)) if m else float("-inf")
+        if best is None or t > best[0]:
+            best = (t, r, lvl)
+    sys.stdout.write(best[1].stdout)
+    sys.stderr.write(best[1].stderr)
+    print(f"KV reserved at {'its peak' if best[2] == '1.0' else 'the generation mean'}"
+          " (the faster of the two)")
+    sys.exit(best[1].returncode)
+
+
+def kv_growth_spill_time_s(kv_now, kv_reserved, kv_tier, nand=CXL_DEVICE_NAND,
+                           headroom=0.0):
     """Extra time per decode step once the KV cache outgrows its reservation.
 
-    Placement reserves KV at the generation mean, PREFILL + TOKENS/2, so past the
-    midpoint the excess displaces weights from the tier the cache grows into
-    (kv_tail). Those weights are then read from NAND on every later step, so the
-    cost charged is the bandwidth difference on the excess bytes; a cache that
-    already overflows to NAND displaces nothing.
+    Placement reserves KV below its peak (at the generation mean, PREFILL +
+    TOKENS/2, unless a policy reserves more), so past that point the cache grows
+    first into `headroom`, the bytes its tier (kv_tail) still has free after
+    placement, and beyond that displaces weights from the tier. Those weights are
+    then read from NAND on every later step, so the cost charged is the bandwidth
+    difference on the excess bytes; a cache that already overflows to NAND
+    displaces nothing.
 
     The excess is 0.31 GB at FP16 B=128 with 16 decode steps, but 10 GB at 512,
-    so generation-length sweeps need it. All five policies call it.
+    so generation-length sweeps need it. Every policy calls it.
     """
-    over = max(0.0, kv_now - kv_reserved)
+    over = max(0.0, kv_now - kv_reserved - headroom)
     if over <= 0 or kv_tier.bw_Bps <= 0:
         return 0.0
     return over * (1.0 / nand.bw_Bps - 1.0 / kv_tier.bw_Bps)

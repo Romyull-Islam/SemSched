@@ -1,12 +1,12 @@
 """
 Timeline of one decode step, with the tiers filled and with a searched reserve.
 
-With the tiers filled, a NAND read lands on the critical path; with a reserve,
-the same read is issued ahead and completes behind fast-tier work. The unit
+With the tiers filled, no read can start before the compute that frees its
+room, so NAND stops while compute runs; with a reserve, NAND reads run ahead and
+the bus stays busy. The unit
 list is dumped from a real decode step of the shipped scheduler and of the
-same scheduler pinned to a filled device. schedule() replays it with a copy of
-the timing engine that records events, and asserts its end time equals
-pipelined_time_s on the same units.
+same scheduler pinned to a filled device. schedule() replays it through
+pipelined_time_s, which records the schedule it times.
 
     python plot_overlap.py            # run both schedulers, then plot
     python plot_overlap.py --cached   # replot from overlap_data.json
@@ -31,11 +31,7 @@ DATA = os.path.join(REPO, "overlap_data.json")
 OUT = os.path.join(REPO, "figures", "fig_overlap.pdf")
 sys.path.insert(0, REPO)
 
-from pipeline import (pipelined_time_s, SHARED_LINK, NAND_PASS_THROUGH,  # noqa: E402
-                      DEVICE_SERIAL, DEVICE_DRAM, DEVICE_NAND, staged_bytes)
-from tiers import CXL_HOST_LINK_CEILING                     # noqa: E402
-
-CHUNK = 256 * 1024
+from pipeline import pipelined_time_s                       # noqa: E402
 
 # The dump is injected right before the decode loop's engine call, so the plot
 # shows the schedule behind the reported number.
@@ -46,7 +42,7 @@ ANCHOR = """            lat = pipelined_time_s(units, PREFETCH_QUEUE_DEPTH, TIER
 DUMP = """            if token_step == 0 and not __import__("os").path.exists("overlap_dump.json"):
                 __import__("json").dump(
                     {"units": [[bt, c] for bt, c in units],
-                     "depth": PREFETCH_QUEUE_DEPTH,
+                     "depth": PREFETCH_QUEUE_DEPTH, "blocks": TRANSFER_BLOCKS,
                      "budget": max(0.0, _prefetch_reserve
                                    - pf_stats["bytes_prefetched"]),
                      "bw": TIER_BW, "lat": TIER_LAT},
@@ -56,10 +52,10 @@ DUMP = """            if token_step == 0 and not __import__("os").path.exists("o
 # Pins for the filled variant, the same as plot_reserve_curve.py: zero reserve,
 # KV on the device, full device capacity.
 PINS = [
-    ("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""",
-     "        _fr = (0.0,)"),
-    ('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
+    ("""        _rf = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+               0.13, 0.16, 0.20, 0.30, 0.40, 0.50)""",
+     "        _rf = (0.0,)"),
+    ('_kv_opts = ["cxl", "host", "stripe"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
      '_kv_opts = ["cxl"]'),
     ("""        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
@@ -89,56 +85,16 @@ def measure(pin):
 
 
 def schedule(d):
-    """Replica of pipelined_time_s that records events; asserted against it."""
+    """The engine's own schedule of a dumped step: transfers (unit, bus, start,
+    end) and computes (unit, start, end), units counted in sub-layers."""
     units = [(bt, c) for bt, c in d["units"]]
-    depth, budget, bw, lat = d["depth"], d["budget"], d["bw"], d["lat"]
-    tier_free, link_free, prev_end = {}, 0.0, 0.0
-    comp_done = [0.0] * len(units)
-    xfer, comp = [], []                     # (i, tier, start, end), (i, start, end)
-    for i, (by, c) in enumerate(units):
-        j = i - depth - 1
-        issue = comp_done[j] if j >= 0 else 0.0
-        if budget is not None:
-            m, acc = i - 1, staged_bytes(by)
-            while m > j and m >= 0:
-                nxt = staged_bytes(units[m][0])
-                if acc + nxt > budget:
-                    break
-                acc += nxt
-                m -= 1
-            issue = max(issue, comp_done[m] if m >= 0 else 0.0)
-        ready = issue
-        for tier, nb in by.items():
-            if nb <= 0 or not bw.get(tier):
-                continue
-            dur = nb / bw[tier]
-            if lat.get(tier, 0.0):
-                dur += math.ceil(nb / CHUNK) * lat[tier]
-            start = max(issue, tier_free.get(tier, 0.0))
-            if tier in SHARED_LINK:
-                start = max(start, link_free)
-                link_free = start + nb / CXL_HOST_LINK_CEILING
-            end = start + dur
-            tier_free[tier] = end
-            if DEVICE_SERIAL and tier in SHARED_LINK:
-                tier_free[DEVICE_DRAM] = tier_free[DEVICE_NAND] = end
-            xfer.append((i, tier, start, end))
-            if (NAND_PASS_THROUGH and not DEVICE_SERIAL and tier == DEVICE_NAND
-                    and bw.get(DEVICE_DRAM)):
-                # The cache fill and read-out also hold the device DRAM.
-                d0 = max(start, tier_free.get(DEVICE_DRAM, 0.0))
-                d1 = d0 + NAND_PASS_THROUGH * nb / bw[DEVICE_DRAM]
-                tier_free[DEVICE_DRAM] = d1
-                end = max(end, d1)
-            ready = max(ready, end)
-        s0 = max(ready, prev_end)
-        prev_end = s0 + c
-        comp_done[i] = prev_end
-        comp.append((i, s0, prev_end))
-    truth = pipelined_time_s(units, depth, bw, lat, inflight_budget=budget)
-    assert abs(prev_end - truth) <= 1e-12 * max(1.0, truth), \
-        f"trace diverged from the engine: {prev_end} vs {truth}"
-    return xfer, comp, prev_end
+    k = d.get("blocks", 1)
+    ev = []
+    t = pipelined_time_s(units, d["depth"], d["bw"], d["lat"],
+                         inflight_budget=d["budget"], blocks=k, trace=ev)
+    xfer = [(i // k, bus, s, e) for kind, i, bus, s, e in ev if kind == "xfer"]
+    comp = [(i // k, s, e) for kind, i, _, s, e in ev if kind == "comp"]
+    return xfer, comp, t
 
 
 ROWS = ["Compute", "Host DRAM", "CXL DRAM", "NAND"]
@@ -161,8 +117,9 @@ def panel(ax, d, i0, i1, label, step_s):
         if r is None:
             continue
         y = {"Host DRAM": 2, "CXL DRAM": 1, "NAND": 0}[r]
+        # No edge line: back-to-back block transfers would vanish under it.
         ax.barh(y, (e - s) * 1e3, left=(s - t0) * 1e3, height=0.62,
-                color=COL[r], edgecolor="white", linewidth=0.3)
+                color=COL[r], edgecolor="none", linewidth=0)
     ax.set_yticks([3, 2, 1, 0])
     ax.set_yticklabels(ROWS, fontsize=6.6)
     ax.set_ylim(-0.55, 3.55)
@@ -203,9 +160,9 @@ def main():
     })
     fig, axes = plt.subplots(2, 1, figsize=(3.45, 2.35), sharex=True)
     end_a = panel(axes[0], data["filled"], i0, i1,
-                  "(a) tiers filled: NAND on the critical path", t_fil)
+                  "(a) tiers filled: NAND stops while compute runs", t_fil)
     end_b = panel(axes[1], data["reserved"], i0, i1,
-                  "(b) searched reserve: same reads issued ahead", t_res)
+                  "(b) searched reserve: NAND reads run ahead", t_res)
     lim = max(end_a, end_b) * 1e3 * 1.03
     for ax in axes:
         ax.set_xlim(0, lim)

@@ -96,7 +96,8 @@ The default cell, matching the main artifact's headline:
 | CXL device DRAM cache | 48 GB DDR4-2666 | 27 GB/s | 505 ns |
 | CXL NAND backend | 1 TB | 5 GB/s | 1547 ns |
 
-Model: Qwen2.5 72B FP16, 145 GB, so 81 GB is NAND-resident and must be staged.
+Model: Qwen2.5 72B FP16, 145 GB, so with 16 GB of host DRAM and 48 GB of device
+DRAM most of the model is NAND-resident and must be staged.
 
 ## What this can and cannot settle
 
@@ -105,5 +106,5 @@ into a device-side DRAM cache behaves as modeled, and whether a real memory
 controller changes the picture.
 
 It cannot re-run the **comparison**. The baselines are policies, not workloads;
-reproducing four papers inside gem5 is out of scope. Ratios remain a property of
+reproducing five papers inside gem5 is out of scope. Ratios remain a property of
 the main artifact.

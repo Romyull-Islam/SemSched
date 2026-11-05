@@ -3,9 +3,9 @@ Motivation figure: decode throughput against the share of fast memory held
 back as prefetch staging.
 
 Published policies fill their fast tiers completely, the leftmost point of
-each curve. Every curve peaks at an interior reserve worth 15-55%, and the
-peak moves with quantization, capacity and platform (5%, 8%, 12%, 20% across
-the four configurations), so the reserve has to be searched rather than fixed.
+each curve. Every curve peaks at a small non-zero reserve (0.5-1% of host and
+device DRAM, because TierSched stages a block at a time) and falls once the
+reserve pushes more data to NAND than the overlap hides.
 
 Data comes from reserve_curve.json, produced by pinning the scheduler's reserve
 grid to a single fraction and sweeping it. Regenerate with:
@@ -33,7 +33,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(REPO, "reserve_curve.json")
 OUT = os.path.join(REPO, "figures", "fig_reserve_curve.pdf")
 
-FRACS = [0.0, 0.02, 0.05, 0.08, 0.12, 0.16, 0.20, 0.25, 0.30, 0.40]
+FRACS = [0.0, 0.0025, 0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.40]
 CASES = [
     ("INT8, 16H+48C, CPU",   "int8", 48, 0),
     ("FP16, 16H+64C, CPU",   "fp16", 64, 0),
@@ -60,10 +60,11 @@ def measure():
             # device, full device capacity. Each replace asserts its anchor; a
             # silent no-op would re-run the default search at every point.
             reps = [
-                ("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""",
-                 f"        _fr = ({frac},)"),
-                ('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
+                ("""        _rf = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+               0.13, 0.16, 0.20, 0.30, 0.40, 0.50)""",
+                 f"        _rf = ({frac},)"),
+                ('        _splits = ("host", "device", "even")', '        _splits = ("even",)'),
+                ('_kv_opts = ["cxl", "host", "stripe"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
                  '_kv_opts = ["cxl"]'),
                 ("""        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
@@ -119,32 +120,38 @@ def plot(data):
                 markeredgewidth=0.8, zorder=4, clip_on=False)
 
     ax.axhline(1.0, color="#555555", linewidth=0.7, linestyle=(0, (4, 3)), zorder=1)
-    ax.text(40.2, 1.005, "parity with best baseline", ha="right", va="bottom",
-            fontsize=6.6, color="#555555")
 
     # Every published policy fills its tiers; that is x = 0.
     ax.axvline(0, color="#B00020", linewidth=0.8, zorder=2)
     # Arrow points at the x = 0 line below all data points, so it is not read
     # as one curve's value.
-    ax.annotate("every published policy\nfills its tiers (zero reserve)",
-                xy=(0, 0.585), xytext=(6.5, 0.56),
+    lo = min(min(t / d["base"] for t in d["tps"]) for d in data.values())
+    hi = max(max(t / d["base"] for t in d["tps"]) for d in data.values())
+    ax.annotate("filled tiers\n(zero reserve)",
+                xy=(0, lo + 0.04), xytext=(0.06, lo + 0.03),
                 fontsize=6.8, color="#B00020", ha="left", va="center",
                 arrowprops=dict(arrowstyle="-|>", color="#B00020", mutation_scale=9,
                                 linewidth=1.1, shrinkA=0, shrinkB=2))
 
     ax.set_xlabel("fast memory held back as prefetch staging (%)")
     ax.set_ylabel("decode throughput\nvs. best baseline")
-    ax.set_xlim(-1, 40.5)
-    # Lower limit must sit under the worst measured point (0.53 at 32C, 40%),
-    # or clip_on=False draws that curve outside the axes frame.
-    ax.set_ylim(0.50, 1.55)
+    # The best reserves are below 1%, so the axis is linear up to 0.25% and
+    # logarithmic above it.
+    ax.set_xscale("symlog", linthresh=0.25, linscale=0.6)
+    ax.set_xticks([0, 0.25, 0.5, 1, 2, 4, 8, 16, 40])
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax.set_xlim(-0.02, 42)
+    # Limits sit outside every measured point, or clip_on=False draws a curve
+    # outside the axes frame.
+    ax.set_ylim(lo - 0.04, hi + 0.12)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.2f}$\\times$"))
     ax.grid(axis="y", color="#DDDDDD", linewidth=0.55, zorder=0)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.legend(loc="upper right", frameon=False, handlelength=2.1,
-              borderaxespad=0.3, labelspacing=0.32)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.56, 0.0), frameon=False,
+              handlelength=2.1, borderaxespad=0.3, labelspacing=0.32)
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     fig.tight_layout(pad=0.35)

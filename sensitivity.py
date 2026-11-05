@@ -1,7 +1,7 @@
 """
 Robustness of the main result to the assumptions a CMM-H deployment could
 break. Every sweep reruns the twelve configurations of Table II and reports
-TierSched's speedup over the best of the four baselines in each one.
+TierSched's speedup over the best of the baselines in each one.
 
     python sensitivity.py hints      # device ignores a fraction of prefetch hints
     python sensitivity.py nandbw     # NAND bandwidth 2.5 / 5 / 7.5 GB/s
@@ -14,6 +14,9 @@ TierSched's speedup over the best of the four baselines in each one.
     python sensitivity.py headroom   # plan for 12.5-25% more or less context than served
     python sensitivity.py device     # NAND bytes cross device DRAM twice; device serves one request at a time
     python sensitivity.py staging    # only NAND bytes count against the staging budget
+    python sensitivity.py busorder   # every bus serves requests strictly in issue order
+    python sensitivity.py hostlink   # device host link at the device's measured 27 GB/s
+    python sensitivity.py hostbw     # host DRAM at 161 GB/s (12 channels)
     python sensitivity.py all
 
 Results go to sensitivity.json, keyed by sweep and setting.
@@ -35,7 +38,7 @@ CONFIGS = [(q, c, g) for g in (0, R.GPU_GB) for q in R.QUANTS for c in R.CXLS]
 
 
 def cell(sim, quant, cxl, gpu, nand_bw=None, nand_lat=None, prefill=None,
-         batch=R.BATCH, env=None):
+         batch=R.BATCH, env=None, link_bw=None, host_bw=None):
     """Decode tokens/s of one simulator in one configuration, or None."""
     with tempfile.TemporaryDirectory() as td:
         for f in R.DEPS + [s for _, s in R.SIMS]:
@@ -50,6 +53,22 @@ def cell(sim, quant, cxl, gpu, nand_bw=None, nand_lat=None, prefill=None,
                            f'CXL_DEVICE_NAND = Tier("CXL Device NAND (CMM-H)", '
                            f'{nand_bw or 5.0e9}, {nand_lat or 1.547e-6})', s, 1)
             assert n == 1, "NAND tier anchor drifted"
+            open(p, "w").write(s)
+        if link_bw or host_bw:
+            p = os.path.join(td, "tiers.py")
+            s = open(p).read()
+            reps = []
+            if link_bw:
+                reps.append(("CXL_HOST_LINK_CEILING  = 31.5e9",
+                             f"CXL_HOST_LINK_CEILING  = {link_bw!r}"))
+            if host_bw:
+                reps += [('HOST_DRAM = Tier("Host DRAM", 38.4e9',
+                          f'HOST_DRAM = Tier("Host DRAM", {host_bw!r}'),
+                         ("HOST_DRAM_CEILING      = 38.4e9",
+                          f"HOST_DRAM_CEILING      = {host_bw!r}")]
+            for a, b in reps:
+                assert s.count(a) == 1, a
+                s = s.replace(a, b, 1)
             open(p, "w").write(s)
         r = subprocess.run([sys.executable, sim], cwd=td, capture_output=True,
                            text=True, timeout=1800, env={**os.environ, **(env or {})})
@@ -133,6 +152,23 @@ SWEEPS = {
     # read ahead; the plan is made under the same accounting.
     "staging": lambda: speedups([(f"NAND-only staging {v}", {"env": {"STAGE_NAND_ONLY": v}})
                                  for v in ("0", "1")]),
+    # Every bus serves its requests strictly in issue order, so a cache hit waits
+    # behind a NAND fill queued before it; planned for that device and, as a
+    # plan made for the wrong device, for the default one.
+    "busorder": lambda: speedups([
+        ("in issue order", {"env": {"BUS_ORDER": "fifo"}}),
+        ("in issue order, planned for the default",
+         {"env": {"BUS_ORDER": "fifo"},
+          "sem": {"env": {"BUS_ORDER": "fifo", "TIERSCHED_PLAN_DEVICE": "default"}}}),
+    ]),
+    # The device's host link at the 27 GB/s Soltaniyeh et al. measure for its
+    # cache hits instead of the PCIe Gen5 x8 rate.
+    "hostlink": lambda: speedups([(f"host link {v / 1e9:g} GB/s", {"link_bw": v})
+                                  for v in (31.5e9, 27e9)]),
+    # Host DRAM at the 161 GB/s of a 12-channel socket (Soltaniyeh et al.,
+    # Table 2) instead of one channel, at the same 16 GB.
+    "hostbw": lambda: speedups([(f"host {v / 1e9:g} GB/s", {"host_bw": v})
+                                for v in (38.4e9, 161e9)]),
     # Plan once for 512-token prompts; serve prompts of another length. The
     # baselines need no plan, so they run at the served length either way.
     "mismatch": lambda: {

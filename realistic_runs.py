@@ -32,11 +32,13 @@ NAMES = {s: n for n, s in R.SIMS}
 # The search's device-size loop, extended to host sizes as well. Each anchor
 # is asserted, so a drifted file cannot silently run the unmodified search.
 SPLIT = [
-    ("        for _devcap in _dev_caps:\n            _caps0[\"cxl\"] = _devcap",
+    ("        for _devcap, _kvt, _lvl in [(d, k, l) for d in _dev_caps for k in _kv_opts",
      "        _host_caps = [host_dram_capacity_bytes * f for f in (1.0, 0.9, 0.75, 0.5)]\n"
-     "        for _devcap in [(d, h) for d in _dev_caps for h in _host_caps]:\n"
-     "            _caps0[\"cxl\"], _caps0[\"host\"] = _devcap"),
-    ("            _caps0[\"cxl\"] = _devcap          # _kv_place inside _exact reads it",
+     "        for _devcap, _kvt, _lvl in [((d, h), k, l) for d in _dev_caps"
+     " for h in _host_caps for k in _kv_opts"),
+    ("            _caps0[\"cxl\"] = _devcap\n            _kv_mean",
+     "            _caps0[\"cxl\"], _caps0[\"host\"] = _devcap\n            _kv_mean"),
+    ("            _caps0[\"cxl\"] = _devcap          # _kv_place inside _decode_time reads it",
      "            _caps0[\"cxl\"], _caps0[\"host\"] = _devcap"),
     ("        _caps0[\"cxl\"] = _best_devcap\n",
      "        _caps0[\"cxl\"], _caps0[\"host\"] = _best_devcap\n"

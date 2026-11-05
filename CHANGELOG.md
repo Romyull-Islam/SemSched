@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased (2026-11-05)
+
+Every reported number changes; `REPRODUCE.md` regenerates all of them.
+
+**Timing engine**
+- Buses take each request in the earliest idle stretch at or after it can
+  start (`BUS_ORDER=fill`), so a cache hit no longer waits behind a NAND fill
+  queued before it. The old strict issue order is `BUS_ORDER=fifo`. Under the
+  old order, splitting the same bytes into smaller transfers could make a step
+  up to 33% slower.
+- Units can move in blocks (`blocks=`, `PIPELINE_BLOCKS`), each issued when its
+  unit would be and computed as soon as it lands.
+- The engine can record its schedule (`trace=`); Fig. 4 is drawn from it.
+- The differential test checks the new order against a reference written
+  independently from its specification, and the old order against the old one.
+
+**TierSched**
+- Stripes every sub-layer, and optionally the KV cache, across the tiers in
+  the proportions of a capacity fill; moves each sub-layer in eight blocks.
+- Searches the layout (contiguous, contiguous with the NAND residue spread,
+  striped), the KV placement (one tier or striped) and its reservation (the
+  generation mean or the peak), and a reserve given as a share of host plus
+  device DRAM split three ways. Finalists are timed at nine steps.
+
+**Baselines**
+- FlexGen applies its weight fractions to every layer, as its code does.
+- ITME added.
+- Every baseline reserves its KV cache at the generation mean or at its peak,
+  whichever is faster. Growth past the reservation sits on the cache's last
+  tier, in free room first, for every policy.
+- The dynamic baseline also runs with unbounded lookahead (Cao et al.'s
+  Aggressive); tuned baselines may use block transfers.
+
+**Analysis**
+- `bound.py`: a lower bound on decode step time that holds for any policy.
+  Table II reports each policy against it, and `verify_results.py` checks that
+  no policy beats it.
+
 ## v2.0-bigdata2026 (2026-08-17)
 
 Artifact of the IEEE BigData 2026 submission, *Trading Memory Capacity for

@@ -12,12 +12,16 @@
 
 import math
 import pandas as pd
+from tiers import kv_reserve_level, kv_step_split
 from tiers import (GiB, HOST_DRAM, CXL_DRAM, GPU_HBM, CXL_SSD_NAND, Tier,
                    NVME_STREAM_BW, NVME_STREAM_LAT_S, transfer_time_s,
                    kv_growth_spill_time_s, kv_cascade, kv_tail)
 from model_cfg import (build_layers, BYTES_PER_PARAM, HOT_LAYERS_BY_NAME,
                        bytes_read, embedding_last)
 from pipeline import pipelined_time_s
+
+# KV reserved at the generation mean or its peak, whichever is faster.
+KV_LEVEL = kv_reserve_level(__file__)
 
 # FlexGen's block schedule overlaps "the weights load of the next layer" with
 # the current layer's compute (Algorithm 1, three CUDA streams): one layer of
@@ -94,7 +98,7 @@ placement = [PL_HOST_SSD] * len(layers)
 # mean, PREFILL + TOKENS/2: the cache grows during decode, so reserving the final
 # size starves the early steps and the initial size over-commits the later ones.
 _kv_resident = int(sum(kv_cache_increment.values()) * BATCH_SIZE
-                   * (PREFILL_TOKENS + TOKENS / 2.0))
+                   * (PREFILL_TOKENS + TOKENS * KV_LEVEL))
 
 # The LP's cache variables (cg, cc, cd) are GPU, CPU and disk percentages, so
 # the cache cascades through the same hierarchy as the weights, GPU first
@@ -179,6 +183,30 @@ for i in embedding_last(layers):
                     PL_HOST_DRAM if frac_host[i] >= 0.999 else
                     PL_CXL_DEV_DRAM if frac_cxl[i] >= 0.999 else PL_HOST_SSD)
 
+# FlexGen applies its weight percentages to every layer: init_weight_list
+# assigns each layer's tensors to GPU, CPU memory and disk by the same shares,
+# so every layer reads from every tier. Keep each tier's total from the fill
+# above and give every layer the same split, except the pinned layers and the
+# embedding table (placed last by the rule every policy follows).
+_hot = {name_to_idx[n] for n in HOT_LAYERS_BY_NAME if n in name_to_idx}
+_emb = {i for i, L in enumerate(layers) if L["kind"] == "Embedding"}
+_striped = [i for i in range(len(layers)) if i not in _hot and i not in _emb]
+_w = sum(layers[i]["bytes"] for i in _striped)
+if _w > 0:
+    _sg = sum(layers[i]["bytes"] * frac_gpu[i] for i in _striped) / _w
+    _sh = sum(layers[i]["bytes"] * frac_host[i] for i in _striped) / _w
+    _sc = sum(layers[i]["bytes"] * frac_cxl[i] for i in _striped) / _w
+    for i in _striped:
+        frac_gpu[i], frac_host[i], frac_cxl[i] = _sg, _sh, _sc
+        placement[i] = (PL_GPU_HBM if _sg >= 0.999 else
+                        PL_HOST_DRAM if _sh >= 0.999 else
+                        PL_CXL_DEV_DRAM if _sc >= 0.999 else PL_HOST_SSD)
+
+
+# Room the KV cache can grow into before it displaces weights: what its last
+# tier still has free after placement.
+_kv_headroom = ({"gpu": gpu_free, "host": host_free, "cxl": cxl_free}
+                .get(list(_kv_split)[-1], 0.0) if _kv_split else 0.0)
 
 # Prefill: one pass over the weights for the whole prompt.
 prefill_latency = 0.0
@@ -201,6 +229,9 @@ per_token_write_stall_pcts = []
 # Decode.
 for token_step in range(TOKENS):
     units              = []
+    _kvf = {k: 0.0 for k in ("gpu", "host", "cxl", "nand")}
+    _kvf.update(kv_step_split(_kv_split, _kv_resident, sum(kv_cache_increment.values())
+                              * BATCH_SIZE * (PREFILL_TOKENS + token_step)))
     step_time_s        = 0.0
     step_read_stall_s  = 0.0
     step_write_stall_s = 0.0
@@ -243,10 +274,10 @@ for token_step in range(TOKENS):
         _by = {"GPU HBM": b*fg, "Host DRAM": b*fh,
                "CXL Device DRAM": b*fc, "CXL Device NAND": b*fd}
         if kv_inc_l > 0:
-            for _t, _f in (("GPU HBM", _kv_frac["gpu"]),
-                           ("Host DRAM", _kv_frac["host"]),
-                           ("CXL Device DRAM", _kv_frac["cxl"]),
-                           ("CXL Device NAND", _kv_frac["nand"])):
+            for _t, _f in (("GPU HBM", _kvf["gpu"]),
+                           ("Host DRAM", _kvf["host"]),
+                           ("CXL Device DRAM", _kvf["cxl"]),
+                           ("CXL Device NAND", _kvf["nand"])):
                 _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
         units.append((_by, comp_s))
         step_time_s += kv_stall           # KV write, serialized after the read
@@ -259,7 +290,7 @@ for token_step in range(TOKENS):
                                     inflight_budget=max(0.0, _FLEXGEN_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_cache_increment.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, kv_tail(_kv_split))
+        _kv_resident, kv_tail(_kv_split), headroom=_kv_headroom)
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0

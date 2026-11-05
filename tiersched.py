@@ -1,7 +1,9 @@
 # TierSched simulator: hybrid-CXL LLM inference with
-#   - sub-layer placement (attention and MLP placed separately, order set by
-#     PLACEMENT_ORDER) and a per-configuration search over the staging reserve
-#     and the KV-cache tier,
+#   - sub-layer placement (attention and MLP placed separately), striped across
+#     the tiers or contiguous (order set by PLACEMENT_ORDER), and a
+#     per-configuration search over the staging reserve, the KV placement and
+#     reservation, and the device size,
+#   - each sub-layer moved and computed in TRANSFER_BLOCKS blocks,
 #   - optional Phase-1 NAND staging into device DRAM (STAGE_RESERVE_FRAC),
 #   - K=32 lookahead, sparsity-ranked prefetching on a 16-thread I/O pool,
 #   - a two-queue full-duplex CXL link (cxl_link.py): independent Rx and Tx lanes
@@ -28,7 +30,7 @@ from enum import Enum
 
 from cxl_link import CXLLink   # two-queue full-duplex bus model
 
-from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
+from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail, kv_step_split
 import pipeline as _pipeline
 from pipeline import pipelined_time_s
 from tiers import (
@@ -56,6 +58,9 @@ KV_LABEL = {"gpu": PL_GPU_HBM, "host": PL_HOST_DRAM, "cxl": PL_CXL_DEV_DRAM,
 
 IO_THREAD_POOL_SIZE   = 16
 PREFETCH_QUEUE_DEPTH  = 32
+# Each sub-layer moves and computes in this many blocks (pipelined_time_s), so
+# read-ahead is staged a block at a time and a small reserve suffices.
+TRANSFER_BLOCKS = int(__import__("os").environ.get("TIERSCHED_BLOCKS", "8"))
 TRAFFIC_WINDOW_SIZE   = 16
 PREFILL_CHUNK_SIZE    = 64
 ENABLE_PREFILL_WARMUP = True
@@ -351,7 +356,7 @@ def split_time_s(nbytes, fr, staged=True):
 
 
 def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
-                             gpu_cap=0, spread=True):
+                             gpu_cap=0, spread=True, stripe=False):
     place    = [None] * len(layers)
     ltypes   = [classify_layer_type(L) for L in layers]
     sparsity = {}
@@ -466,7 +471,7 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
     _groups = {}
     for i, L in enumerate(layers):
         _groups.setdefault((ltypes[i], L["bytes"]), []).append(i)
-    for _members in (_groups.values() if spread else ()):
+    for _members in (_groups.values() if spread and not stripe else ()):
         if len(_members) < 3:
             continue
         _on_nand = [i for i in _members if frac[i].get(PL_CXL_DEV_NAND, 0) > 0]
@@ -484,6 +489,23 @@ def semantic_aware_placement(layers, host_cap, cxl_cap, total_decoder_blocks,
         _recv  = [i for i in _target if i not in _on_nand]
         for _d, _r in zip(_donor, _recv):
             frac[_d], frac[_r] = frac[_r], frac[_d]
+
+    # Striping (Sec. III-D): keep each tier's total from the fill, but give
+    # every sub-layer except the embedding table the same split across tiers,
+    # as interleaved memory banks and disk striping do. Every sub-layer then
+    # reads from every tier at once, so the tiers stay busy together without
+    # read-ahead; the reserve is left to overlap compute with the reads. The
+    # embedding table keeps its fill position, since a step reads only B rows.
+    if stripe:
+        _ne = [i for i in range(len(layers)) if ltypes[i] != LayerType.EMBEDDING]
+        _tot, _w = {}, 0.0
+        for i in _ne:
+            for t, f in frac[i].items():
+                _tot[t] = _tot.get(t, 0.0) + layers[i]["bytes"] * f
+            _w += layers[i]["bytes"]
+        _mix = {t: b / _w for t, b in _tot.items() if b > 0}
+        for i in _ne:
+            frac[i] = dict(_mix)
 
     # `place` names the tier holding the largest share. It drives the per-layer
     # control flow (staging, prefetch, duplex lane selection), which cannot be
@@ -661,13 +683,18 @@ def run_semantic_duplex_simulation():
 
         # KV capacity is reserved from its tier before placement. KV grows, and
         # at step t the weights can use C - kv(P + t), so placement (a one-shot
-        # decision) is given the time-averaged reservation kv(P + T/2).
+        # decision) reserves kv(P + level x T). Level 1/2, the time average, is
+        # best when a byte the cache outgrows its reservation by costs what a
+        # reserved byte does; level 1 reserves the peak, which wins when the
+        # displaced weights, read from NAND after each step, cost more. The
+        # search tries both.
         _kv_per_tok = sum(2 * L.get("kv_heads", 8) * L.get("head_dim", 128)
                           * BYTES_PER_PARAM
                           for L in layers
                           if classify_layer_type(L) == LayerType.ATTENTION) * BATCH_SIZE
         _plan_prefill = PLAN_PREFILL or PREFILL_TOKENS
-        _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS / 2.0))
+        _kv_levels = (0.5, 1.0)
+        _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS * _kv_levels[0]))
 
         _caps = {"gpu":  gpu_hbm_capacity_bytes,
                  "host": host_dram_capacity_bytes,
@@ -678,7 +705,7 @@ def run_semantic_duplex_simulation():
         _kv_tiers = {"gpu": GPU_HBM, "host": HOST_DRAM, "cxl": CXL_DRAM,
                      "nand": CXL_SSD_NAND}
 
-        def _kv_place(tier):
+        def _kv_place(tier, dev_res=0.0, host_res=0.0):
             """Charge the cache to `tier`, spilling down when it does not fit.
 
             Returns (split, caps): the fraction of every KV access served by each
@@ -687,15 +714,35 @@ def run_semantic_duplex_simulation():
             weights, so the tier is searched with the staging reserve rather
             than fixed.
             """
+            caps = dict(_caps0)
+            if tier == "stripe":
+                # Striped with the weights: fill the tiers left after the
+                # reserves with weights and cache together, fastest first, and
+                # give the cache the same split, so every attention sub-layer
+                # reads its KV from every tier at once.
+                tot = _weights_striped + _kv_mean
+                avail = {"gpu": caps["gpu"], "host": max(0.0, caps["host"] - host_res),
+                         "cxl": max(0.0, caps["cxl"] - dev_res)}
+                left, split = tot, {}
+                for t in ("gpu", "host", "cxl"):
+                    x = min(avail[t], left)
+                    if x > 0:
+                        split[t] = x / tot
+                        caps[t] -= _kv_mean * x / tot
+                    left -= x
+                if left > 0:
+                    split["nand"] = left / tot
+                return split, caps
             order = {"gpu": ["gpu", "host", "cxl"],
                      "host": ["host", "cxl"],
                      "cxl": ["cxl"]}[tier]
-            caps = dict(_caps0)
             split, took = kv_cascade(_kv_mean, [(t, caps[t]) for t in order])
             for t in order:
                 caps[t] -= took.get(t, 0.0)
             return split, caps
 
+        _weights_striped = sum(L["bytes"] for L in layers
+                               if classify_layer_type(L) != LayerType.EMBEDDING)
         _kv_split, _caps = _kv_place(KV_TIER)
 
         def _kv_time(n):
@@ -712,7 +759,7 @@ def run_semantic_duplex_simulation():
 
         _host_total = _caps["host"]
 
-        def _plan(dev_res, host_res, spread=True):
+        def _plan(dev_res, host_res, mode="spread"):
             """Place with dev_res and host_res bytes held back as staging room,
             and time one decode step.
 
@@ -723,26 +770,48 @@ def run_semantic_duplex_simulation():
             pl, lt, kvi, sp, fr = semantic_aware_placement(
                 layers, max(0, _host_total - host_res),
                 max(0, _dev_total - dev_res), num_blocks,
-                gpu_cap=_caps["gpu"], spread=spread)
+                gpu_cap=_caps["gpu"], spread=(mode == "spread"),
+                stripe=(mode == "stripe"))
             # A representative step: mid-generation, so the KV read is the one
             # placement was sized for.
             us = build_units(fr, kvi, _kv_split, TOKENS / 2.0, prefill=_plan_prefill)
             return pipelined_time_s(us, PREFETCH_QUEUE_DEPTH, TIER_BW, TIER_LAT,
-                                    inflight_budget=dev_res + host_res), \
+                                    inflight_budget=dev_res + host_res,
+                                    blocks=TRANSFER_BLOCKS), \
                    (pl, lt, kvi, sp, fr)
 
-        # KV tier and reserves are searched jointly: where the cache sits changes
+        # KV tier and reserve are searched jointly: where the cache sits changes
         # which tier is the bottleneck, and so how much staging room is worth
-        # holding back. Reserve fractions run to 0.50 because leaving bytes on
-        # NAND, to use an otherwise idle bus, can need a large reserve on a big
-        # device.
-        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
-        _kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
+        # holding back. The reserve is a share of host plus device DRAM, split
+        # host first, device first or in proportion to their sizes. Shares start
+        # small because a reserve staged a block at a time needs little room,
+        # and run to 0.50 because leaving bytes on NAND, to use an otherwise idle
+        # bus, can need a large reserve on a big device.
+        _rf = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+               0.13, 0.16, 0.20, 0.30, 0.40, 0.50)
+        _splits = ("host", "device", "even")
+
+        def _split(f, split, host_total, dev_total):
+            """(device, host) reserve bytes for share f of their total."""
+            if split == "even":
+                return dev_total * f, host_total * f
+            r = f * (host_total + dev_total)
+            if split == "host":
+                hr = min(r, host_total)
+                return min(r - hr, dev_total), hr
+            dr = min(r, dev_total)
+            return dr, min(r - dr, host_total)
+        _kv_opts = ["cxl", "host", "stripe"] + (["gpu"] if gpu_hbm_capacity_bytes else [])
+        # Layouts searched with every reserve: contiguous fill, contiguous with
+        # the NAND residue spread, and every sub-layer striped across tiers.
+        _modes = ("spread", "contig", "stripe")
         def build_units(fr, kvi, kv_split, token_step, pinned=(), prefill=PREFILL_TOKENS):
             """Per-step unit list, shared by the plan evaluator and the decode
             loop so that the search times exactly what decode runs."""
             us = []
+            # The cache's reserved bytes sit where kv_split puts them; what it
+            # has grown past the reservation sits in its last tier.
+            _kvf = kv_step_split(kv_split, _kv_mean, _kv_per_tok * (prefill + token_step))
             for _i, _L in enumerate(layers):
                 _by = {}
                 _rb = bytes_read(_L, BATCH_SIZE)
@@ -754,80 +823,121 @@ def run_semantic_duplex_simulation():
                     _by[tt] = _by.get(tt, 0.0) + _rb * f_
                 if kvi[_L["name"]] > 0:
                     _kb = (prefill + token_step) * kvi[_L["name"]] * BATCH_SIZE
-                    for _t2, _f2 in kv_split.items():
+                    for _t2, _f2 in _kvf.items():
                         _lbl = KV_LABEL[_t2]
                         _by[_lbl] = _by.get(_lbl, 0.0) + _kb * _f2
                 us.append((_by, compute_time_s(_L["flops"] * BATCH_SIZE, cpu_cores)))
             return us
 
         # Two-stage search. The one-step estimate misorders near-tied plans, so
-        # it only shortlists; finalists are timed exactly over all TOKENS steps
-        # with growing KV and the realized best is kept. The search also runs
+        # it only shortlists; finalists are timed across the generation with
+        # growing KV and the best is kept. The search also runs
         # with the device clamped to each smaller standard size (32, 48 GB), so
         # a larger device's candidates include every smaller device's plan and
         # decode time cannot get worse with more capacity.
-        _served_device = (_pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL)
+        _served_device = (_pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL,
+                          _pipeline.BUS_ORDER)
         if PLAN_DEVICE == "default":
-            _pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL = 1, False
+            (_pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL,
+             _pipeline.BUS_ORDER) = 1, False, "fill"
         _search_t0 = time.perf_counter()
         _cands = []
         _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
                               if c * GiB < cxl_dev_dram_capacity_bytes})
-        for _devcap in _dev_caps:
+        for _devcap, _kvt, _lvl in [(d, k, l) for d in _dev_caps for k in _kv_opts
+                                    for l in _kv_levels]:
             _caps0["cxl"] = _devcap
-            for _kvt in _kv_opts:
-                _kv_split, _caps = _kv_place(_kvt)
-                _dev_total, _host_total = _caps["cxl"], _caps["host"]
-                for _df in _fr:
-                    for _hf in _fr:
-                        _dr, _hr = _dev_total * _df, _host_total * _hf
-                        for _sp in (True, False):    # with and without spreading
-                            _t, _p = _plan(_dr, _hr, _sp)
-                            _cands.append((_t, _kvt, _dr, _hr, _p, _devcap))
-        # Shortlist per (device cap, KV tier) group, not globally: the one-step
-        # estimate misranks NAND-heavy plans against all-resident ones, and a
-        # global top-N could drop a whole group.
+            _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS * _lvl))
+            _kv_split, _caps = _kv_place(_kvt)
+            _dev_total, _host_total = _caps["cxl"], _caps["host"]
+            _seen = set()
+            for _f in _rf:
+                for _s in _splits:
+                    if _kvt == "stripe":
+                        # the cache's split depends on the reserve
+                        _dr, _hr = _split(_f, _s, _caps0["host"], _caps0["cxl"])
+                        _kv_split, _caps = _kv_place("stripe", _dr, _hr)
+                        _dev_total, _host_total = _caps["cxl"], _caps["host"]
+                    else:
+                        _dr, _hr = _split(_f, _s, _host_total, _dev_total)
+                    if (_dr, _hr) in _seen:
+                        continue
+                    _seen.add((_dr, _hr))
+                    for _md in _modes:
+                        _t, _p = _plan(_dr, _hr, _md)
+                        _cands.append((_t, _kvt, _dr, _hr, _p, _devcap, _md, _lvl))
+        # Shortlist per (device cap, KV tier, KV level) group, not globally: the
+        # one-step estimate misranks NAND-heavy plans against all-resident ones,
+        # does not see the cache outgrow its reservation, and a global top-N
+        # could drop a whole group.
         _cands.sort(key=lambda x: x[0])
         _bygroup = {}
         for _cd in _cands:
-            _bygroup.setdefault((_cd[5], _cd[1]), []).append(_cd)
+            _bygroup.setdefault((_cd[5], _cd[1], _cd[7]), []).append(_cd)
         _cands = [c for g in _bygroup.values() for c in g[:6]]
         _cands.sort(key=lambda x: x[0])
 
-        def _exact(kvt, dr, hr, plan):
-            """Realized decode time for a finalist: every step, growing KV."""
-            kv_split, caps = _kv_place(kvt)
+        # Finalists are timed at nine steps across the generation; a step's
+        # time moves smoothly with the growing KV, so the trapezoid between
+        # them ranks plans as the full decode does at a tenth of the cost.
+        _probe = sorted({round(i * (TOKENS - 1) / 8) for i in range(9)})
+
+        def _kv_headroom(kv_split, caps, fr, dr, hr):
+            """Bytes the KV cache's last tier still has free after placement,
+            not counting the staging reserve, which the cache may not use."""
+            tail = list(kv_split)[-1] if kv_split else "nand"
+            if tail == "nand":
+                return 0.0
+            lbl = KV_LABEL[tail]
+            placed = sum(L["bytes"] * fr[i].get(lbl, 0.0) for i, L in enumerate(layers))
+            res = {"gpu": 0.0, "host": hr, "cxl": dr}[tail]
+            return max(0.0, caps[tail] - res - placed)
+
+        def _decode_time(kvt, dr, hr, plan):
+            """Decode time of a finalist over TOKENS steps with growing KV."""
+            kv_split, caps = _kv_place(kvt, dr, hr)
             pl, lt, kvi, sp, fr = plan
-            tot = 0.0
-            for _tk in range(TOKENS):
+            room = _kv_headroom(kv_split, caps, fr, dr, hr)
+            ts = []
+            for _tk in _probe:
                 us = build_units(fr, kvi, kv_split, _tk, prefill=_plan_prefill)
                 lat = pipelined_time_s(us, PREFETCH_QUEUE_DEPTH, TIER_BW,
-                                       TIER_LAT, inflight_budget=dr + hr)
+                                       TIER_LAT, inflight_budget=dr + hr,
+                                       blocks=TRANSFER_BLOCKS)
                 lat += kv_growth_spill_time_s(
                     _kv_per_tok * (_plan_prefill + _tk + 1), _kv_mean,
-                    kv_tail(kv_split, _kv_tiers))
-                tot += lat
-            return tot
+                    kv_tail(kv_split, _kv_tiers), headroom=room)
+                ts.append(lat)
+            if len(_probe) == TOKENS:
+                return sum(ts)
+            # sum over steps 0..TOKENS-1 = integral + half the end points
+            return (sum((ta + tb) / 2 * (b - a) for a, b, ta, tb
+                        in zip(_probe, _probe[1:], ts, ts[1:]))
+                    + (ts[0] + ts[-1]) / 2)
 
         _best_t, _best, _prefetch_reserve = None, None, 0.0
-        _best_kv = KV_TIER
-        for _t0, _kvt, _dr, _hr, _p, _devcap in _cands:
-            _caps0["cxl"] = _devcap          # _kv_place inside _exact reads it
-            _tr = _exact(_kvt, _dr, _hr, _p)
+        _best_kv, _best_mode = KV_TIER, None
+        for _t0, _kvt, _dr, _hr, _p, _devcap, _md, _lvl in _cands:
+            _caps0["cxl"] = _devcap          # _kv_place inside _decode_time reads it
+            _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS * _lvl))
+            _tr = _decode_time(_kvt, _dr, _hr, _p)
             if _best_t is None or _tr < _best_t:
-                _best_t, _best, _best_kv = _tr, _p, _kvt
+                _best_t, _best, _best_kv, _best_mode = _tr, _p, _kvt, _md
                 _prefetch_reserve, _dev_res, _host_res = _dr + _hr, _dr, _hr
-                _best_devcap = _devcap
+                _best_devcap, _best_lvl = _devcap, _lvl
         _caps0["cxl"] = _best_devcap
-        _pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL = _served_device
+        _kv_mean = int(_kv_per_tok * (_plan_prefill + TOKENS * _best_lvl))
+        (_pipeline.NAND_PASS_THROUGH, _pipeline.DEVICE_SERIAL,
+         _pipeline.BUS_ORDER) = _served_device
         print(f"Search time: {time.perf_counter() - _search_t0:.2f} s for {len(_cands)} finalists")
         print(f"Search choice: device {_best_devcap / GiB:.0f} GB of "
-              f"{cxl_dev_dram_capacity_bytes / GiB:.0f}, KV tier {_best_kv}, "
+              f"{cxl_dev_dram_capacity_bytes / GiB:.0f}, KV tier {_best_kv} reserved at "
+              f"{'peak' if _best_lvl == 1.0 else 'mean'}, layout {_best_mode}, "
               f"reserves host {_host_res / GiB:.2f} GB device {_dev_res / GiB:.2f} GB")
         # Re-establish the winning cache placement: _kv_split and _caps are read
         # by _kv_time and by the decode loop.
-        _kv_split, _caps = _kv_place(_best_kv)
+        _kv_split, _caps = _kv_place(_best_kv, _dev_res, _host_res)
         _dev_total, _host_total = _caps["cxl"], _caps["host"]
         place, ltypes, inc, sparsity, frac = _best
         _by_tier = {}
@@ -839,6 +949,7 @@ def run_semantic_duplex_simulation():
               + "; KV " + ", ".join(f"{_t} {_kv_mean * _f / GiB:.1f} GB"
                                     for _t, _f in _kv_split.items()))
         _dev_for_weights = max(0, _dev_total - _dev_res)
+        _room = _kv_headroom(_kv_split, _caps, frac, _dev_res, _host_res)
 
         tmon    = DuplexTrafficMonitor()
         _placed_in_dev = sum(L["bytes"] for i, L in enumerate(layers)
@@ -1044,10 +1155,11 @@ def run_semantic_duplex_simulation():
                                    TIER_LAT,
                                    inflight_budget=max(0.0, _prefetch_reserve
                                                        - pf_stats["bytes_prefetched"]),
-                                   demand=dropped_hints(units))
+                                   demand=dropped_hints(units),
+                                   blocks=TRANSFER_BLOCKS)
             lat += kv_growth_spill_time_s(
                 _kv_per_tok * (PREFILL_TOKENS + token_step + 1),
-                _kv_mean, kv_tail(_kv_split, _kv_tiers))
+                _kv_mean, kv_tail(_kv_split, _kv_tiers), headroom=_room)
             total_decode_lat += lat
 
         avg_write_stall_pct = sum(per_token_write_stall_pcts) / len(per_token_write_stall_pcts)

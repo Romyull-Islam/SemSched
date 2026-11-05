@@ -1,86 +1,98 @@
 {
  "CPU fp16 16H+32C": {
-  "tuned_static": 4.933,
-  "placement, one reserve fraction": 5.071367,
-  "+ separate host/device reserves": 5.084599,
-  "+ KV tier and device size": 5.084599,
-  "+ residue spreading (full)": 5.090487
+  "tuned_static": 5.0077,
+  "contiguous, one block, even split": 5.079231,
+  "+ transfer blocks": 5.128168,
+  "+ striping": 5.189517,
+  "+ host or device first": 5.189517,
+  "+ KV tier, device size, spreading (full)": 5.218411
  },
  "CPU fp16 16H+48C": {
-  "tuned_static": 5.5121,
-  "placement, one reserve fraction": 5.839623,
-  "+ separate host/device reserves": 5.858272,
-  "+ KV tier and device size": 5.858272,
-  "+ residue spreading (full)": 5.898175
+  "tuned_static": 5.803775,
+  "contiguous, one block, even split": 5.849961,
+  "+ transfer blocks": 5.911439,
+  "+ striping": 6.062346,
+  "+ host or device first": 6.062346,
+  "+ KV tier, device size, spreading (full)": 6.079357
  },
  "CPU fp16 16H+64C": {
-  "tuned_static": 6.461,
-  "placement, one reserve fraction": 6.890888,
-  "+ separate host/device reserves": 6.899829,
-  "+ KV tier and device size": 6.935323,
-  "+ residue spreading (full)": 7.039178
+  "tuned_static": 6.912325,
+  "contiguous, one block, even split": 6.905288,
+  "+ transfer blocks": 6.9852,
+  "+ striping": 7.268203,
+  "+ host or device first": 7.268203,
+  "+ KV tier, device size, spreading (full)": 7.316448
  },
  "CPU int8 16H+32C": {
-  "tuned_static": 15.9186,
-  "placement, one reserve fraction": 16.759661,
-  "+ separate host/device reserves": 16.871427,
-  "+ KV tier and device size": 17.01237,
-  "+ residue spreading (full)": 17.271775
+  "tuned_static": 17.069717,
+  "contiguous, one block, even split": 16.896687,
+  "+ transfer blocks": 17.207555,
+  "+ striping": 18.241985,
+  "+ host or device first": 18.241985,
+  "+ KV tier, device size, spreading (full)": 18.281849
  },
  "CPU int8 16H+48C": {
-  "tuned_static": 27.7989,
-  "placement, one reserve fraction": 29.878616,
-  "+ separate host/device reserves": 29.878616,
-  "+ KV tier and device size": 31.478939,
-  "+ residue spreading (full)": 31.773567
+  "tuned_static": 32.30938,
+  "contiguous, one block, even split": 30.01824,
+  "+ transfer blocks": 31.108948,
+  "+ striping": 36.617308,
+  "+ host or device first": 36.617308,
+  "+ KV tier, device size, spreading (full)": 36.617308
  },
  "CPU int8 16H+64C": {
-  "tuned_static": 46.3815,
-  "placement, one reserve fraction": 45.206082,
-  "+ separate host/device reserves": 46.310686,
-  "+ KV tier and device size": 46.557917,
-  "+ residue spreading (full)": 46.557917
+  "tuned_static": 48.3892,
+  "contiguous, one block, even split": 46.809577,
+  "+ transfer blocks": 47.456824,
+  "+ striping": 48.534598,
+  "+ host or device first": 48.904039,
+  "+ KV tier, device size, spreading (full)": 48.904039
  },
  "GPU fp16 16H+32C": {
-  "tuned_static": 6.501729,
-  "placement, one reserve fraction": 6.752615,
-  "+ separate host/device reserves": 6.779481,
-  "+ KV tier and device size": 6.779481,
-  "+ residue spreading (full)": 6.787308
+  "tuned_static": 6.6094,
+  "contiguous, one block, even split": 6.768996,
+  "+ transfer blocks": 6.85479,
+  "+ striping": 6.928355,
+  "+ host or device first": 6.928355,
+  "+ KV tier, device size, spreading (full)": 6.961338
  },
  "GPU fp16 16H+48C": {
-  "tuned_static": 7.7317,
-  "placement, one reserve fraction": 8.180655,
-  "+ separate host/device reserves": 8.224603,
-  "+ KV tier and device size": 8.238779,
-  "+ residue spreading (full)": 8.329954
+  "tuned_static": 8.069261,
+  "contiguous, one block, even split": 8.20471,
+  "+ transfer blocks": 8.32508,
+  "+ striping": 8.577838,
+  "+ host or device first": 8.577838,
+  "+ KV tier, device size, spreading (full)": 8.59324
  },
  "GPU fp16 16H+64C": {
-  "tuned_static": 9.7092,
-  "placement, one reserve fraction": 10.415807,
-  "+ separate host/device reserves": 10.426402,
-  "+ KV tier and device size": 10.607882,
-  "+ residue spreading (full)": 10.762583
+  "tuned_static": 10.384802,
+  "contiguous, one block, even split": 10.458704,
+  "+ transfer blocks": 10.62533,
+  "+ striping": 11.208737,
+  "+ host or device first": 11.208737,
+  "+ KV tier, device size, spreading (full)": 11.275451
  },
  "GPU int8 16H+32C": {
-  "tuned_static": 79.9273,
-  "placement, one reserve fraction": 67.040353,
-  "+ separate host/device reserves": 67.65219,
-  "+ KV tier and device size": 78.422988,
-  "+ residue spreading (full)": 78.425472
+  "tuned_static": 81.0514,
+  "contiguous, one block, even split": 67.653168,
+  "+ transfer blocks": 68.80566,
+  "+ striping": 87.228213,
+  "+ host or device first": 87.880898,
+  "+ KV tier, device size, spreading (full)": 87.880898
  },
  "GPU int8 16H+48C": {
-  "tuned_static": 81.0227,
-  "placement, one reserve fraction": 77.188292,
-  "+ separate host/device reserves": 81.273149,
-  "+ KV tier and device size": 81.273149,
-  "+ residue spreading (full)": 81.463074
+  "tuned_static": 85.77156,
+  "contiguous, one block, even split": 82.683835,
+  "+ transfer blocks": 83.376989,
+  "+ striping": 87.09873,
+  "+ host or device first": 87.802771,
+  "+ KV tier, device size, spreading (full)": 87.880898
  },
  "GPU int8 16H+64C": {
-  "tuned_static": 80.9429,
-  "placement, one reserve fraction": 77.836914,
-  "+ separate host/device reserves": 81.139758,
-  "+ KV tier and device size": 81.273149,
-  "+ residue spreading (full)": 81.463074
+  "tuned_static": 85.7086,
+  "contiguous, one block, even split": 83.42855,
+  "+ transfer blocks": 84.194052,
+  "+ striping": 87.09873,
+  "+ host or device first": 88.040901,
+  "+ KV tier, device size, spreading (full)": 88.040901
  }
 }

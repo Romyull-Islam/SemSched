@@ -3,7 +3,7 @@ Is the reserve worth searching per configuration (Sec. V-G)? Pin TierSched's
 reserve to the one (device, host) pair that does best over the twelve main
 configurations, with the KV tier and device size still searched, then run that
 pinned setting on the model, batch, prompt-length and NAND sweeps and compare
-it with the full search and with the best of the four baselines. The same
+it with the full search and with the best of the baselines. The same
 sweeps also run the minimum reserve of Sec. III-B: two of the largest
 sub-layers in device DRAM, enough to keep one NAND read in flight.
 
@@ -21,21 +21,24 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_paper_tables as R
 
-FR = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-      0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
+RF = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+      0.13, 0.16, 0.20, 0.30, 0.40, 0.50)
+SPLITS = ("host", "device", "even")
 MAIN = [(q, c, g) for g in (0, R.GPU_GB) for q in R.QUANTS for c in R.CXLS]
 BASELINES = [s for n, s in R.SIMS if n != "TierSched"]
 
 
-def pin(df, hf):
-    return [("for _df in _fr:", f"for _df in ({df},):"),
-            ("for _hf in _fr:", f"for _hf in ({hf},):")]
+def pin(f, split):
+    return [("for _f in _rf:", f"for _f in ({f},):"),
+            ("for _s in _splits:", f"for _s in ({split!r},):")]
 
 
-# Two of the largest sub-layers in device DRAM and no host reserve.
-MINIMUM = pin(0.0, 0.0) + [
-    ("_dr, _hr = _dev_total * _df, _host_total * _hf",
-     "_dr, _hr = min(_dev_total, 2 * max(_L['bytes'] for _L in layers)), 0.0")]
+# Two blocks of the largest sub-layer in device DRAM and no host reserve:
+# enough to keep one NAND read in flight.
+MINIMUM = pin(0.0, "even") + [
+    ("_dr, _hr = _split(_f, _s, _host_total, _dev_total)",
+     "_dr, _hr = min(_dev_total, 2 * max(_L['bytes'] for _L in layers)"
+     " / TRANSFER_BLOCKS), 0.0")]
 
 
 def cell(sim, quant, c, gpu, model="Qwen2_5_72BCfg", batch=R.BATCH,
@@ -109,18 +112,18 @@ def main():
     # ranked by its worst case and then its median against the search.
     kws = {cfg: dict(quant=cfg[0], c=cfg[1], gpu=cfg[2]) for cfg in MAIN}
     jobs = [((cfg, "search"), "tiersched.py", kws[cfg], ()) for cfg in MAIN]
-    jobs += [((cfg, (df, hf)), "tiersched.py", kws[cfg], pin(df, hf))
-             for cfg in MAIN for df in FR for hf in FR]
+    jobs += [((cfg, (f, sp)), "tiersched.py", kws[cfg], pin(f, sp))
+             for cfg in MAIN for f in RF for sp in SPLITS]
     res = run_all(jobs)
     ranked = []
-    for df in FR:
-        for hf in FR:
-            r = [res[(cfg, (df, hf))] / res[(cfg, "search")] for cfg in MAIN]
-            ranked.append((min(r), statistics.median(r), df, hf))
+    for f in RF:
+        for sp in SPLITS:
+            r = [res[(cfg, (f, sp))] / res[(cfg, "search")] for cfg in MAIN]
+            ranked.append((min(r), statistics.median(r), f, sp))
     ranked.sort(reverse=True)
     lo, med, df, hf = ranked[0]
-    filled = [res[(cfg, (0.0, 0.0))] / res[(cfg, "search")] for cfg in MAIN]
-    print(f"Best single reserve over the twelve: device {df:.0%}, host {hf:.0%}; "
+    filled = [res[(cfg, (0.0, "even"))] / res[(cfg, "search")] for cfg in MAIN]
+    print(f"Best single reserve over the twelve: {df:.2%} of host + device, split {hf}; "
           f"against the search: worst {lo:.3f}, median {med:.3f}")
     print(f"Filled (no reserve) against the search: worst {min(filled):.3f}, "
           f"median {statistics.median(filled):.3f}")

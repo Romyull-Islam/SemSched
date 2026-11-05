@@ -4,11 +4,13 @@ from TierSched's own placement with the tuned baselines' kind of reserve, add
 its mechanisms one at a time and compare each step with the best tuned static
 baseline of equal_footing.json:
 
-  1. size-descending placement, one reserve fraction for host and device,
-     KV cache on the device, full device size, no residue spreading
-  2. + separate host and device reserves
-  3. + the KV-tier and device-size search
-  4. + residue spreading (the full scheduler)
+  1. size-descending contiguous placement, one sub-layer per transfer, the
+     reserve split evenly between host and device, KV cache on the device,
+     full device size, no residue spreading
+  2. + transfer blocks
+  3. + striping
+  4. + reserve split host or device first
+  5. + the KV-tier and device-size search, residue spreading (the full scheduler)
 
     python run_paper_tables.py --equal-footing   # writes equal_footing.json
     python attribution.py                        # writes attribution.json
@@ -26,21 +28,24 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_paper_tables as R
 
-NO_SPREAD = [("        if len(_members) < 3:\n            continue",
-              "        if True:\n            continue")]
-KV_DEVICE = [('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
+CONTIG = [('        _modes = ("spread", "contig", "stripe")', '        _modes = ("contig",)')]
+NO_SPREAD_STRIPE = [('        _modes = ("spread", "contig", "stripe")', '        _modes = ("contig", "stripe")')]
+ONE_BLOCK = [("TRANSFER_BLOCKS = int(__import__(\"os\").environ.get(\"TIERSCHED_BLOCKS\", \"8\"))",
+              "TRANSFER_BLOCKS = 1")]
+KV_DEVICE = [('_kv_opts = ["cxl", "host", "stripe"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
               '_kv_opts = ["cxl"]')]
 FULL_DEVICE = [("""        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
                               if c * GiB < cxl_dev_dram_capacity_bytes})""",
                 "        _dev_caps = [cxl_dev_dram_capacity_bytes]")]
-ONE_FRACTION = [("for _hf in _fr:", "for _hf in (_df,):")]
+EVEN = [('        _splits = ("host", "device", "even")', '        _splits = ("even",)')]
 
 STEPS = [
-    ("placement, one reserve fraction", NO_SPREAD + KV_DEVICE + FULL_DEVICE + ONE_FRACTION),
-    ("+ separate host/device reserves", NO_SPREAD + KV_DEVICE + FULL_DEVICE),
-    ("+ KV tier and device size", NO_SPREAD),
-    ("+ residue spreading (full)", []),
+    ("contiguous, one block, even split", CONTIG + ONE_BLOCK + EVEN + KV_DEVICE + FULL_DEVICE),
+    ("+ transfer blocks", CONTIG + EVEN + KV_DEVICE + FULL_DEVICE),
+    ("+ striping", NO_SPREAD_STRIPE + EVEN + KV_DEVICE + FULL_DEVICE),
+    ("+ host or device first", NO_SPREAD_STRIPE + KV_DEVICE + FULL_DEVICE),
+    ("+ KV tier, device size, spreading (full)", []),
 ]
 CELLS = [(q, c, g) for g in (0, R.GPU_GB) for q in R.QUANTS for c in R.CXLS]
 

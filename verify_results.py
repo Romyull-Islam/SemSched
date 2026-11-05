@@ -10,7 +10,10 @@ shows determinism, so the remaining checks are invariants:
   6. invariance       a number that does not move when capacity does needs a
                       reason (zero NAND residency); otherwise it is flagged
   7. model scale      deterministic per model, and throughput decreasing in
-                      the bytes a decode step moves
+                      the bytes a decode step moves (reported, not checked, for
+                      ITME, which places by role rather than by capacity)
+  8. bound            no policy decodes faster than bound.py allows for any
+                      policy (main configurations)
 
     python verify_results.py            # all checks, both platforms
     python verify_results.py --quick    # skip check 5; check 7 on the GPU platform only
@@ -125,7 +128,8 @@ def check_capacity_monotonicity(gpu):
     print("6. INVARIANCE — a number that does not move must have a reason")
     for quant in ("fp16", "int8"):
         for name, sim in R.SIMS:
-            vals = [R.run(sim, quant, 16, c, gpu)[0] for c in R.CXLS]
+            runs = [R.run(sim, quant, 16, c, gpu) for c in R.CXLS]
+            vals = [r[0] for r in runs]
             mono = all(b >= a * 0.999 for a, b in zip(vals, vals[1:]))
             report("mono-cap", mono,
                    f"{name:<9} {quant}: " + " -> ".join(f"{v:.2f}" for v in vals))
@@ -135,11 +139,17 @@ def check_capacity_monotonicity(gpu):
                           if name == "TierSched" else (None, None))
                 nand = led["tiers"].get("CXL Device NAND", 0.0) if led else None
                 if name == "TierSched":
-                    report("invariance", nand is not None and nand < 1e6,
+                    # Also legitimate: the search chose the same device size
+                    # (it tries every smaller standard size) in every cell.
+                    devs = {m.group(1) for r in runs
+                            for m in [re.search(r"Search choice: device (\d+) GB", r[2])] if m}
+                    same_dev = len(devs) == 1
+                    report("invariance", (nand is not None and nand < 1e6) or same_dev,
                            f"{name:<9} {quant}: identical across "
                            f"{R.CXLS} with NAND="
                            f"{'?' if nand is None else format(nand/G, '.2f')+'G'}"
-                           " (needs zero spill to be legitimate)")
+                           f", device chosen {sorted(devs)} GB"
+                           " (needs zero spill or one device size)")
                 else:
                     report("invariance", True,
                            f"{name:<9} {quant}: identical across {R.CXLS} "
@@ -171,8 +181,9 @@ def check_model_scale(gpu):
     across models. The other checks only cover 72B."""
     print("\n7. MODEL SCALE — throughput decreasing in per-step bytes; deterministic")
     for quant in ("fp16", "int8"):
-        order = sorted(MODELS, key=lambda c: _step_bytes(c, quant))
+        bounds = {}
         for name, sim in R.SIMS:
+            order = sorted(MODELS, key=lambda c: _step_bytes(c, quant))
             vals = []
             for cfg in order:
                 a = R.run(sim, quant, 16, 48, gpu, model=cfg)[0]
@@ -180,15 +191,22 @@ def check_model_scale(gpu):
                 if a != b:
                     report("model-det", False,
                            f"{name:<9} {quant} {cfg}: {a} vs {b}")
+                ub = bounds.setdefault(cfg, R.bound(quant, 16, 48, gpu, model=cfg))
+                if a is None or a > ub * 1.0005:
+                    report("bound", False, f"{name:<9} {quant} {cfg}: {a} t/s above bound {ub:.2f}")
                 vals.append(a)
             bad = [(order[i], vals[i], order[i+1], vals[i+1])
                    for i in range(len(vals) - 1)
                    if vals[i+1] is not None and vals[i] is not None
                    and vals[i+1] > vals[i] * 1.001]
+            # ITME places by role (attention and KV with the engine, every MLP
+            # streamed from the device), so its step time follows where those
+            # bytes sit, not their total; its order is reported, not checked.
             report("model-mono", not bad,
                    f"{name:<9} {quant}: " + " -> ".join(
                        f"{v:.2f}" if v else "--" for v in vals)
-                   + ("" if not bad else "  MORE BYTES, FASTER: " + str(bad)))
+                   + ("" if not bad else "  MORE BYTES, FASTER: " + str(bad)),
+                   warn=name == "ITME")
 
 
 def check_batch_monotonicity(gpu):
@@ -226,6 +244,20 @@ def check_batch_monotonicity(gpu):
                           for b0, v0, b1, v1 in bad)))
 
 
+def check_bound(gpu):
+    """No policy beats the lower bound on step time that holds for any
+    placement, schedule and reserve (bound.py)."""
+    print("\n8. BOUND — no policy decodes faster than any policy can")
+    for quant in ("fp16", "int8"):
+        for c in R.CXLS:
+            ub = R.bound(quant, 16, c, gpu)
+            for name, sim in R.SIMS:
+                v = R.run(sim, quant, 16, c, gpu)[0]
+                report("bound", v is not None and ub is not None and v <= ub * 1.0005,
+                       f"{name:<9} {quant} 16H+{c}C: {v:.2f} t/s of bound {ub:.2f} "
+                       f"({v / ub:.1%})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true",
@@ -238,6 +270,7 @@ def main():
         check_determinism(gpu)
         check_capacity_and_floor(gpu)
         check_capacity_monotonicity(gpu)
+        check_bound(gpu)
         if not a.quick:
             check_batch_monotonicity(gpu)
             check_model_scale(gpu)

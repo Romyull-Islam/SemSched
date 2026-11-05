@@ -2,7 +2,7 @@
 
 **TierSched: Trading Memory Capacity for Prefetch Bandwidth in LLM Inference on Hybrid CXL Devices**
 
-This repository contains the simulator, the four baselines, the experiment
+This repository contains the simulator, the five baselines, the experiment
 harness, and the plotting code that produce every number and figure in the
 TierSched paper. One harness produces all of them; nothing is read from a
 saved result unless a command below says so.
@@ -10,13 +10,16 @@ saved result unless a command below says so.
 TierSched targets **CMM-H**-style hybrid CXL devices that pair an on-card DRAM
 cache with NAND flash behind a single host link. Fast memory on such a device
 has two uses: holding weights, and staging prefetched bytes before they are
-needed. The offloading policies evaluated here spend all of it on the first.
-TierSched searches the split per configuration, how much host and device DRAM
-to hold back as prefetch staging, jointly with the tier that holds the KV cache
-and the device capacity to use. It spreads NAND-resident sub-layers across the
-execution order and decodes with a lookahead bounded by the reserve. Finalist
-plans are timed exactly on the same engine that runs decode, so the plan the
-search evaluates is the plan decode executes.
+needed. The offloading policies evaluated here spend nearly all of it on the
+first. TierSched stripes every sub-layer across the tiers in the same
+proportions, so that all of them stream at once, moves each sub-layer in
+blocks, and searches per configuration how much host and device DRAM to hold
+back as staging, jointly with the layout, the tier and reservation level of the
+KV cache, and the device capacity to use. It decodes with a lookahead bounded by
+the reserve. Finalist plans are timed on the same engine that runs decode, so
+the plan the search evaluates is the plan decode executes. `bound.py` gives a
+lower bound on decode step time that holds for any policy, and the harness
+reports every policy against it.
 
 ## Version
 
@@ -30,21 +33,23 @@ below and nothing else.
 
 ```
 .
-├── tiersched.py                 # TierSched: two-stage placement search + decode engine
+├── tiersched.py                 # TierSched: two-stage plan search + block-wise decode
 ├── flexgen_baseline.py          # FlexGen: linear program over per-tier percentages
 ├── lia_baseline.py              # LIA: parameters in device DRAM, host reserved for KV
 ├── cxlaimpod_baseline.py        # CXLAimPod: pools device memory in capacity order
 ├── llmflash_baseline.py         # LLM-in-a-Flash: sliding window of active neurons
+├── itme_baseline.py             # ITME: FFNs streamed from flash through a ring in device DRAM
 ├── dynamic_baseline.py          # Belady's rule over device DRAM, or CMM-H's default LRU
+├── bound.py                     # Lower bound on decode step time for any policy
 │
 ├── sim_cfg.py                   # Hardware parameters (bandwidths, latencies, capacities)
 ├── model_cfg.py                 # Model definitions, 7B to 405B, FP16 and INT8
 ├── tiers.py                     # Memory tiers and transfer-time helpers
 ├── cxl_link.py                  # Two-queue CXL link model
-├── pipeline.py                  # Shared overlap/timing engine used by all five simulators
+├── pipeline.py                  # Shared timing engine used by every policy
 │
 ├── run_paper_tables.py          # The harness: every table and sweep in the paper
-├── verify_results.py            # 122 invariant checks over the full result grid
+├── verify_results.py            # 211 invariant checks, including the bound
 ├── sensitivity.py               # Table IV: hints ignored, NAND rate and latency, device data path, long prompts
 ├── realistic_runs.py            # Realistic host and decode-length experiments
 ├── ablation_passthrough.py      # Table V: mechanism ablation
@@ -111,7 +116,7 @@ python run_paper_tables.py --batch-sweep # B = 1..128 grid behind the batch figu
 python run_paper_tables.py --models      # 7B..405B grid behind the model-scale figure
 python run_paper_tables.py --sharegpt    # 50 real ShareGPT prompts, both platforms
 
-python verify_results.py                 # 122 invariant checks; exits nonzero on failure
+python verify_results.py                 # 211 invariant checks; exits nonzero on failure
 ```
 
 `REPRODUCE.md` maps every table, figure and section of the paper to the

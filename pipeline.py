@@ -12,15 +12,17 @@ layer i. The lookahead K comes from each system's paper or artifact:
 
     FlexGen    K=1   Algorithm 1 overlaps "the weights load of the next layer"
     LLMFlash   K=5   sliding window of k=5 tokens (Sec 3.2)
-    TierSched   K=32  PREFETCH_QUEUE_DEPTH, 16-thread asynchronous I/O pool
+    TierSched  K=32  PREFETCH_QUEUE_DEPTH, 16-thread asynchronous I/O pool
     LIA        K=1   next-layer double buffer in the ISCA'25 artifact
     CXLAimPod  K=4   sequential device-side prefetch window
+    ITME       K=5   three-slot ring, refilled as each layer is read
 
 Two constraints apply. Transfers on the same tier serialize (one bus, one
 queue), so issuing early cannot create bandwidth. And CXL device DRAM and its
 NAND backend share the host link, which caps their combined rate at any
 lookahead depth.
 """
+import bisect
 import os
 
 from tiers import CXL_HOST_LINK_CEILING
@@ -66,6 +68,48 @@ if GPU_LINK_BPS:
         GPU_LINK_BPS = 0.0
 GPU_TIER = "GPU HBM"
 
+# How a bus orders its requests. By default ("fill") a request takes the earliest
+# idle stretch of its bus at or after the time it can start, so a request that
+# is ready early is served in a gap that an earlier-issued request, still
+# waiting for another resource, left open: device DRAM serves hits while a NAND
+# read queued behind other NAND reads waits, as a non-blocking cache serves hits
+# under outstanding misses. BUS_ORDER=fifo serves every bus strictly in issue
+# order instead, so a hit waits behind a queued NAND fill (Table IV).
+BUS_ORDER = os.environ.get("BUS_ORDER", "fill")
+
+# Transfer blocks per unit for callers that do not choose (see pipelined_time_s).
+PIPELINE_BLOCKS = int(os.environ.get("PIPELINE_BLOCKS", "1"))
+
+
+class _Bus:
+    """Booked busy intervals of one bus, sorted and disjoint."""
+
+    def __init__(self):
+        self.iv = []
+
+    def book(self, t, dur):
+        """Book `dur` seconds in the earliest idle stretch starting at or after
+        t; return its start."""
+        if dur <= 0:
+            return t
+        iv = self.iv
+        k = bisect.bisect_right(iv, (t, float("inf"))) - 1
+        if k >= 0 and iv[k][1] > t:
+            t = iv[k][1]
+        k += 1
+        while k < len(iv) and iv[k][0] < t + dur:
+            t = max(t, iv[k][1])
+            k += 1
+        iv.insert(k, (t, t + dur))
+        # Merge with neighbours it touches, so a backlog stays one interval.
+        if k + 1 < len(iv) and iv[k + 1][0] == iv[k][1]:
+            iv[k] = (iv[k][0], iv[k + 1][1])
+            del iv[k + 1]
+        if k > 0 and iv[k - 1][1] == iv[k][0]:
+            iv[k - 1] = (iv[k - 1][0], iv[k][1])
+            del iv[k]
+        return t
+
 
 def staged_bytes(by_tier):
     """Bytes a read issued ahead holds in staging room until it is consumed."""
@@ -73,7 +117,8 @@ def staged_bytes(by_tier):
 
 
 def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
-                     chunk_bytes=256 * 1024, inflight_budget=None, demand=()):
+                     chunk_bytes=256 * 1024, inflight_budget=None, demand=(),
+                     blocks=None, trace=None):
     """Time for one pass over `units` with reads issued `prefetch_depth` ahead.
 
     units            [(bytes_by_tier: {tier: bytes}, compute_s), ...] in
@@ -88,13 +133,38 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
                      unbounded.
     demand           indices of units whose transfers are not prefetched: they
                      are issued when the preceding unit finishes, as on a miss.
+    blocks           split every unit into this many equal blocks, each moved and
+                     computed on its own (a weight matrix splits by output
+                     columns), so a block computes as soon as it lands and
+                     read-ahead is staged a block at a time. prefetch_depth stays
+                     in units. None takes PIPELINE_BLOCKS (default 1).
+    trace            a list to append the schedule to (BUS_ORDER=fill only):
+                     ("xfer", block, bus, start, end) per bus booking and
+                     ("comp", block, None, start, end) per compute.
 
     Returns the completion time of the last unit's compute.
     """
+    k = PIPELINE_BLOCKS if blocks is None else int(blocks)
+    if k > 1:
+        # Block j of unit i is issued when unit i would be: at the end of unit
+        # i - prefetch_depth - 1, i.e. block j looks prefetch_depth*k + j blocks
+        # ahead. A demand unit's blocks wait for the end of the preceding unit.
+        units = [({t: v / k for t, v in by.items()}, c / k)
+                 for by, c in units for _ in range(k)]
+        demand = {i * k + j: i * k - 1 for i in demand for j in range(k)}
+        prefetch_depth = [prefetch_depth * k + j for _ in range(len(units) // k)
+                          for j in range(k)]
+    else:
+        demand = {i: i - 1 for i in demand}
     n = len(units)
     if n == 0:
         return 0.0
+    if BUS_ORDER != "fifo":
+        return _pipelined_fill(units, prefetch_depth, tier_bw, tier_lat or {},
+                               chunk_bytes, inflight_budget, demand, trace)
+    assert trace is None, "trace needs BUS_ORDER=fill"
     tier_lat = tier_lat or {}
+    staged_prefix = _staged_prefix(units) if inflight_budget is not None else None
     tier_free = {}           # when each tier's bus is next idle
     link_free = 0.0          # when the shared CXL host link is next idle
     gpu_link_free = 0.0      # when the GPU's PCIe link is next idle
@@ -105,7 +175,8 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
         # A transfer may be issued once we are within `prefetch_depth` units of
         # needing it. Depth 0 starts it when the preceding unit finishes
         # computing (demand paging); depth d issues it at the end of unit i-d-1.
-        j = i - prefetch_depth - 1
+        j = i - (prefetch_depth[i] if isinstance(prefetch_depth, list)
+                 else prefetch_depth) - 1
         issue_at = comp_done[j] if j >= 0 else 0.0
 
         # Prefetched bytes need somewhere to live until they are consumed, so
@@ -114,23 +185,14 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
         # (0.15-0.73 GB), far from the ~14 GB an unbounded K=32 needs.
         if inflight_budget is not None:
             # Issuing unit i's read at comp_done[m] leaves units m+1..i fetched
-            # but not yet consumed. Start at m = i-1 (room for unit i alone) and
-            # walk back while the accumulated bytes still fit.
-            m = i - 1
-            acc = staged_bytes(units[i][0])
-            # m >= 0 is required: a negative m would index units[] from the end.
-            # Reaching m < 0 means everything back to unit 0 fits, i.e. issue
-            # at t=0.
-            while m > j and m >= 0:
-                nxt = staged_bytes(units[m][0])
-                if acc + nxt > inflight_budget:
-                    break
-                acc += nxt
-                m -= 1
+            # but not yet consumed, so m is the latest unit whose bytes, added
+            # to those of m+1..i, no longer fit (or j, or -1: issue at t=0).
+            m = _budget_floor(staged_prefix, i, j, inflight_budget)
             issue_at = max(issue_at, comp_done[m] if m >= 0 else 0.0)
 
         if i in demand:
-            issue_at = max(issue_at, comp_done[i - 1] if i else 0.0)
+            f = demand[i]
+            issue_at = max(issue_at, comp_done[f] if f >= 0 else 0.0)
 
         ready = issue_at
         for tier, nbytes in by_tier.items():
@@ -181,4 +243,107 @@ def pipelined_time_s(units, prefetch_depth, tier_bw, tier_lat=None,
             prev_comp_end = start_comp + comp_s
         comp_done[i] = prev_comp_end
 
+    return prev_comp_end
+
+
+def _staged_prefix(units):
+    """P[k] = staged bytes of units 0..k-1."""
+    p = [0.0]
+    for by, _ in units:
+        p.append(p[-1] + staged_bytes(by))
+    return p
+
+
+def _budget_floor(p, i, j, budget):
+    """The unit whose compute must end before unit i's read may issue: the
+    latest m in (j, i-1] such that units m..i stage more than `budget` bytes,
+    else max(j, -1). Equivalent to walking back from i-1 while the running
+    total fits, in O(log n)."""
+    lo = j if j >= -1 else -1
+    m = bisect.bisect_left(p, p[i + 1] - budget) - 1    # latest m: p[m] < p[i+1] - budget
+    if m > i - 1:
+        m = i - 1
+    return m if m > lo else lo
+
+
+def _issue_time(units, i, prefetch_depth, comp_done, inflight_budget, demand,
+                staged_prefix=None):
+    """When unit i's reads may start: `prefetch_depth` units ahead of its
+    compute, no earlier than the staging budget allows, and on demand for the
+    units in `demand`."""
+    j = i - (prefetch_depth[i] if isinstance(prefetch_depth, list)
+             else prefetch_depth) - 1
+    issue_at = comp_done[j] if j >= 0 else 0.0
+    if inflight_budget is not None:
+        m = _budget_floor(staged_prefix, i, j, inflight_budget)
+        issue_at = max(issue_at, comp_done[m] if m >= 0 else 0.0)
+    if i in demand:
+        f = demand[i]
+        issue_at = max(issue_at, comp_done[f] if f >= 0 else 0.0)
+    return issue_at
+
+
+def _pipelined_fill(units, prefetch_depth, tier_bw, tier_lat, chunk_bytes,
+                    inflight_budget, demand, trace=None):
+    """pipelined_time_s with BUS_ORDER=fill: the same issue rule, charges and
+    compute model, with each bus booked by idle stretch rather than in order."""
+    n = len(units)
+    buses = {}
+    if DEVICE_SERIAL:
+        buses[DEVICE_DRAM] = buses[DEVICE_NAND] = _Bus()   # one request at a time
+    link, gpu_link = _Bus(), _Bus()
+    comp_done = [0.0] * n
+    prev_comp_end = 0.0
+    staged_prefix = _staged_prefix(units) if inflight_budget is not None else None
+    for i, (by_tier, comp_s) in enumerate(units):
+        issue_at = _issue_time(units, i, prefetch_depth, comp_done,
+                               inflight_budget, demand, staged_prefix)
+        ready = issue_at
+        for tier, nbytes in by_tier.items():
+            if nbytes <= 0:
+                continue
+            bw = tier_bw.get(tier)
+            if not bw:
+                continue
+            dur = nbytes / bw
+            lat = tier_lat.get(tier, 0.0)
+            if lat:
+                dur += -(-nbytes // chunk_bytes) * lat
+            bus = buses.get(tier)
+            if bus is None:
+                bus = buses[tier] = _Bus()
+            start = bus.book(issue_at, dur)
+            finish = start + dur
+            if trace is not None:
+                trace.append(("xfer", i, tier, start, finish))
+            # A shared link carries these bytes at its own rate, in its own
+            # idle stretch at or after the transfer starts.
+            if tier in SHARED_LINK:
+                hold = nbytes / CXL_HOST_LINK_CEILING
+                finish = max(finish, link.book(start, hold) + hold)
+            if GPU_LINK_BPS and tier != GPU_TIER:
+                hold = nbytes / GPU_LINK_BPS
+                finish = max(finish, gpu_link.book(start, hold) + hold)
+            if (NAND_PASS_THROUGH and not DEVICE_SERIAL and tier == DEVICE_NAND
+                    and tier_bw.get(DEVICE_DRAM)):
+                # The cache fill and read-out hold the device DRAM for these
+                # bytes at its own rate, once per pass.
+                hold = NAND_PASS_THROUGH * nbytes / tier_bw[DEVICE_DRAM]
+                dram = buses.get(DEVICE_DRAM)
+                if dram is None:
+                    dram = buses[DEVICE_DRAM] = _Bus()
+                d0 = dram.book(start, hold)
+                finish = max(finish, d0 + hold)
+                if trace is not None:
+                    trace.append(("xfer", i, DEVICE_DRAM, d0, d0 + hold))
+            ready = max(ready, finish)
+        if STREAM_COMPUTE:
+            start_comp = max(issue_at, prev_comp_end)
+            prev_comp_end = max(start_comp + comp_s, ready)
+        else:
+            start_comp = max(ready, prev_comp_end)
+            prev_comp_end = start_comp + comp_s
+        comp_done[i] = prev_comp_end
+        if trace is not None:
+            trace.append(("comp", i, None, prev_comp_end - comp_s, prev_comp_end))
     return prev_comp_end

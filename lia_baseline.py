@@ -12,6 +12,7 @@
 
 import math
 import pandas as pd
+from tiers import kv_reserve_level, kv_step_split
 from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
 from tiers import (
     GiB, HOST_DRAM, CXL_DRAM, CXL_SSD_NAND,
@@ -20,6 +21,9 @@ from tiers import (
 from model_cfg import build_layers, BYTES_PER_PARAM, bytes_read, embedding_last
 from tiers import GPU_HBM
 from pipeline import pipelined_time_s
+
+# KV reserved at the generation mean or its peak, whichever is faster.
+KV_LEVEL = kv_reserve_level(__file__)
 
 # One layer of weight prefetch. LIA's ISCA'25 artifact (ece-fast-lab/ISCA-2025-LIA,
 # lia/modeling_opt.py) loads layer idx+1 into an alternating double buffer
@@ -77,7 +81,7 @@ gpu_free  = gpu_hbm_capacity_bytes
 # read at 27 GB/s instead of 38.4 GB/s; what does not fit there either is read
 # from NAND.
 _kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
-                   * (PREFILL_TOKENS + TOKENS / 2.0))
+                   * (PREFILL_TOKENS + TOKENS * KV_LEVEL))
 _kv_split, _kv_took = kv_cascade(_kv_resident,
                                  [("host", host_dram_capacity_bytes),
                                   ("cxl", cxl_dev_dram_capacity_bytes)])
@@ -109,6 +113,9 @@ for i in embedding_last(layers):
 _LIA_HOST_FREE = max(0.0, host_dram_capacity_bytes - _kv_in_host)
 _LIA_DOUBLE_BUF = 2.0 * max(L["bytes"] for L in layers)
 _LIA_STAGING = min(_LIA_DOUBLE_BUF, gpu_free + cxl_free + _LIA_HOST_FREE)
+# Room the KV cache can grow into before it displaces weights.
+_kv_headroom = ({"host": _LIA_HOST_FREE, "cxl": cxl_free}
+                .get(list(_kv_split)[-1], 0.0) if _kv_split else 0.0)
 
 
 # Prefill
@@ -135,6 +142,8 @@ per_token_write_stall_pcts = []
 
 for token_step in range(TOKENS):
     units              = []
+    _kvf = kv_step_split(_kv_split, _kv_resident, sum(kv_inc.values()) * BATCH_SIZE
+                         * (PREFILL_TOKENS + token_step))
     step_time_s        = 0.0
     step_read_stall_s  = 0.0
     step_write_stall_s = 0.0
@@ -183,9 +192,9 @@ for token_step in range(TOKENS):
         ltime        = max(comp_s, weight_mem_time, kv_total_ddr_time)
         _by = {placement[i]: weight_sz}
         if kv_scaled > 0:
-            for _t, _f in (("Host DRAM", _kv_host_frac),
-                           ("CXL Device DRAM", _kv_cxl_frac),
-                           ("CXL Device NAND", _kv_nand_frac)):
+            for _t, _f in (("Host DRAM", _kvf.get("host", 0.0)),
+                           ("CXL Device DRAM", _kvf.get("cxl", 0.0)),
+                           ("CXL Device NAND", _kvf.get("nand", 0.0))):
                 _by[_t] = _by.get(_t, 0.0) + kv_read_bytes * _f
         units.append((_by, comp_s))
         step_time_s += 0.0
@@ -194,7 +203,7 @@ for token_step in range(TOKENS):
                                     inflight_budget=max(0.0, _LIA_STAGING))
     step_time_s += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, kv_tail(_kv_split))
+        _kv_resident, kv_tail(_kv_split), headroom=_kv_headroom)
     per_token_latency += step_time_s
 
     read_pct  = (step_read_stall_s  / step_time_s * 100) if step_time_s > 0 else 0.0

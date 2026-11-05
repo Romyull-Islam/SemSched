@@ -90,7 +90,8 @@ ax.set_xticklabels(["7B", "13B", "22B", "72B", "405B"])
 ax.set_xlabel("model (16H$+$48C)")
 ax.set_ylabel("speedup vs. best baseline")
 deco(ax)
-ax.set_ylim(0.93, 1.55)
+_v = [D["models"][f"{p}|{q}"][mm] for (p, q) in STYLE for mm in MODELS]
+ax.set_ylim(min(0.95, min(_v) - 0.02), max(_v) + 0.05)
 # No in-plot annotations; at this width they would cover a curve. The caption
 # gives both endpoints.
 ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0),

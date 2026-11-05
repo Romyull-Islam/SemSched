@@ -18,6 +18,7 @@
 
 import os
 
+from tiers import kv_reserve_level, kv_step_split
 from tiers import kv_growth_spill_time_s, kv_cascade, kv_tail
 from tiers import (GiB, HOST_DRAM, CXL_DRAM, CXL_SSD_NAND, GPU_HBM,
                    transfer_time_s)
@@ -29,6 +30,9 @@ from sim_cfg import (
     flops_per_cycle_per_core, parallel_efficiency,
     host_dram_capacity_bytes, cxl_dev_dram_capacity_bytes, BATCH_SIZE
 )
+
+# KV reserved at the generation mean or its peak, whichever is faster.
+KV_LEVEL = kv_reserve_level(__file__)
 
 PREFETCH_DEPTH = int(os.environ.get("DYN_PREFETCH_DEPTH", "32"))
 KV_TIER = os.environ.get("DYN_KV_TIER", "cxl")
@@ -65,7 +69,7 @@ kv_inc = {L["name"]: (L["kv_cache_bytes"] // PREFILL_TOKENS) for L in layers}
 # KV is reserved at the generation mean on its tier, as in the other baselines,
 # spilling to the other DRAM tier and then to NAND.
 _kv_resident = int(sum(kv_inc.values()) * BATCH_SIZE
-                   * (PREFILL_TOKENS + TOKENS / 2.0))
+                   * (PREFILL_TOKENS + TOKENS * KV_LEVEL))
 _kv_order = ([("host", host_dram_capacity_bytes), ("cxl", cxl_dev_dram_capacity_bytes)]
              if KV_TIER == "host" else
              [("cxl", cxl_dev_dram_capacity_bytes), ("host", host_dram_capacity_bytes)])
@@ -164,6 +168,8 @@ per_token_latency = 0.0
 nand_bytes = sum(layers[i]["bytes"] for i in dev_idx if i not in _hits)
 for token_step in range(TOKENS):
     units = []
+    _kvf = kv_step_split(_kv_split, _kv_resident, sum(kv_inc.values()) * BATCH_SIZE
+                         * (PREFILL_TOKENS + token_step))
     for i, L in enumerate(layers):
         p = placement[i]
         tier = (PL_CXL_DEV_DRAM if i in _hits else PL_CXL_DEV_NAND) if p == PL_DEVICE_CLASS else p
@@ -171,9 +177,9 @@ for token_step in range(TOKENS):
         kv_scaled = kv_inc[L["name"]] * BATCH_SIZE
         if kv_scaled > 0:
             kv_read = (PREFILL_TOKENS + token_step) * kv_scaled
-            for _t, _f in ((PL_HOST_DRAM, _kv_split.get("host", 0.0)),
-                           (PL_CXL_DEV_DRAM, _kv_split.get("cxl", 0.0)),
-                           (PL_CXL_DEV_NAND, _kv_split.get("nand", 0.0))):
+            for _t, _f in ((PL_HOST_DRAM, _kvf.get("host", 0.0)),
+                           (PL_CXL_DEV_DRAM, _kvf.get("cxl", 0.0)),
+                           (PL_CXL_DEV_NAND, _kvf.get("nand", 0.0))):
                 if _f > 0:
                     _by[_t] = _by.get(_t, 0.0) + kv_read * _f
         units.append((_by, compute_time_s(L["flops"] * BATCH_SIZE)))
@@ -183,7 +189,9 @@ for token_step in range(TOKENS):
                             inflight_budget=cache_cap + host_free)
     step += kv_growth_spill_time_s(
         sum(kv_inc.values()) * BATCH_SIZE * (PREFILL_TOKENS + token_step + 1),
-        _kv_resident, kv_tail(_kv_split))
+        _kv_resident, kv_tail(_kv_split),
+        headroom=({"gpu": gpu_free, "host": host_free}
+                  .get(list(_kv_split)[-1], 0.0) if _kv_split else 0.0))
     per_token_latency += step
 
 decode_tps = BATCH_SIZE / (per_token_latency / TOKENS)

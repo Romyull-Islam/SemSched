@@ -16,27 +16,34 @@ import tempfile
 
 import run_paper_tables as R
 
-PIN = [("""        _fr = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-               0.25, 0.30, 0.35, 0.40, 0.45, 0.50)""", "        _fr = (0.0,)"),
-       ('_kv_opts = ["cxl", "host"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
+PIN = [("""        _rf = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+               0.13, 0.16, 0.20, 0.30, 0.40, 0.50)""", "        _rf = (0.0,)"),
+       ('_kv_opts = ["cxl", "host", "stripe"] + (["gpu"] if gpu_hbm_capacity_bytes else [])',
         '_kv_opts = ["cxl"]'),
        ("""        _dev_caps = sorted({cxl_dev_dram_capacity_bytes}
                            | {c * GiB for c in (32, 48)
                               if c * GiB < cxl_dev_dram_capacity_bytes})""",
         "        _dev_caps = [cxl_dev_dram_capacity_bytes]")]
-NO_SPREAD = [("        if len(_members) < 3:\n            continue",
-              "        if True:\n            continue")]
+NO_STRIPE = [('        _modes = ("spread", "contig", "stripe")', '        _modes = ("spread", "contig")')]
+CONTIG = [('        _modes = ("spread", "contig", "stripe")', '        _modes = ("contig",)')]
+EVEN = [('        _splits = ("host", "device", "even")', '        _splits = ("even",)')]
+ONE_BLOCK = {"TIERSCHED_BLOCKS": "1"}
 NO_SMALLER = [("if c * GiB < cxl_dev_dram_capacity_bytes})", "if False})")]
 DEPTH0 = [("PREFETCH_QUEUE_DEPTH  = 32", "PREFETCH_QUEUE_DEPTH  = 0")]
 
 VARIANTS = {
     "full": ([], {}),
-    "semantic order": ([], {"TIERSCHED_PLACEMENT_ORDER": "semantic"}),
-    "random order": ([], {"TIERSCHED_PLACEMENT_ORDER": "random"}),
+    "one block per sub-layer": ([], ONE_BLOCK),
+    "no striping": (NO_STRIPE, {}),
+    "no striping, one block": (NO_STRIPE, ONE_BLOCK),
+    "no striping or spreading": (CONTIG, {}),
+    "reserve split evenly only": (EVEN, {}),
+    "no smaller device": (NO_SMALLER, {}),
     "search disabled (filled)": (PIN, {}),
     "filled, K=0": (PIN + DEPTH0, {}),
-    "no residue spreading": (NO_SPREAD, {}),
-    "no smaller device": (NO_SMALLER, {}),
+    "filled, K=0, one block": (PIN + DEPTH0, ONE_BLOCK),
+    "contiguous, semantic order": (CONTIG, {"TIERSCHED_PLACEMENT_ORDER": "semantic"}),
+    "contiguous, random order": (CONTIG, {"TIERSCHED_PLACEMENT_ORDER": "random"}),
 }
 
 

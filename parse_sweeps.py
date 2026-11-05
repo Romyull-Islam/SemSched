@@ -30,7 +30,7 @@ def parse_batch(path):
             key = f"{platform(line)}|{m.group(1)}|{m.group(2)}"
             out[key] = {}
             continue
-        m = re.match(r"\s+(\d+)(?:\s+[\d.]+){5}\s+([\d.]+)x", line)
+        m = re.match(r"\s+(\d+)(?:\s+(?:[\d.]+|--)){5,}\s+([\d.]+)x", line)
         if key and m:
             out[key][m.group(1)] = float(m.group(2))
     return out
@@ -44,7 +44,7 @@ def parse_models(path):
             key = f"{platform(m.group(2))}|{m.group(1)}"
             out[key] = {}
             continue
-        m = re.match(r"(\S.*?)\s{2,}(?:[\d.]+\s+){5}([\d.]+)x", line)
+        m = re.match(r"(\S.*?)\s{2,}(?:(?:[\d.]+|--)\s+){5,}([\d.]+)x", line)
         if key and m:
             out[key][m.group(1).strip()] = float(m.group(2))
     return out

@@ -21,13 +21,15 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.abspath(__file__))
-DEPS = ["sim_cfg.py", "tiers.py", "model_cfg.py", "cxl_link.py", "pipeline.py"]
+DEPS = ["sim_cfg.py", "tiers.py", "model_cfg.py", "cxl_link.py", "pipeline.py",
+        "bound.py"]
 
 SIMS = [
     ("FlexGen",  "flexgen_baseline.py"),
     ("LIA",      "lia_baseline.py"),
     ("AimPod",   "cxlaimpod_baseline.py"),
     ("LLMFlash", "llmflash_baseline.py"),
+    ("ITME",     "itme_baseline.py"),
     ("TierSched", "tiersched.py"),
 ]
 
@@ -51,7 +53,7 @@ QUANTS = ["fp16", "int8"]
 BATCH, DECODE = 128, 256
 
 
-def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
+def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier=None,
           model="Qwen2_5_72BCfg"):
     p = os.path.join(td, "sim_cfg.py")
     s = open(p).read()
@@ -86,25 +88,26 @@ def patch(td, quant, h, c, gpu, warmup=True, batch=BATCH, kv_tier="cxl",
                f"DEFAULT_MODEL_CFG = {model}", s, 1, re.M)
     open(p, "w").write(s)
 
-    if not warmup or kv_tier != "cxl":
+    if not warmup or kv_tier is not None:
         p = os.path.join(td, "tiersched.py")
         s = open(p).read()
         if not warmup:
             s = re.sub(r"^ENABLE_PREFILL_WARMUP\s*=\s*True",
                        "ENABLE_PREFILL_WARMUP = False", s, 1, re.M)
-        s = re.sub(r'^KV_TIER\s*=\s*"\w+"', f'KV_TIER = "{kv_tier}"', s, 1, re.M)
-        # The joint search iterates _kv_opts and overwrites _best_kv, so patching
-        # KV_TIER alone has no effect. Pin the search list instead, as
-        # plot_reserve_curve.py does for the reserve grid.
-        anchor = ('_kv_opts = ["cxl", "host"] + (["gpu"] '
-                  'if gpu_hbm_capacity_bytes else [])')
-        assert anchor in s, "kv-tier pin anchor drifted; --kv-tier would no-op"
-        s = s.replace(anchor, f'_kv_opts = ["{kv_tier}"]', 1)
+        if kv_tier is not None:
+            s = re.sub(r'^KV_TIER\s*=\s*"\w+"', f'KV_TIER = "{kv_tier}"', s, 1, re.M)
+            # The joint search iterates _kv_opts and overwrites _best_kv, so
+            # patching KV_TIER alone has no effect. Pin the search list instead,
+            # as plot_reserve_curve.py does for the reserve grid.
+            anchor = ('_kv_opts = ["cxl", "host", "stripe"] + (["gpu"] '
+                      'if gpu_hbm_capacity_bytes else [])')
+            assert anchor in s, "kv-tier pin anchor drifted; --kv-tier would no-op"
+            s = s.replace(anchor, f'_kv_opts = ["{kv_tier}"]', 1)
         open(p, "w").write(s)
 
 
 def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
-        kv_tier="cxl", model="Qwen2_5_72BCfg"):
+        kv_tier=None, model="Qwen2_5_72BCfg"):
     """One simulator, one cell. Returns (decode_tps, prefill_tps, stdout)."""
     with tempfile.TemporaryDirectory() as td:
         for f in DEPS + [s for _, s in SIMS]:
@@ -121,6 +124,21 @@ def run(sim, quant, h, c, gpu, warmup=True, diag=False, batch=BATCH,
                 float(p.group(1)) if p else None, out)
 
 
+def bound(quant, h, c, gpu, batch=BATCH, model="Qwen2_5_72BCfg", prefill=None,
+          env=None):
+    """Upper bound on any policy's decode tokens/s in one cell (bound.py)."""
+    with tempfile.TemporaryDirectory() as td:
+        for f in DEPS + [s for _, s in SIMS]:
+            shutil.copy(os.path.join(REPO, f), td)
+        patch(td, quant, h, c, gpu, batch=batch, model=model)
+        if prefill:
+            _patch_lengths(td, prefill, DECODE)
+        r = subprocess.run([sys.executable, "bound.py"], cwd=td, capture_output=True,
+                           text=True, timeout=300, env={**os.environ, **(env or {})})
+        m = re.search(r"Decode bound:\s*([\d.]+)", r.stdout + r.stderr)
+        return float(m.group(1)) if m else None
+
+
 # ShareGPT replay: real prompt/response lengths instead of a fixed 512/16. Only
 # the length distribution comes from the corpus; per-layer compute, transfer
 # and KV costs still come from the model geometry.
@@ -131,8 +149,13 @@ def _patch_lengths(td, prefill, decode):
             ("lia_baseline.py",        r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
             ("cxlaimpod_baseline.py",  r"^PREFILL_TOKENS = \d+",      f"PREFILL_TOKENS = {prefill}"),
             ("llmflash_baseline.py",   r"^NUM_PREFILL_TOKENS = \d+",  f"NUM_PREFILL_TOKENS = {prefill}"),
-            ("llmflash_baseline.py",   r"^NUM_DECODE_TOKENS(\s*)= \d+", f"NUM_DECODE_TOKENS\\1= {decode}")):
+            ("llmflash_baseline.py",   r"^NUM_DECODE_TOKENS(\s*)= \d+", f"NUM_DECODE_TOKENS\\1= {decode}"),
+            ("itme_baseline.py",       r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("dynamic_baseline.py",    r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}"),
+            ("bound.py",               r"^PREFILL_TOKENS(\s*)= \d+", f"PREFILL_TOKENS\\1= {prefill}")):
         q = os.path.join(td, f)
+        if not os.path.exists(q):
+            continue
         t = open(q).read()
         open(q, "w").write(re.sub(pat, rep, t, 1, re.M))
     q = os.path.join(td, "sim_cfg.py")
@@ -241,7 +264,7 @@ def comparison(gpu, diag=False, metric="decode"):
           f"   [{metric} t/s]\n{'=' * 78}")
     names = [n for n, _ in SIMS]
     print(f"{'Quant':<6}{'Memory':<11}" + "".join(f"{n:>10}" for n in names)
-          + f"{'ratio':>9}")
+          + f"{'ratio':>9}" + (f"{'bound':>9}{'of bound':>9}" if metric == "decode" else ""))
     print("-" * 78)
     wins = total = 0
     idx = 1 if metric == "prefill" else 0   # run() returns (decode, prefill, out)
@@ -257,10 +280,12 @@ def comparison(gpu, diag=False, metric="decode"):
                            if k != "TierSched" and v is not None)
                 total += 1
                 wins += ours > best
+                ub = bound(quant, h, c, gpu) if metric == "decode" else None
                 print(f"{quant.upper():<6}{f'{h}H+{c}C':<11}"
                       + "".join(f"{tps[n]:>10.2f}" if tps[n] is not None
                                 else f"{'--':>10}" for n in names)
-                      + f"{ours / best:>8.2f}x")
+                      + f"{ours / best:>8.3f}x"
+                      + (f"{ub:>9.2f}{ours / ub:>8.1%}" if ub else ""))
     print("-" * 78)
     print(f"TierSched leads {wins}/{total}")
 
@@ -330,7 +355,7 @@ def kv_tier_sweep(gpu):
     are read every step too.
     """
     tag = f"+RTX 5090 ({GPU_GB} GB)" if gpu else "CPU-only"
-    tiers = ["cxl", "host"] + (["gpu"] if gpu else [])
+    tiers = ["cxl", "host", "stripe"] + (["gpu"] if gpu else [])
     print(f"\n{'=' * 78}\nKV cache tier — TierSched, {tag}, B={BATCH}\n{'=' * 78}")
     print(f"{'Quant':<6}{'Memory':<11}" + "".join(f"{'KV in ' + t:>12}" for t in tiers)
           + f"{'best':>8}")
@@ -356,7 +381,7 @@ def batch_sweep(gpu, quant, c, h=16):
     Under LLM-in-a-Flash's model the active fraction of an MLP sub-layer is
     1 - (1 - p)^B with p = 0.46, which reaches 1.000 by B = 16. Beyond that every
     policy reads every byte once per step, the step time is pinned to the
-    byte-accounting floor sum(bytes(tier) / bw(tier)), and all five policies
+    byte-accounting floor sum(bytes(tier) / bw(tier)), and all the policies
     converge. Returns (B, {policy: tps}, TierSched / best baseline) per batch.
     """
     names = [n for n, _ in SIMS]
@@ -399,9 +424,28 @@ def batch_table(gpu):
 # it places into and added to its staging budget. The rewrites below are the
 # only changes to each baseline: its depth constant or call, and its budget.
 EQ_DEPTHS = [1, 4, 8, 16, 32]
-# The same 15 reserve values TierSched searches (tiersched.py).
-EQ_RESERVES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.13, 0.16, 0.20,
-               0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+# TierSched's reserve grid (tiersched.py): a share of host plus device DRAM,
+# split host first, device first or in proportion to their sizes.
+EQ_SHARES = [0.0, 0.0025, 0.005, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.10,
+             0.13, 0.16, 0.20, 0.30, 0.40, 0.50]
+# Transfer blocks per unit the tuned baselines may use, as TierSched does.
+EQ_BLOCKS = [1, 8]
+
+
+def eq_reserves(h, c):
+    """(host, device) reserve fractions of TierSched's grid for h GB of host
+    and c GB of device DRAM."""
+    out = set()
+    for f in EQ_SHARES:
+        r = f * (h + c)
+        out.add((f, f))
+        hr = min(r, h)
+        out.add((hr / h, min(r - hr, c) / c))
+        dr = min(r, c)
+        out.add((min(r - dr, h) / h, dr / c))
+    return sorted(out)
+
+
 EQ_PATCH = {
     "flexgen_baseline.py": [(r"^PREFETCH_DEPTH = 1$", "PREFETCH_DEPTH = {k}"),
                             ("inflight_budget=max(0.0, _FLEXGEN_STAGING)",
@@ -417,8 +461,13 @@ EQ_PATCH = {
                               "t = pipelined_time_s(_units, {k},"),
                              ("inflight_budget=_window) + step_kv",
                               "inflight_budget=_window + EQ_EXTRA) + step_kv")],
+    "itme_baseline.py": [(r"^PREFETCH_DEPTH = 2 \* BUFFER_LAYERS - 1$", "PREFETCH_DEPTH = {k}"),
+                         ("inflight_budget=_ITME_STAGING)",
+                          "inflight_budget=_ITME_STAGING + EQ_EXTRA)")],
 }
-DYN_DEPTHS = [1, 2, 4, 8, 16, 32]
+# 4096 sub-layers ahead is unbounded lookahead: Belady's rule with no window
+# is Cao et al.'s Aggressive integrated prefetching and caching.
+DYN_DEPTHS = [1, 2, 4, 8, 16, 32, 4096]
 
 
 def _run_variant(sim, quant, h, c, gpu, rewrites=(), env=None):
@@ -447,18 +496,21 @@ def _eq_job(job):
     kind, sim, quant, c, gpu, k, x = job
     h = 16
     if kind == "base":
-        frac = x
+        fh, fd, blocks = x
         rw = [(o, n.format(k=k)) for o, n in EQ_PATCH[sim]]
-        return job, _run_variant_scaled(sim, quant, h, c, gpu, frac, rw)
+        return job, _run_variant_scaled(sim, quant, h, c, gpu, (fh, fd), rw,
+                                        env={"PIPELINE_BLOCKS": str(blocks)})
     if kind == "dyn":
+        kv, blocks = x
         return job, _run_variant(sim, quant, h, c, gpu,
-                                 env={"DYN_PREFETCH_DEPTH": str(k), "DYN_KV_TIER": x})
+                                 env={"DYN_PREFETCH_DEPTH": str(k), "DYN_KV_TIER": kv,
+                                      "PIPELINE_BLOCKS": str(blocks)})
     return job, _run_variant(sim, quant, h, c, gpu,
                              rewrites=[(r"^PREFETCH_QUEUE_DEPTH  = 32$",
                                         f"PREFETCH_QUEUE_DEPTH  = {k}")])
 
 
-def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites):
+def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites, env=None):
     """A baseline with a fixed reserve: it places into (1 - frac) of host and
     device DRAM, and the reserved bytes are added to its staging budget. frac is
     one fraction for both tiers, or a (host, device) pair as TierSched searches."""
@@ -483,7 +535,7 @@ def _run_variant_scaled(sim, quant, h, c, gpu, frac, rewrites):
             assert n == 1, (sim, old)
         open(p, "w").write(s)
         r = subprocess.run([sys.executable, sim], cwd=td, capture_output=True,
-                           text=True, timeout=900)
+                           text=True, timeout=900, env={**os.environ, **(env or {})})
         m = re.search(r"Decode throughput:\s*([\d.]+)", r.stdout + r.stderr)
         return float(m.group(1)) if m else None
 
@@ -498,12 +550,13 @@ def equal_footing(gpu):
         for c in CXLS:
             for sim in EQ_PATCH:
                 for k in EQ_DEPTHS:
-                    for fh in EQ_RESERVES:
-                        for fd in EQ_RESERVES:
-                            jobs.append(("base", sim, quant, c, gpu, k, (fh, fd)))
+                    for fh, fd in eq_reserves(16, c):
+                        for b in EQ_BLOCKS:
+                            jobs.append(("base", sim, quant, c, gpu, k, (fh, fd, b)))
             for k in DYN_DEPTHS:
                 for kv in ("cxl", "host"):
-                    jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
+                    for b in EQ_BLOCKS:
+                        jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, (kv, b)))
             for k in EQ_DEPTHS:
                 jobs.append(("sem", "tiersched.py", quant, c, gpu, k, None))
     res = {}
@@ -528,14 +581,17 @@ def equal_footing(gpu):
             bv, bj = best(lambda j: j[0] == "base" and cell(j))
             dv, dj = best(lambda j: j[0] == "dyn" and cell(j))
             sv, sj = best(lambda j: j[0] == "sem" and cell(j))
-            bdesc = f"{names[bj[1]]} K={bj[5]} r={bj[6][0]:.0%}/{bj[6][1]:.0%}"
-            ddesc = f"K={dj[5]} KV={dj[6]}"
+            bdesc = (f"{names[bj[1]]} K={bj[5]} r={bj[6][0]:.1%}/{bj[6][1]:.1%}"
+                     f" b={bj[6][2]}")
+            ddesc = f"K={dj[5]} KV={dj[6][0]} b={dj[6][1]}"
             print(f"{quant.upper():<6}{f'16H+{c}C':<10}{bv:>8.2f} ({bdesc:<26}){dv:>9.2f} ({ddesc:<11})"
                   f"{sv:>8.2f} (K={sj[5]:<2}){sv / bv:>10.2f}x{sv / dv:>10.2f}x")
             rows[f"{'GPU' if gpu else 'CPU'} {quant} 16H+{c}C"] = {
                 "static": bv, "static_policy": names[bj[1]], "static_K": bj[5],
                 "static_host_reserve": bj[6][0], "static_device_reserve": bj[6][1],
-                "dynamic": dv, "dynamic_K": dj[5], "dynamic_kv": dj[6],
+                "static_blocks": bj[6][2],
+                "dynamic": dv, "dynamic_K": dj[5], "dynamic_kv": dj[6][0],
+                "dynamic_blocks": dj[6][1],
                 "tiersched": sv, "tiersched_K": sj[5]}
     return rows
 

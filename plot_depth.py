@@ -48,11 +48,12 @@ def measure():
     for label, quant, c, gpu in CASES:
         for k in DEPTHS:
             for name in POLICIES[:4]:
-                for fh in R.EQ_RESERVES:
-                    for fd in R.EQ_RESERVES:
-                        jobs.append(("base", files[name], quant, c, gpu, k, (fh, fd)))
+                for fh, fd in R.eq_reserves(16, c):
+                    for b in R.EQ_BLOCKS:
+                        jobs.append(("base", files[name], quant, c, gpu, k, (fh, fd, b)))
             for kv in ("cxl", "host"):
-                jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, kv))
+                for b in R.EQ_BLOCKS:
+                    jobs.append(("dyn", "dynamic_baseline.py", quant, c, gpu, k, (kv, b)))
             jobs.append(("sem", "tiersched.py", quant, c, gpu, k, None))
     with cf.ProcessPoolExecutor() as ex:
         res = dict(ex.map(R._eq_job, jobs))

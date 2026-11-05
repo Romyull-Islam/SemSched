@@ -38,10 +38,14 @@ def compute_time_s(flops):
         return 0.0
     return flops / (cpu_freq_hz * cpu_cores * flops_per_cycle_per_core
                     * parallel_efficiency)
+from tiers import kv_reserve_level, kv_step_split
 from tiers import kv_growth_spill_time_s, kv_cascade
 from pipeline import pipelined_time_s
 from tiers import CXL_DRAM, CXL_SSD_NAND, HOST_DRAM, GPU_HBM, transfer_time_s, \
                   Tier, NVME_STREAM_BW, NVME_STREAM_LAT_S, GiB
+
+# KV reserved at the generation mean or its peak, whichever is faster.
+KV_LEVEL = kv_reserve_level(__file__)
 
 # LLM-in-a-Flash treats DRAM as one unified tier [1], so host DRAM and CXL
 # device DRAM form a single pool. Accelerator memory joins the pool when one is
@@ -158,7 +162,7 @@ def simulate_llmflash():
     # during decode.
     _kv_resident = int(sum(L.get("kv_cache_bytes", 0) for L in layers)
                        / NUM_PREFILL_TOKENS * BATCH_SIZE
-                       * (NUM_PREFILL_TOKENS + NUM_DECODE_TOKENS / 2.0))
+                       * (NUM_PREFILL_TOKENS + NUM_DECODE_TOKENS * KV_LEVEL))
     # Pool capacity includes accelerator memory when attached, matching the pool
     # bandwidth above.
     from sim_cfg import gpu_hbm_capacity_bytes as _gcap
@@ -319,9 +323,12 @@ def simulate_llmflash():
                             "CXL Device NAND": _by.get("CXL Device NAND", 0.0)
                                                + ffn_nand_bytes / _nl},
                            compute_time_s(_L["flops"] * BATCH_SIZE * active_frac_batch)))
-        _by = pool_bytes(kv_read_bytes_total * (1.0 - kv_nand_frac))
+        # Growth past the reservation sits on the cache's last tier.
+        _kv_nand_t = kv_step_split(_kv_split, _kv_resident,
+                                   kv_read_bytes_total).get("nand", 0.0)
+        _by = pool_bytes(kv_read_bytes_total * (1.0 - _kv_nand_t))
         _by["CXL Device NAND"] = _by.get("CXL Device NAND", 0.0) \
-            + kv_read_bytes_total * kv_nand_frac
+            + kv_read_bytes_total * _kv_nand_t
         _units.append((_by, 0.0))
         _window = max(0.0, total_dram - total_pinned_bytes * pinned_dram_frac
                       - ffn_dram_bytes - dram_rewrite_bytes - emb_bytes * emb_pool_frac)
@@ -339,7 +346,9 @@ def simulate_llmflash():
 
         t += kv_growth_spill_time_s(
             kv_per_seq_bytes * BATCH_SIZE * (NUM_PREFILL_TOKENS + token_step + 1),
-            _kv_resident, CXL_SSD_NAND if kv_nand_frac else DRAM_POOL)
+            _kv_resident, CXL_SSD_NAND if kv_nand_frac else DRAM_POOL,
+            headroom=max(0.0, dram_remaining - ffn_dram_bytes
+                         - emb_bytes * emb_pool_frac))
         total_decode_time += t
 
         # Write stall as % of this token's total step time
